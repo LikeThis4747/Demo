@@ -1,0 +1,31 @@
+# Unreal generated
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+
+# Local Python environments/caches
+**/.venv/
+**/__pycache__/
+*.pyc
+
+# AI ephemeral workspace (keep README and templates)
+claude/tasks/active/*
+!claude/tasks/active/.gitkeep
+claude/tasks/archive/*
+!claude/tasks/archive/.gitkeep
+claude/handoffs/*
+!claude/handoffs/.gitkeep
+claude/scratch/*
+!claude/scratch/.gitkeep
+claude/artifacts/*
+!claude/artifacts/.gitkeep
+!claude/artifacts/nightly/
+!claude/artifacts/nightly/*.md
+
+# Local AI audit/runtime files
+.ai-memory/events.jsonl
+.ai-memory/backups/
+.ai-memory/temp/

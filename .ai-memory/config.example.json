@@ -1,0 +1,58 @@
+{
+  "allowed_roots": [
+    ".ai-context",
+    "memory-bank"
+  ],
+  "excluded_dirs": [
+    "Binaries",
+    "Intermediate",
+    "DerivedDataCache",
+    "Saved/Cooked"
+  ],
+  "max_file_size_bytes": 1048576,
+  "skip_binary_files": true,
+  "events_file": ".ai-memory/events.jsonl",
+  "backups_dir": ".ai-memory/backups",
+  "temp_dir": ".ai-memory/temp",
+  "guard": {
+    "default_max_chars": 12000,
+    "default_max_tokens": 3000,
+    "targets": [
+      {
+        "path": ".ai-context/current-task.md",
+        "max_chars": 6000,
+        "policy": "hot_task"
+      },
+      {
+        "path": ".ai-context/latest-error.md",
+        "max_chars": 4000,
+        "policy": "error_summary"
+      },
+      {
+        "path": "memory-bank/activeContext.md",
+        "max_chars": 8000,
+        "policy": "warm_context"
+      },
+      {
+        "path": "memory-bank/progress.md",
+        "max_chars": 12000,
+        "policy": "warm_context"
+      },
+      {
+        "path": "memory-bank/techContext.md",
+        "max_chars": 10000,
+        "policy": "warm_context"
+      },
+      {
+        "path": "memory-bank/systemPatterns.md",
+        "max_chars": 10000,
+        "policy": "warm_context"
+      },
+      {
+        "path": "memory-bank/projectbrief.md",
+        "max_chars": 8000,
+        "policy": "warm_context"
+      }
+    ]
+  }
+}

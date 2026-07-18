@@ -1,0 +1,37 @@
+{
+  "servers": {
+    "project-memory-mcp": {
+      "args": [
+        "-m",
+        "servers.memory_server",
+        "--root",
+        "D:/UE5projects/Demo"
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONPATH": "D:/UE5projects/Demo/MCP/memory"
+      },
+      "command": "D:/UE5projects/Demo/MCP/memory/.venv/Scripts/python.exe"
+    },
+    "ue-editor-mcp-logs": {
+      "args": [
+        "-m",
+        "ue_editor_mcp.server_unreal_logs"
+      ],
+      "env": {
+        "PYTHONPATH": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"
+      },
+      "command": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python/.venv/Scripts/python.exe"
+    },
+    "ue-editor-mcp": {
+      "args": [
+        "-m",
+        "ue_editor_mcp.server_unified"
+      ],
+      "env": {
+        "PYTHONPATH": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"
+      },
+      "command": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python/.venv/Scripts/python.exe"
+    }
+  }
+}
