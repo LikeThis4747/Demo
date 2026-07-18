@@ -11,13 +11,8 @@ Saved/
 **/__pycache__/
 *.pyc
 
-# AI ephemeral workspace (keep README and templates)
-claude/tasks/active/*
-!claude/tasks/active/.gitkeep
-claude/tasks/archive/*
-!claude/tasks/archive/.gitkeep
-claude/handoffs/*
-!claude/handoffs/.gitkeep
+# AI workspace: task cards and handoffs are intentionally versioned.
+# Only disposable scratch/output is ignored.
 claude/scratch/*
 !claude/scratch/.gitkeep
 claude/artifacts/*
