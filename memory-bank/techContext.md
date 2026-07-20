@@ -1,5 +1,12 @@
 # Tech Context — Demo
 
+## Git 仓库
+- 远程平台：工蜂（git.woa.com）
+- SSH 地址：`git@git.woa.com:shiqiqiwang/Demo.git`
+- 仓库主页：https://git.woa.com/shiqiqiwang/Demo
+- 主分支：main
+- 详细操作规范：`DOC/GIT_INTERNAL.md`
+
 ## 引擎与模块
 - Unreal Engine 5.7.4
 - 项目根：`D:/UE5projects/Demo`

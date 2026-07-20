@@ -1,4 +1,4 @@
-# Demo — AI 快速入口
+# Demo - AI 快速入口
 
 ## 项目身份
 
@@ -23,6 +23,8 @@
 
 ## 硬规则
 
+- 功能实现遵循"讨论方案 → 确定方案 → 对话中展示拟实现代码 → 用户明确允许后落盘 → 联合验证与用户验收"；未经验收不得标记完成，细则见 `DOC/AI_WORKFLOW.md`。
+- **Git 推送唯一目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`；禁止推送到 GitHub 或任何外部平台。执行 push 前必须核查 remote，详见 `DOC/GIT_INTERNAL.md`。**
 - 默认关闭 Tick；优先事件、Delegate、Timer、AnimNotify、碰撞、感知和行为树。
 - 不依赖组件名、Actor 名、Widget 函数名或关卡名格式实现逻辑。
 - 不修改无关文件或第三方素材包；不把 Editor-only 依赖加入 Runtime 模块。
@@ -35,6 +37,7 @@
 - 架构边界：`DOC/PROJECT_ARCHITECTURE_RULES.md`
 - AI 记忆、并行与交接：`DOC/AI_WORKFLOW.md`
 - MCP/工具索引：`DOC/AI_Coding_Guide.md`
+- **Git 仓库与推送规范：`DOC/GIT_INTERNAL.md`（所有 git push 必须先查阅）**
 - MCP 搜索换词：`MCP-SEARCH-GUIDE.md`
 - MCP 能力边界：`MCP/capability-notes/README.md`
 - C++/蓝图/材质/Python 工作流：`.github/skills/`

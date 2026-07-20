@@ -16,6 +16,7 @@ UE Editor MCP 使用 `search → schema → run`。连接前提：Demo Editor �
 
 | 问题 | 阅读 |
 |---|---|
+| Git 仓库地址、推送规范、AI 操作须知 | `DOC/GIT_INTERNAL.md` |
 | 项目职责、C++/蓝图边界、性能基线 | `PROJECT_ARCHITECTURE_RULES.md` |
 | 记忆、任务卡、并行 AI、交接、每日记录 | `AI_WORKFLOW.md` |
 | 找不到 UE MCP 动作 | `../MCP-SEARCH-GUIDE.md` |
