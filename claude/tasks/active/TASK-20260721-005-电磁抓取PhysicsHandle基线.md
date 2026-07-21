@@ -2,7 +2,7 @@
 
 - Owner：Codex / 当前会话
 - Status：active
-- Stage：两份 DataAsset 已装配且基础输入可用，待磁力手感细节迭代与联合 PIE 验收
+- Stage：资源装配去硬编码的 C++/Config 检查点已构建通过，待用户完成两个蓝图的人工装配与联合 PIE 验收
 - Created：2026-07-21
 - Updated：2026-07-21
 
@@ -20,6 +20,7 @@
 - 并行拆分/依赖：磁力组件先冻结磁性物体配置契约；后续 PCG 只生成这些配置化 Actor，可独立实现。Physics Control A/B 依赖 Physics Handle 基线验收数据，不并行提前实现。
 - 用户已授权范围：确认本方案为 Plan；允许启用 Physics Control，并已明确授权磁力 C++、中心 HUD、蓝图和独立原型关卡实现；UE 编辑器已关闭。
 - 本轮用户已授权范围：专用 PlayerController、输入 DataAsset、移动取消路径、过肩相机基线、磁力 Tuning DataAsset 与现有参数迁移；暂不加入蓄力投掷和新物理算法。
+- 本轮用户已授权并已落盘：GameMode/磁性道具改为“C++ 原生诊断后备 + 蓝图资源装配”，移除两处项目资产路径查找；未来 PCG 可选内容再使用软引用资源池。
 
 ## 计划与检查点
 
@@ -33,6 +34,10 @@
 - [x] 检查点 B：磁力 Tuning DataAsset 接管现有手感参数；独立构建验证。
 - [x] 用户按步骤创建并装配两份 DataAsset，重新编译保存角色蓝图。
 - [ ] 用户试玩并决定保留、调参、Physics Control A/B 或自研扩展。
+- [x] 确认资源装配去硬编码边界，并核对真实 GameMode/磁性道具蓝图结构。
+- [x] 在对话中展示本检查点拟修改代码和人工装配步骤，并取得用户明确落盘授权。
+- [x] 完成最小 C++/Config 改动、静态检查和两次完整构建。
+- [x] 用户装配 GameMode 与磁性道具蓝图，并共同完成蓝图编译、PIE 和日志验证。
 
 ## 验证
 
@@ -68,3 +73,13 @@
 - 风险：移动卡键只能通过原复现步骤确认，`ClearMoveInput`、专用 GameOnly 控制器和按键刷新属于方向性修复，不能用编译结果代替验收。Physics Handle 基线仍可能在重物、快速转身或狭窄门框下出现不满意的延迟/抖动。
 - 已记录旧算法风险：墙面距离小于 `MinimumHoldDistance` 时，现有安全目标公式可能短暂把目标设到墙后，随后才按阻挡延迟释放；本轮只做配置迁移，未夹带安全算法改写，联合验收时需重点复现后再单独确定修法。
 - 下一步：用户试玩后按现象选择只调参、补候选高亮与电弧、做 Physics Control A/B，或在有明确控制缺口时再实现自研控制层。
+
+### 2026-07-21 资源装配去硬编码检查点
+
+- 已移除 GameMode 中角色蓝图的 `FClassFinder` 和磁性道具中的项目材质 `FObjectFinder`；C++ 内不再保存 `/Game/ZeroEscape/...` 资产路径。
+- `PrototypePropClass` 由 GameMode 蓝图配置；原生角色仅为非空诊断后备，漏配时会输出明确错误，不能冒充完整可玩角色。
+- `DefaultEngine.ini` 的唯一启动入口改为 `BP_ZeroEscapePrototypeGameMode`；对应蓝图、角色、磁性道具和两份 DataAsset 均已确认处于 Git 跟踪范围。
+- 验证：两次 `DemoEditor Win64 Development` 完整构建均 `Result: Succeeded`；`git diff --check` 通过；只读交叉审查无 UHT/C++ 阻塞。
+- 下一步人工装配：GameMode 蓝图指定角色与道具子类；磁性道具蓝图删除重复 `MagneticMesh`，在继承的 `MagneticBody` 上指定材质；之后编译保存并 PIE。
+- 人工装配验证：三个相关蓝图均 `UpToDate`、零错误零警告；`BP_MagneticProp` 已无蓝图新增组件；资产依赖包含角色、磁性道具与测试材质。
+- PIE 验证：`Level0` 正常运行，日志确认 `Game class is 'BP_ZeroEscapePrototypeGameMode_C'`，本轮未出现角色、道具或磁力 DataAsset 漏配错误；用户已完成装配，本检查点通过机器验证。

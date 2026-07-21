@@ -10,31 +10,36 @@
 #include "GameFlow/ZeroEscapePrototypeGameMode.h"
 
 #include "Actors/Magnetism/MagneticPrototypeProp.h"
+#include "Characters/ZeroEscapeCharacter.h"
 #include "Engine/World.h"
-#include "GameFramework/Pawn.h"
 #include "GameFlow/ZeroEscapePlayerController.h"
 #include "UI/ZeroEscapeHUD.h"
-#include "UObject/ConstructorHelpers.h"
 
-/** 指定原型角色、专用输入控制器和轻量准星 HUD；第三方示例 PlayerController 不再参与。 */
+/** 设置非空诊断后备；项目角色和磁性道具资产仍由 GameMode 蓝图负责装配。 */
 AZeroEscapePrototypeGameMode::AZeroEscapePrototypeGameMode()
 {
-	static ConstructorHelpers::FClassFinder<APawn> PlayerPawn(
-		TEXT("/Game/ZeroEscape/Characters/BP_ZeroEscapeCharacter"));
-	if (PlayerPawn.Succeeded())
-	{
-		DefaultPawnClass = PlayerPawn.Class;
-	}
+	// 保证 Pawn 类引用不为空；完整输入、表现和磁力资源仍必须由角色蓝图装配。
+	DefaultPawnClass = AZeroEscapeCharacter::StaticClass();
 
 	PlayerControllerClass = AZeroEscapePlayerController::StaticClass();
-
 	HUDClass = AZeroEscapeHUD::StaticClass();
+
+	// 蓝图可替换为带正式网格、材质和单物体参数的磁性道具子类。
+	PrototypePropClass = AMagneticPrototypeProp::StaticClass();
 }
 
 /** 只启动临时测试物体队列；正式逃亡流程仍留给后续独立实现。 */
 void AZeroEscapePrototypeGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+
+	if (DefaultPawnClass == AZeroEscapeCharacter::StaticClass())
+	{
+		UE_LOG(
+			LogTemp,
+			Error,
+			TEXT("GameMode 尚未配置 BP_ZeroEscapeCharacter；原生诊断后备不包含输入与磁力 DataAsset 装配。"));
+	}
 
 	if (bSpawnPrototypeProps)
 	{
@@ -48,6 +53,13 @@ void AZeroEscapePrototypeGameMode::SpawnPrototypeProps()
 	UWorld* World = GetWorld();
 	if (!IsValid(World))
 	{
+		return;
+	}
+
+	UClass* ResolvedPropClass = PrototypePropClass.Get();
+	if (!IsValid(ResolvedPropClass))
+	{
+		UE_LOG(LogTemp, Error, TEXT("磁性测试道具类未配置，已跳过原型测试物生成。"));
 		return;
 	}
 
@@ -75,7 +87,7 @@ void AZeroEscapePrototypeGameMode::SpawnPrototypeProps()
 	{
 		const FTransform SpawnTransform(FRotator::ZeroRotator, TestCase.Location, TestCase.Scale);
 		AMagneticPrototypeProp* SpawnedProp = World->SpawnActor<AMagneticPrototypeProp>(
-			AMagneticPrototypeProp::StaticClass(),
+			ResolvedPropClass,
 			SpawnTransform);
 		if (IsValid(SpawnedProp))
 		{

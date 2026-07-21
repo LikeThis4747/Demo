@@ -14,6 +14,8 @@
 
 #include "ZeroEscapePrototypeGameMode.generated.h"
 
+class AMagneticPrototypeProp;
+
 /** 在不修改现有 Level0 资产的前提下启动磁力交互测试场。 */
 UCLASS()
 class DEMO_API AZeroEscapePrototypeGameMode final : public AGameModeBase
@@ -31,6 +33,17 @@ protected:
 private:
 	/** 创建不同形状与质量的测试案例，用于选取、持有稳定性和投掷手感验收。 */
 	void SpawnPrototypeProps();
+
+	/**
+	 * 原型测试场生成的磁性道具类型。
+	 * C++ 默认使用原生道具作为安全后备；正式网格、材质和单物体配置由 GameMode 蓝图选择的子类装配。
+	 */
+	UPROPERTY(
+		EditDefaultsOnly,
+		BlueprintReadOnly,
+		Category = "原型",
+		meta = (AllowPrivateAccess = "true", DisplayName = "磁性测试道具类"))
+	TSubclassOf<AMagneticPrototypeProp> PrototypePropClass;
 
 	/**
 	 * 对应 C++ 属性 bSpawnPrototypeProps；初始值：true。

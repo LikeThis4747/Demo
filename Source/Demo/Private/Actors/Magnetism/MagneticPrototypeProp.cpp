@@ -10,7 +10,6 @@
 #include "Components/Magnetism/MagneticObjectComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
-#include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 
 /** 装配使用引擎碰撞的 Chaos 刚体与可复用磁性标记组件。 */
@@ -32,13 +31,6 @@ AMagneticPrototypeProp::AMagneticPrototypeProp()
 	if (CubeMesh.Succeeded())
 	{
 		MagneticBody->SetStaticMesh(CubeMesh.Object);
-	}
-
-	static ConstructorHelpers::FObjectFinder<UMaterialInterface> PrototypeMaterial(
-		TEXT("/Game/ZeroEscape/Interaction/Magnetism/M_MagneticPrototype.M_MagneticPrototype"));
-	if (PrototypeMaterial.Succeeded())
-	{
-		MagneticBody->SetMaterial(0, PrototypeMaterial.Object);
 	}
 }
 
