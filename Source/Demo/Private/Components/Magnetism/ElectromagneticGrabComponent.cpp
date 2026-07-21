@@ -1,0 +1,457 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+/**
+ * @file ElectromagneticGrabComponent.cpp
+ * 职责：执行有界屏幕选取与 UE Physics Handle 抓取基线，并在所有退出路径恢复刚体设置。
+ * 边界：Chaos 负责碰撞、旋转和积分；本文件只实现玩法策略，所有手感参数来自独立 Tuning DataAsset。
+ * 状态 Owner：本组件独占当前持有引用、临时覆盖、释放锁和安全计时；不存在组件内参数兜底。
+ */
+
+#include "Components/Magnetism/ElectromagneticGrabComponent.h"
+
+#include "Camera/CameraComponent.h"
+#include "Components/Magnetism/MagneticObjectComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Data/Magnetism/MagneticGrabTuningData.h"
+#include "Engine/OverlapResult.h"
+#include "Engine/World.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
+#include "PhysicsEngine/PhysicsHandleComponent.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeMagneticGrab, Log, All);
+
+namespace UE::ZeroEscape::Magnetism
+{
+	/** 选取、持有遮挡和投掷瞄准统一使用 Visibility 通道，作为不可调的交互契约。 */
+	constexpr ECollisionChannel InteractionTraceChannel = ECC_Visibility;
+
+	/** 屏幕轮廓距离完成评分后，世界距离项所占的固定相对权重。 */
+	constexpr float WorldDistanceScoreWeight = 0.35f;
+
+	/** 每个道具优先级点降低的固定分数，用于处理屏幕轮廓重叠时的歧义。 */
+	constexpr float PriorityScoreWeight = 0.05f;
+}
+
+/** 创建可按需 Tick 的组件；默认关闭 Tick，只有成功持有刚体后才开启。 */
+UElectromagneticGrabComponent::UElectromagneticGrabComponent()
+{
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
+}
+
+/** 保存角色装配引用，校验唯一 Tuning 资产，并把其中三项 Physics Handle 参数应用到 UE 组件。 */
+void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysicsHandle, UCameraComponent* InViewCamera)
+{
+	PhysicsHandle = InPhysicsHandle;
+	ViewCamera = InViewCamera;
+	bConfigurationReady = false;
+
+	if (!IsValid(PhysicsHandle) || !IsValid(ViewCamera))
+	{
+		UE_LOG(
+			LogZeroEscapeMagneticGrab,
+			Error,
+			TEXT("%s 磁力组件缺少 PhysicsHandle 或 ViewCamera，功能已停用。"),
+			*GetNameSafe(GetOwner()));
+		return;
+	}
+
+	if (!IsValid(TuningData))
+	{
+		UE_LOG(
+			LogZeroEscapeMagneticGrab,
+			Error,
+			TEXT("%s 的 ElectromagneticGrab 尚未指定 MagneticGrabTuningData，磁力功能已停用。"),
+			*GetNameSafe(GetOwner()));
+		return;
+	}
+
+	FString ConfigurationError;
+	if (!TuningData->IsConfigured(ConfigurationError))
+	{
+		UE_LOG(
+			LogZeroEscapeMagneticGrab,
+			Error,
+			TEXT("%s 的磁力配置无效：%s"),
+			*GetNameSafe(GetOwner()),
+			*ConfigurationError);
+		return;
+	}
+
+	PhysicsHandle->SetLinearStiffness(TuningData->HandleLinearStiffness);
+	PhysicsHandle->SetLinearDamping(TuningData->HandleLinearDamping);
+	PhysicsHandle->SetInterpolationSpeed(TuningData->HandleInterpolationSpeed);
+	bConfigurationReady = true;
+}
+
+/** 按下时只选取一次，持有过程中准星经过其他物体不会改变当前目标。 */
+void UElectromagneticGrabComponent::BeginGrabInput()
+{
+	if (!IsConfigurationReady() || bAwaitingGrabRelease || IsHoldingObject())
+	{
+		return;
+	}
+
+	UMagneticObjectComponent* MagneticObject = nullptr;
+	if (UPrimitiveComponent* CandidateComponent = FindBestCandidate(MagneticObject))
+	{
+		GrabCandidate(CandidateComponent, MagneticObject);
+	}
+}
+
+/** 松开既是普通放下，也是投掷或安全释放后重新允许下一次抓取的显式复位。 */
+void UElectromagneticGrabComponent::EndGrabInput()
+{
+	bAwaitingGrabRelease = false;
+
+	if (IsHoldingObject())
+	{
+		ReleaseHeldObject(false);
+	}
+}
+
+/** 先恢复刚体临时设置，再施加速度变化冲量，使允许质量范围内的基础投掷速度可预测。 */
+void UElectromagneticGrabComponent::ThrowHeldObject()
+{
+	UPrimitiveComponent* ComponentToThrow = HeldComponent.Get();
+	if (!IsConfigurationReady() || !IsValid(ComponentToThrow) || !IsHoldingObject())
+	{
+		return;
+	}
+
+	const UMagneticObjectComponent* MagneticObject = HeldMagneticObject.Get();
+	const float SpeedMultiplier = IsValid(MagneticObject) ? MagneticObject->ThrowSpeedMultiplier : 1.0f;
+	const FVector CenterOfMass = ComponentToThrow->GetCenterOfMass();
+	const FVector ThrowDirection = (CalculateAimPoint() - CenterOfMass).GetSafeNormal();
+	const FVector DesiredVelocity = ThrowDirection * TuningData->ThrowSpeed * SpeedMultiplier;
+	const FVector ExistingVelocity = ComponentToThrow->GetPhysicsLinearVelocity();
+
+	ReleaseHeldObject(true);
+
+	if (IsValid(ComponentToThrow) && !ThrowDirection.IsNearlyZero())
+	{
+		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
+		ComponentToThrow->AddImpulse(DesiredVelocity - ExistingVelocity, NAME_None, true);
+	}
+}
+
+/** 同时检查本地弱引用与 UE Physics Handle，避免只凭一侧状态误判仍在持有。 */
+bool UElectromagneticGrabComponent::IsHoldingObject() const
+{
+	return HeldComponent.IsValid()
+		&& IsValid(PhysicsHandle)
+		&& PhysicsHandle->GetGrabbedComponent() == HeldComponent.Get();
+}
+
+/** 只更新活动持有目标；装配失效、Handle 状态失配、持续阻挡或误差过大时统一安全释放。 */
+void UElectromagneticGrabComponent::TickComponent(
+	const float DeltaTime,
+	const ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!IsConfigurationReady() || !IsHoldingObject())
+	{
+		ReleaseHeldObject(true);
+		return;
+	}
+
+	HeldElapsedSeconds += DeltaTime;
+
+	bool bIsObstructed = false;
+	const FVector SafeTarget = ResolveSafeHoldLocation(CalculateDesiredHoldLocation(), bIsObstructed);
+	ObstructedElapsedSeconds = bIsObstructed ? ObstructedElapsedSeconds + DeltaTime : 0.0f;
+	PhysicsHandle->SetTargetLocation(SafeTarget);
+
+	const UPrimitiveComponent* HeldBody = HeldComponent.Get();
+	const float HoldError = FVector::Distance(HeldBody->GetCenterOfMass(), SafeTarget);
+	const bool bExceededObstructionDelay = ObstructedElapsedSeconds >= TuningData->ObstructionReleaseDelay;
+	const bool bExceededStableError = HeldElapsedSeconds >= TuningData->PullGracePeriod
+		&& HoldError >= TuningData->MaximumHoldError;
+
+	if (bExceededObstructionDelay || bExceededStableError)
+	{
+		ReleaseHeldObject(true);
+	}
+}
+
+/** World 或 Owner 销毁前恢复全部临时物理覆盖，随后再交还基类生命周期。 */
+void UElectromagneticGrabComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ReleaseHeldObject(false);
+	Super::EndPlay(EndPlayReason);
+}
+
+/** 返回 Configure 的校验缓存，同时防御运行期对象被销毁；不在 Tick 中重复遍历全部参数。 */
+bool UElectromagneticGrabComponent::IsConfigurationReady() const
+{
+	return bConfigurationReady
+		&& IsValid(PhysicsHandle)
+		&& IsValid(ViewCamera)
+		&& IsValid(TuningData);
+}
+
+/** 只评分有界数量的磁性 PhysicsBody，并用屏幕轮廓而非单一质心改善不规则物体选取。 */
+UPrimitiveComponent* UElectromagneticGrabComponent::FindBestCandidate(UMagneticObjectComponent*& OutMagneticObject) const
+{
+	OutMagneticObject = nullptr;
+
+	const UWorld* World = GetWorld();
+	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
+	const APlayerController* PlayerController = IsValid(OwnerPawn) ? Cast<APlayerController>(OwnerPawn->GetController()) : nullptr;
+	if (!IsConfigurationReady() || !IsValid(World) || !IsValid(PlayerController))
+	{
+		return nullptr;
+	}
+
+	int32 ViewportWidth = 0;
+	int32 ViewportHeight = 0;
+	PlayerController->GetViewportSize(ViewportWidth, ViewportHeight);
+	if (ViewportWidth <= 0 || ViewportHeight <= 0)
+	{
+		return nullptr;
+	}
+
+	const FVector CameraLocation = ViewCamera->GetComponentLocation();
+	const FQuat QueryRotation = FQuat::Identity;
+	const FCollisionObjectQueryParams ObjectQueryParams(ECC_PhysicsBody);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticGrabSelection), false, GetOwner());
+	TArray<FOverlapResult> Overlaps;
+	World->OverlapMultiByObjectType(
+		Overlaps,
+		CameraLocation,
+		QueryRotation,
+		ObjectQueryParams,
+		FCollisionShape::MakeSphere(TuningData->GrabRange),
+		QueryParams);
+
+	const FVector2D ViewportCenter(static_cast<float>(ViewportWidth) * 0.5f, static_cast<float>(ViewportHeight) * 0.5f);
+	const float SelectionRadiusPixels = static_cast<float>(FMath::Min(ViewportWidth, ViewportHeight))
+		* TuningData->ScreenSelectionRadiusRatio;
+	float BestScore = TNumericLimits<float>::Max();
+	UPrimitiveComponent* BestComponent = nullptr;
+	TSet<UPrimitiveComponent*> CheckedComponents;
+	int32 CheckedCount = 0;
+
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		UPrimitiveComponent* Candidate = Overlap.Component.Get();
+		if (!IsValid(Candidate)
+			|| CheckedComponents.Contains(Candidate)
+			|| CheckedCount >= TuningData->MaximumCandidateChecks)
+		{
+			continue;
+		}
+
+		CheckedComponents.Add(Candidate);
+		++CheckedCount;
+
+		AActor* CandidateActor = Candidate->GetOwner();
+		UMagneticObjectComponent* MagneticObject = IsValid(CandidateActor)
+			? CandidateActor->FindComponentByClass<UMagneticObjectComponent>()
+			: nullptr;
+		if (!IsValid(MagneticObject) || !MagneticObject->CanGrab(Candidate, TuningData->MaximumGrabMass))
+		{
+			continue;
+		}
+
+		const FVector CenterOfMass = Candidate->GetCenterOfMass();
+		const float WorldDistance = FVector::Distance(CameraLocation, CenterOfMass);
+		if (WorldDistance > TuningData->GrabRange || !IsCandidateVisible(Candidate, CameraLocation))
+		{
+			continue;
+		}
+
+		FVector2D CenterScreenPosition;
+		if (!PlayerController->ProjectWorldLocationToScreen(CenterOfMass, CenterScreenPosition))
+		{
+			continue;
+		}
+
+		// 把 Chaos 包围球半径投影到屏幕，让大体积或不规则物体靠近轮廓时也能进入容错区。
+		FVector2D RadiusScreenPosition;
+		const FVector RadiusSample = CenterOfMass + ViewCamera->GetRightVector() * Candidate->Bounds.SphereRadius;
+		const bool bProjectedRadius = PlayerController->ProjectWorldLocationToScreen(RadiusSample, RadiusScreenPosition);
+		const float ProjectedRadiusPixels = bProjectedRadius
+			? FVector2D::Distance(CenterScreenPosition, RadiusScreenPosition)
+			: 0.0f;
+		const float ScreenDistancePixels = FVector2D::Distance(CenterScreenPosition, ViewportCenter);
+		const float SilhouetteMissPixels = FMath::Max(0.0f, ScreenDistancePixels - ProjectedRadiusPixels);
+		if (SilhouetteMissPixels > SelectionRadiusPixels)
+		{
+			continue;
+		}
+
+		const float ScreenScore = SilhouetteMissPixels / FMath::Max(SelectionRadiusPixels, 1.0f);
+		const float DistanceScore = WorldDistance / TuningData->GrabRange;
+		const float CandidateScore = ScreenScore
+			+ DistanceScore * UE::ZeroEscape::Magnetism::WorldDistanceScoreWeight
+			- MagneticObject->SelectionPriority * UE::ZeroEscape::Magnetism::PriorityScoreWeight;
+
+		if (CandidateScore < BestScore)
+		{
+			BestScore = CandidateScore;
+			BestComponent = Candidate;
+			OutMagneticObject = MagneticObject;
+		}
+	}
+
+	return BestComponent;
+}
+
+/** 快照可逆物理状态、在质心建立 Handle，并用全局角阻尼允许碰撞后自然旋转逐渐停止。 */
+void UElectromagneticGrabComponent::GrabCandidate(
+	UPrimitiveComponent* CandidateComponent,
+	UMagneticObjectComponent* MagneticObject)
+{
+	if (!IsConfigurationReady()
+		|| !IsValid(CandidateComponent)
+		|| !IsValid(MagneticObject))
+	{
+		return;
+	}
+
+	HeldComponent = CandidateComponent;
+	HeldMagneticObject = MagneticObject;
+	PreviousAngularDamping = CandidateComponent->GetAngularDamping();
+	PreviousPawnCollisionResponse = CandidateComponent->GetCollisionResponseToChannel(ECC_Pawn);
+	HeldElapsedSeconds = 0.0f;
+	ObstructedElapsedSeconds = 0.0f;
+
+	CandidateComponent->SetAngularDamping(TuningData->HeldAngularDamping);
+	CandidateComponent->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	PhysicsHandle->GrabComponentAtLocation(CandidateComponent, NAME_None, CandidateComponent->GetCenterOfMass());
+	PhysicsHandle->SetTargetLocation(CalculateDesiredHoldLocation());
+	SetComponentTickEnabled(true);
+}
+
+/** 先释放 UE Handle，再恢复角阻尼和 Pawn 碰撞，最后清空弱引用与计时，保证每条退出路径可回退。 */
+void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRelease)
+{
+	UPrimitiveComponent* ComponentToRelease = HeldComponent.Get();
+
+	if (IsValid(PhysicsHandle) && IsValid(PhysicsHandle->GetGrabbedComponent()))
+	{
+		PhysicsHandle->ReleaseComponent();
+	}
+
+	if (IsValid(ComponentToRelease))
+	{
+		ComponentToRelease->SetAngularDamping(PreviousAngularDamping);
+		ComponentToRelease->SetCollisionResponseToChannel(ECC_Pawn, PreviousPawnCollisionResponse);
+	}
+
+	HeldComponent.Reset();
+	HeldMagneticObject.Reset();
+	HeldElapsedSeconds = 0.0f;
+	ObstructedElapsedSeconds = 0.0f;
+	bAwaitingGrabRelease = bRequireInputRelease;
+	SetComponentTickEnabled(false);
+}
+
+/** 使用角色原点提供稳定高度基准，并使用相机前/右方向保持持有点与瞄准直觉一致。 */
+FVector UElectromagneticGrabComponent::CalculateDesiredHoldLocation() const
+{
+	if (!IsConfigurationReady() || !IsValid(GetOwner()))
+	{
+		return FVector::ZeroVector;
+	}
+
+	return GetOwner()->GetActorLocation()
+		+ FVector::UpVector * TuningData->HoldHeight
+		+ ViewCamera->GetForwardVector() * TuningData->HoldDistance
+		+ ViewCamera->GetRightVector() * TuningData->HoldSideOffset;
+}
+
+/** 用一次有界射线阻止目标锚点穿过墙体；命中时在阻挡面前保留配置间隙。 */
+FVector UElectromagneticGrabComponent::ResolveSafeHoldLocation(
+	const FVector& DesiredLocation,
+	bool& bOutObstructed) const
+{
+	bOutObstructed = false;
+	const UWorld* World = GetWorld();
+	if (!IsConfigurationReady() || !IsValid(World) || !IsValid(GetOwner()))
+	{
+		return DesiredLocation;
+	}
+
+	const FVector TraceStart = GetOwner()->GetActorLocation() + FVector::UpVector * TuningData->HoldHeight;
+	const FVector TraceDirection = (DesiredLocation - TraceStart).GetSafeNormal();
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticHoldObstruction), false, GetOwner());
+	if (const UPrimitiveComponent* HeldBody = HeldComponent.Get())
+	{
+		QueryParams.AddIgnoredActor(HeldBody->GetOwner());
+	}
+
+	FHitResult Hit;
+	if (!World->LineTraceSingleByChannel(
+		Hit,
+		TraceStart,
+		DesiredLocation,
+		UE::ZeroEscape::Magnetism::InteractionTraceChannel,
+		QueryParams))
+	{
+		return DesiredLocation;
+	}
+
+	bOutObstructed = true;
+	const float SafeDistance = FMath::Max(
+		TuningData->MinimumHoldDistance,
+		Hit.Distance - TuningData->ObstructionClearance);
+	return TraceStart + TraceDirection * SafeDistance;
+}
+
+/** 从相机穿过中心准星追踪；忽略玩家和当前持有物，使投掷方向收敛到可见场景命中点。 */
+FVector UElectromagneticGrabComponent::CalculateAimPoint() const
+{
+	if (!IsConfigurationReady() || !IsValid(GetWorld()))
+	{
+		return FVector::ZeroVector;
+	}
+
+	const FVector TraceStart = ViewCamera->GetComponentLocation();
+	const FVector TraceEnd = TraceStart + ViewCamera->GetForwardVector() * TuningData->AimTraceDistance;
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticThrowAim), false, GetOwner());
+	if (const UPrimitiveComponent* HeldBody = HeldComponent.Get())
+	{
+		QueryParams.AddIgnoredActor(HeldBody->GetOwner());
+	}
+
+	FHitResult Hit;
+	return GetWorld()->LineTraceSingleByChannel(
+		Hit,
+		TraceStart,
+		TraceEnd,
+		UE::ZeroEscape::Magnetism::InteractionTraceChannel,
+		QueryParams)
+		? Hit.ImpactPoint
+		: TraceEnd;
+}
+
+/** 追踪候选最近碰撞表面；无阻挡或首个命中正是候选时才视为可见。 */
+bool UElectromagneticGrabComponent::IsCandidateVisible(
+	const UPrimitiveComponent* CandidateComponent,
+	const FVector& CameraLocation) const
+{
+	if (!IsValid(CandidateComponent) || !IsValid(GetWorld()))
+	{
+		return false;
+	}
+
+	FVector SurfacePoint = CandidateComponent->GetCenterOfMass();
+	CandidateComponent->GetClosestPointOnCollision(CameraLocation, SurfacePoint);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticSelectionVisibility), false, GetOwner());
+	FHitResult Hit;
+	const bool bHitSomething = GetWorld()->LineTraceSingleByChannel(
+		Hit,
+		CameraLocation,
+		SurfacePoint,
+		UE::ZeroEscape::Magnetism::InteractionTraceChannel,
+		QueryParams);
+
+	return !bHitSomething
+		|| Hit.GetComponent() == CandidateComponent
+		|| Hit.GetActor() == CandidateComponent->GetOwner();
+}
