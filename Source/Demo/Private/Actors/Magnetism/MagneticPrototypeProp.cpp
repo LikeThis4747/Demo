@@ -2,7 +2,7 @@
 
 /**
  * @file MagneticPrototypeProp.cpp
- * Implements a native magnetic prop so the baseline remains playable without Blueprint graph logic.
+ * 职责：实现原生磁性物理道具，使基线玩法不依赖蓝图图表逻辑。
  */
 
 #include "Actors/Magnetism/MagneticPrototypeProp.h"
@@ -13,7 +13,7 @@
 #include "Materials/MaterialInterface.h"
 #include "UObject/ConstructorHelpers.h"
 
-/** Assembles a Chaos body with engine collision and a reusable magnetic marker. */
+/** 装配使用引擎碰撞的 Chaos 刚体与可复用磁性标记组件。 */
 AMagneticPrototypeProp::AMagneticPrototypeProp()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -42,7 +42,7 @@ AMagneticPrototypeProp::AMagneticPrototypeProp()
 	}
 }
 
-/** Lets the prototype GameMode produce visibly different plates, crates, and bars from one actor class. */
+/** 允许原型 GameMode 使用同一 Actor 类生成外形不同的铁板、箱体与长条测试体。 */
 void AMagneticPrototypeProp::ConfigurePrototype(const FVector& InScale, const float InMassKilograms)
 {
 	SetActorScale3D(InScale);
@@ -50,14 +50,14 @@ void AMagneticPrototypeProp::ConfigurePrototype(const FVector& InScale, const fl
 	ApplyConfiguredMass();
 }
 
-/** Ensures the mass override is applied after the runtime body exists. */
+/** 确保运行时刚体创建完成后再应用质量覆盖值。 */
 void AMagneticPrototypeProp::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyConfiguredMass();
 }
 
-/** Updates Chaos through the engine mass-override API rather than duplicating mass or inertia integration. */
+/** 通过引擎质量覆盖接口更新 Chaos，不重复实现质量或惯性积分。 */
 void AMagneticPrototypeProp::ApplyConfiguredMass()
 {
 	if (IsValid(MagneticBody))

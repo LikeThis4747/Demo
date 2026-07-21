@@ -12,12 +12,12 @@ public class Demo : ModuleRules
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 
-		// Uncomment if you are using Slate UI
+		// 使用 Slate UI 时取消下一行注释。
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });
 		
-		// Uncomment if you are using online features
+		// 使用在线功能时取消下一行注释。
 		// PrivateDependencyModuleNames.Add("OnlineSubsystem");
 
-		// To include OnlineSubsystemSteam, add it to the plugins section in your uproject file with the Enabled attribute set to true
+		// 如需接入 OnlineSubsystemSteam，请在 uproject 的插件列表中添加该插件并将 Enabled 设为 true。
 	}
 }

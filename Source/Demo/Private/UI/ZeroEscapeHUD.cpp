@@ -2,20 +2,20 @@
 
 /**
  * @file ZeroEscapeHUD.cpp
- * Implements a dependency-free Canvas reticle so the first playable prototype needs no UMG asset.
+ * 职责：实现不依赖额外资源的 Canvas 准星，使首个可玩原型无需 UMG 资产。
  */
 
 #include "UI/ZeroEscapeHUD.h"
 
 #include "Engine/Canvas.h"
 
-/** Selects a neutral bright color that can later react to magnetic candidate state. */
+/** 设置中性高亮颜色，后续可根据磁力候选状态切换表现。 */
 AZeroEscapeHUD::AZeroEscapeHUD()
 	: ReticleColor(0.88f, 0.96f, 1.0f, 0.95f)
 {
 }
 
-/** Draws four diagonal arc groups around a precise central aiming point. */
+/** 围绕精确的中心瞄准点绘制四组对角圆弧。 */
 void AZeroEscapeHUD::DrawHUD()
 {
 	Super::DrawHUD();
@@ -36,7 +36,7 @@ void AZeroEscapeHUD::DrawHUD()
 	DrawCenterDot(Center);
 }
 
-/** Converts angular samples into short Canvas lines, avoiding textures and extra UI dependencies. */
+/** 将角度采样转换为短 Canvas 线段，避免引入纹理和额外 UI 依赖。 */
 void AZeroEscapeHUD::DrawArc(
 	const FVector2D& Center,
 	const float StartDegrees,
@@ -59,7 +59,7 @@ void AZeroEscapeHUD::DrawArc(
 	}
 }
 
-/** Uses the circle equation per scan line to draw a genuinely round point instead of a square. */
+/** 按扫描线使用圆方程绘制真正的圆点，避免中心点呈现为方块。 */
 void AZeroEscapeHUD::DrawCenterDot(const FVector2D& Center)
 {
 	const int32 VerticalRadius = FMath::CeilToInt(CenterDotRadius);

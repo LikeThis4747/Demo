@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeHUD.h
- * Declares a lightweight, resolution-independent center reticle for magnetic selection and aiming.
- * The HUD owns presentation configuration only and never stores authoritative gameplay state.
+ * 职责：声明用于磁力选取和瞄准的轻量级、分辨率无关中心准星。
+ * 状态边界：HUD 只持有表现配置，不保存任何权威玩法状态。
  */
 
 #pragma once
@@ -13,47 +13,47 @@
 
 #include "ZeroEscapeHUD.generated.h"
 
-/** Draws four separated circular arcs and a center dot in the style of a shotgun reticle. */
+/** 绘制四段分离圆弧与中心点，形成类似散弹枪准星的样式。 */
 UCLASS()
 class DEMO_API AZeroEscapeHUD final : public AHUD
 {
 	GENERATED_BODY()
 
 public:
-	/** Initializes the reticle with compact defaults that remain legible over the prototype level. */
+	/** 使用适合原型关卡、保持清晰可见的紧凑默认值初始化准星。 */
 	AZeroEscapeHUD();
 
-	/** Draws the reticle at the current canvas center every HUD frame. */
+	/** 每个 HUD 绘制帧在当前画布中心渲染准星。 */
 	virtual void DrawHUD() override;
 
 private:
-	/** Approximates one circular arc with a bounded number of HUD line segments. */
+	/** 使用数量受限的 HUD 线段近似绘制一段圆弧。 */
 	void DrawArc(const FVector2D& Center, float StartDegrees, float EndDegrees);
 
-	/** Rasterizes a small filled circular center point using horizontal HUD lines. */
+	/** 使用水平 HUD 线段栅格化一个实心圆形中心点。 */
 	void DrawCenterDot(const FVector2D& Center);
 
-	/** Display color used by both outer arcs and the central point. */
+	/** 外侧圆弧与中心点共用的显示颜色。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle")
 	FLinearColor ReticleColor;
 
-	/** Radius from screen center to the four arc segments, in pixels. */
+	/** 屏幕中心到四段圆弧的半径，单位为像素。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle", meta = (ClampMin = "4.0"))
 	float ArcRadius = 15.0f;
 
-	/** Angular width of each of the four separated circular segments, in degrees. */
+	/** 每段分离圆弧的角宽度，单位为度。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle", meta = (ClampMin = "5.0", ClampMax = "80.0", Units = "deg"))
 	float ArcDegrees = 48.0f;
 
-	/** Number of straight lines used per arc; bounded to keep HUD drawing inexpensive. */
+	/** 每段圆弧使用的直线数量；限制上限以控制 HUD 绘制开销。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle", meta = (ClampMin = "2", ClampMax = "32"))
 	int32 SegmentsPerArc = 8;
 
-	/** Thickness of every reticle stroke, in pixels. */
+	/** 每条准星线段的粗细，单位为像素。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle", meta = (ClampMin = "0.5"))
 	float LineThickness = 1.8f;
 
-	/** Radius of the filled point at exact screen center, in pixels. */
+	/** 屏幕正中心实心圆点的半径，单位为像素。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Reticle", meta = (ClampMin = "1.0"))
 	float CenterDotRadius = 2.2f;
 };
