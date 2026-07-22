@@ -32,10 +32,10 @@ public:
 	/** 创建第三人称过肩相机、Physics Handle 与电磁抓取能力组件。 */
 	AZeroEscapeCharacter();
 
-	/** 本地 Pawn 再次可玩时，先清理旧上下文再按输入 DataAsset 重建映射。 */
+	/** 本地 Pawn 再次可玩时，按输入 DataAsset 幂等应用本角色拥有的映射。 */
 	virtual void PawnClientRestart() override;
 
-	/** 失去占有前移除本角色添加的上下文、放下物体并清空待处理移动输入。 */
+	/** 失去占有前移除本角色添加的上下文、放下物体并停止跳跃。 */
 	virtual void UnPossessed() override;
 
 protected:
@@ -57,9 +57,6 @@ private:
 
 	/** 把 Axis2D 移动输入转换为仅受相机 Yaw 影响的前后和左右移动。 */
 	void Move(const FInputActionValue& Value);
-
-	/** 在移动动作完成或取消时清空本帧尚未消费的输入，避免旧方向残留。 */
-	void ClearMoveInput(const FInputActionValue& Value);
 
 	/** 把 Axis2D 视角输入转发为控制器 Yaw 与 Pitch。 */
 	void Look(const FInputActionValue& Value);

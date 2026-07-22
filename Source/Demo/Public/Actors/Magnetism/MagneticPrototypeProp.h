@@ -26,9 +26,6 @@ public:
 	/** 创建模拟物理的立方体刚体，并挂接磁力交互契约。 */
 	AMagneticPrototypeProp();
 
-	/** 为运行时原型测试体设置实例级形状缩放与质量。 */
-	void ConfigurePrototype(const FVector& InScale, float InMassKilograms);
-
 protected:
 	/** Chaos 创建运行时物理状态后，重新应用配置质量。 */
 	virtual void BeginPlay() override;
@@ -45,7 +42,7 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Prototype", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMagneticObjectComponent> MagneticObject;
 
-	/** 物理状态创建后及原型配置变化时应用的初始质量，单位 kg。 */
+	/** 由关卡实例配置，并在物理状态创建后应用的初始质量，单位 kg。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prototype", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", Units = "kg"))
 	float InitialMassKilograms = 20.0f;
 };

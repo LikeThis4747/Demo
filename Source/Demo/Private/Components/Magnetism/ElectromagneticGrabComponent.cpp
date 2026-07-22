@@ -2,9 +2,9 @@
 
 /**
  * @file ElectromagneticGrabComponent.cpp
- * 职责：执行有界屏幕选取与 UE Physics Handle 抓取基线，并在所有退出路径恢复刚体设置。
- * 边界：Chaos 负责碰撞、旋转和积分；本文件只实现玩法策略，所有手感参数来自独立 Tuning DataAsset。
- * 状态 Owner：本组件独占当前持有引用、临时覆盖、释放锁和安全计时；不存在组件内参数兜底。
+ * 职责：执行有界屏幕选取、确定性曲线吸取与 UE Physics Handle 持有，并在所有退出路径恢复临时设置。
+ * 边界：Chaos 负责碰撞、旋转和积分；曲线只移动隐形锚点，所有手感参数来自独立 Tuning DataAsset。
+ * 状态 Owner：本组件独占当前持有引用、吸取阶段、临时覆盖、释放锁和安全计时；不存在组件内参数兜底。
  */
 
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
@@ -38,11 +38,26 @@ UElectromagneticGrabComponent::UElectromagneticGrabComponent()
 {
 	PrimaryComponentTick.bCanEverTick = true;
 	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 }
 
-/** 保存角色装配引用，校验唯一 Tuning 资产，并把其中三项 Physics Handle 参数应用到 UE 组件。 */
+/** 保存角色装配引用，校验唯一 Tuning 资产，声明 PrePhysics 顺序并应用 Physics Handle 参数。 */
 void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysicsHandle, UCameraComponent* InViewCamera)
 {
+	if (GrabPhase != EGrabPhase::None || HeldComponent.IsValid() || bHandleTargetInterpolationOverridden)
+	{
+		ReleaseHeldObject(false);
+	}
+	else
+	{
+		RestoreHandleTargetInterpolation();
+	}
+
+	if (IsValid(PhysicsHandle))
+	{
+		PhysicsHandle->RemoveTickPrerequisiteComponent(this);
+	}
+
 	PhysicsHandle = InPhysicsHandle;
 	ViewCamera = InViewCamera;
 	bConfigurationReady = false;
@@ -82,6 +97,7 @@ void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysics
 	PhysicsHandle->SetLinearStiffness(TuningData->HandleLinearStiffness);
 	PhysicsHandle->SetLinearDamping(TuningData->HandleLinearDamping);
 	PhysicsHandle->SetInterpolationSpeed(TuningData->HandleInterpolationSpeed);
+	PhysicsHandle->AddTickPrerequisiteComponent(this);
 	bConfigurationReady = true;
 }
 
@@ -158,17 +174,42 @@ void UElectromagneticGrabComponent::TickComponent(
 		return;
 	}
 
-	HeldElapsedSeconds += DeltaTime;
+	if (GrabPhase == EGrabPhase::None)
+	{
+		ReleaseHeldObject(true);
+		return;
+	}
+
+	if (GrabPhase == EGrabPhase::Holding && bRestoreHandleInterpolationNextTick)
+	{
+		RestoreHandleTargetInterpolation();
+	}
 
 	bool bIsObstructed = false;
 	const FVector SafeTarget = ResolveSafeHoldLocation(CalculateDesiredHoldLocation(), bIsObstructed);
 	ObstructedElapsedSeconds = bIsObstructed ? ObstructedElapsedSeconds + DeltaTime : 0.0f;
-	PhysicsHandle->SetTargetLocation(SafeTarget);
+
+	if (GrabPhase == EGrabPhase::Pulling)
+	{
+		PullElapsedSeconds = FMath::Min(PullElapsedSeconds + DeltaTime, PullDurationSeconds);
+		PhysicsHandle->SetTargetLocation(CalculatePullTarget(SafeTarget));
+
+		if (PullElapsedSeconds >= PullDurationSeconds)
+		{
+			EnterHoldingPhase();
+		}
+	}
+	else
+	{
+		HoldingElapsedSeconds += DeltaTime;
+		PhysicsHandle->SetTargetLocation(SafeTarget);
+	}
 
 	const UPrimitiveComponent* HeldBody = HeldComponent.Get();
 	const float HoldError = FVector::Distance(HeldBody->GetCenterOfMass(), SafeTarget);
 	const bool bExceededObstructionDelay = ObstructedElapsedSeconds >= TuningData->ObstructionReleaseDelay;
-	const bool bExceededStableError = HeldElapsedSeconds >= TuningData->PullGracePeriod
+	const bool bExceededStableError = GrabPhase == EGrabPhase::Holding
+		&& HoldingElapsedSeconds >= TuningData->PullGracePeriod
 		&& HoldError >= TuningData->MaximumHoldError;
 
 	if (bExceededObstructionDelay || bExceededStableError)
@@ -181,6 +222,10 @@ void UElectromagneticGrabComponent::TickComponent(
 void UElectromagneticGrabComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ReleaseHeldObject(false);
+	if (IsValid(PhysicsHandle))
+	{
+		PhysicsHandle->RemoveTickPrerequisiteComponent(this);
+	}
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -317,20 +362,123 @@ void UElectromagneticGrabComponent::GrabCandidate(
 	HeldMagneticObject = MagneticObject;
 	PreviousAngularDamping = CandidateComponent->GetAngularDamping();
 	PreviousPawnCollisionResponse = CandidateComponent->GetCollisionResponseToChannel(ECC_Pawn);
-	HeldElapsedSeconds = 0.0f;
 	ObstructedElapsedSeconds = 0.0f;
 
 	CandidateComponent->SetAngularDamping(TuningData->HeldAngularDamping);
 	CandidateComponent->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
-	PhysicsHandle->GrabComponentAtLocation(CandidateComponent, NAME_None, CandidateComponent->GetCenterOfMass());
-	PhysicsHandle->SetTargetLocation(CalculateDesiredHoldLocation());
+
+	const FVector PullStart = CandidateComponent->GetCenterOfMass();
+	PhysicsHandle->GrabComponentAtLocation(CandidateComponent, NAME_None, PullStart);
+	if (PhysicsHandle->GetGrabbedComponent() != CandidateComponent)
+	{
+		ReleaseHeldObject(false);
+		return;
+	}
+
+	bool bIgnoredInitialObstruction = false;
+	const FVector InitialSafeHoldLocation = ResolveSafeHoldLocation(
+		CalculateDesiredHoldLocation(),
+		bIgnoredInitialObstruction);
+	BeginPull(PullStart, InitialSafeHoldLocation);
 	SetComponentTickEnabled(true);
+}
+
+/** 关闭 Handle 的目标二次插值，并固定本次曲线起点、弧线方向、时长与弧高。 */
+void UElectromagneticGrabComponent::BeginPull(
+	const FVector& StartLocation,
+	const FVector& InitialSafeHoldLocation)
+{
+	const float InitialTravelDistance = FVector::Distance(StartLocation, InitialSafeHoldLocation);
+	const FVector DirectDirection = (InitialSafeHoldLocation - StartLocation).GetSafeNormal();
+
+	GrabPhase = EGrabPhase::Pulling;
+	PullStartLocation = StartLocation;
+	PullElapsedSeconds = 0.0f;
+	PullDurationSeconds = FMath::Max(
+		TuningData->MinimumPullDuration,
+		InitialTravelDistance / TuningData->PullReferenceSpeed);
+	PullArcHeight = FMath::Min(
+		InitialTravelDistance * TuningData->PullArcHeightRatio,
+		TuningData->MaximumPullArcHeight);
+	HoldingElapsedSeconds = 0.0f;
+
+	// 固定弧线平面，既保持整体向上趋势，也避免玩家转动镜头时路径在空中扭转。
+	PullArcDirection = FVector::VectorPlaneProject(FVector::UpVector, DirectDirection).GetSafeNormal();
+	if (PullArcDirection.IsNearlyZero() && IsValid(ViewCamera))
+	{
+		PullArcDirection = FVector::VectorPlaneProject(
+			ViewCamera->GetRightVector(),
+			DirectDirection).GetSafeNormal();
+	}
+	if (PullArcDirection.IsNearlyZero())
+	{
+		PullArcDirection = FVector::UpVector;
+	}
+
+	bPreviousHandleInterpolateTarget = PhysicsHandle->bInterpolateTarget;
+	bHandleTargetInterpolationOverridden = true;
+	bRestoreHandleInterpolationNextTick = false;
+	PhysicsHandle->bInterpolateTarget = false;
+	PhysicsHandle->SetTargetLocation(StartLocation);
+}
+
+/** 使用绝对时间求值非对称进度；动态终点跟随玩家，固定起点与弧高避免路径漂移。 */
+FVector UElectromagneticGrabComponent::CalculatePullTarget(const FVector& SafeHoldLocation) const
+{
+	if (PullDurationSeconds <= UE_SMALL_NUMBER)
+	{
+		return SafeHoldLocation;
+	}
+
+	const float NormalizedTime = FMath::Clamp(PullElapsedSeconds / PullDurationSeconds, 0.0f, 1.0f);
+	const float TimeSquared = NormalizedTime * NormalizedTime;
+	const float TimeToFourth = TimeSquared * TimeSquared;
+	const float TravelProgress = TimeToFourth * (5.0f - 4.0f * NormalizedTime);
+	const float ArcProgress = FMath::Sin(PI * TravelProgress);
+
+	return FMath::Lerp(PullStartLocation, SafeHoldLocation, TravelProgress)
+		+ PullArcDirection * PullArcHeight * ArcProgress;
+}
+
+/** 曲线终点帧仍让 Handle 直接采用目标；下一帧再恢复插值，防止末端叠加额外缓动。 */
+void UElectromagneticGrabComponent::EnterHoldingPhase()
+{
+	GrabPhase = EGrabPhase::Holding;
+	HoldingElapsedSeconds = 0.0f;
+	bRestoreHandleInterpolationNextTick = bHandleTargetInterpolationOverridden;
+}
+
+/** 恢复抓取前的 Handle 目标插值状态；Handle 已销毁时也清掉本地覆盖标记。 */
+void UElectromagneticGrabComponent::RestoreHandleTargetInterpolation()
+{
+	if (bHandleTargetInterpolationOverridden && IsValid(PhysicsHandle))
+	{
+		PhysicsHandle->bInterpolateTarget = bPreviousHandleInterpolateTarget;
+	}
+
+	bHandleTargetInterpolationOverridden = false;
+	bRestoreHandleInterpolationNextTick = false;
+}
+
+/** 清空本次曲线运行态，确保下一次抓取不会继承旧距离、方向或计时。 */
+void UElectromagneticGrabComponent::ResetPullState()
+{
+	GrabPhase = EGrabPhase::None;
+	PullStartLocation = FVector::ZeroVector;
+	PullArcDirection = FVector::UpVector;
+	PullElapsedSeconds = 0.0f;
+	PullDurationSeconds = 0.0f;
+	PullArcHeight = 0.0f;
+	HoldingElapsedSeconds = 0.0f;
+	bPreviousHandleInterpolateTarget = true;
+	bRestoreHandleInterpolationNextTick = false;
 }
 
 /** 先释放 UE Handle，再恢复角阻尼和 Pawn 碰撞，最后清空弱引用与计时，保证每条退出路径可回退。 */
 void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRelease)
 {
 	UPrimitiveComponent* ComponentToRelease = HeldComponent.Get();
+	RestoreHandleTargetInterpolation();
 
 	if (IsValid(PhysicsHandle) && IsValid(PhysicsHandle->GetGrabbedComponent()))
 	{
@@ -345,7 +493,7 @@ void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRe
 
 	HeldComponent.Reset();
 	HeldMagneticObject.Reset();
-	HeldElapsedSeconds = 0.0f;
+	ResetPullState();
 	ObstructedElapsedSeconds = 0.0f;
 	bAwaitingGrabRelease = bRequireInputRelease;
 	SetComponentTickEnabled(false);

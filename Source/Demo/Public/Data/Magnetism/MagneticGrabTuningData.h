@@ -2,7 +2,7 @@
 
 /**
  * @file MagneticGrabTuningData.h
- * 职责：集中保存玩家电磁抓取基线的选取、持有、安全、投掷与 Physics Handle 手感参数。
+ * 职责：集中保存玩家电磁抓取基线的选取、吸取曲线、持有、安全、投掷与 Physics Handle 手感参数。
  * 边界：不引用输入 DataAsset，不保存单个道具身份，也不持有任何运行时抓取状态。
  * 状态 Owner：本资产是全局磁力手感参数的唯一来源；UElectromagneticGrabComponent 只读取并执行。
  */
@@ -81,6 +81,34 @@ public:
 	float HeldAngularDamping = 2.5f;
 
 	/**
+	 * 对应 C++ 属性 PullReferenceSpeed，由 UElectromagneticGrabComponent::BeginPull 计算吸取时长，单位 cm/s。
+	 * 初始值：1600；编辑范围：500~5000。调高会缩短同距离吸取时间，调低会拉长；它不直接设置真实刚体速度。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|吸取曲线", meta = (ClampMin = "500.0", ClampMax = "5000.0", UIMin = "800.0", UIMax = "3000.0", Units = "cm/s"))
+	float PullReferenceSpeed = 1600.0f;
+
+	/**
+	 * 对应 C++ 属性 MinimumPullDuration，由 BeginPull 限制近距离吸取的最短持续时间，单位 s。
+	 * 初始值：0.35；编辑范围：0.1~1。调高可避免近物瞬吸但降低响应，调低更迅速但可能显得机械。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|吸取曲线", meta = (ClampMin = "0.1", ClampMax = "1.0", UIMin = "0.15", UIMax = "0.75", Units = "s"))
+	float MinimumPullDuration = 0.35f;
+
+	/**
+	 * 对应 C++ 属性 PullArcHeightRatio，由 BeginPull 按初始移动距离计算弧线高度，无单位。
+	 * 初始值：0.06；编辑范围：0~0.2。调高会增强上拱曲线，设为 0 则使用纯直线路径。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|吸取曲线", meta = (ClampMin = "0.0", ClampMax = "0.2", UIMin = "0.0", UIMax = "0.12"))
+	float PullArcHeightRatio = 0.06f;
+
+	/**
+	 * 对应 C++ 属性 MaximumPullArcHeight，由 BeginPull 限制远距离吸取的最大弧高，单位 cm。
+	 * 初始值：90；编辑范围：0~200。调高允许远物形成更明显弧线，调低让远近路径都更直接。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|吸取曲线", meta = (ClampMin = "0.0", ClampMax = "200.0", UIMin = "0.0", UIMax = "120.0", Units = "cm"))
+	float MaximumPullArcHeight = 90.0f;
+
+	/**
 	 * 对应 C++ 属性 MinimumHoldDistance，由 ResolveSafeHoldLocation 保留最小锚点距离，单位 cm。
 	 * 初始值：90；编辑范围：20~300，且不得大于 HoldDistance。调高更不易贴身，调低更容易缩到狭窄空间。
 	 */
@@ -102,8 +130,8 @@ public:
 	float ObstructionReleaseDelay = 0.35f;
 
 	/**
-	 * 对应 C++ 属性 PullGracePeriod，由 TickComponent 延迟启用误差断开，单位 s。
-	 * 初始值：0.75；编辑范围：0~3。调高给重物更多吸近时间，调低会更早判定抓取不稳定。
+	 * 对应 C++ 属性 PullGracePeriod，由 TickComponent 在曲线结束后延迟启用稳定误差断开，单位 s。
+	 * 初始值：0.75；编辑范围：0~3。调高给重物更多追上持有锚点的时间，调低会更早判定抓取不稳定。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|安全", meta = (ClampMin = "0.0", ClampMax = "3.0", UIMin = "0.0", UIMax = "3.0", Units = "s"))
 	float PullGracePeriod = 0.75f;

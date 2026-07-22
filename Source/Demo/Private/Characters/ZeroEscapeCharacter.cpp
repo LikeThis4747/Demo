@@ -56,16 +56,10 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	ElectromagneticGrab = CreateDefaultSubobject<UElectromagneticGrabComponent>(TEXT("ElectromagneticGrab"));
 }
 
-/** 重新占有时刷新按键缓存，并以幂等方式应用输入 DataAsset 声明的上下文。 */
+/** 重新占有时以幂等方式应用输入 DataAsset 声明的上下文。 */
 void AZeroEscapeCharacter::PawnClientRestart()
 {
 	Super::PawnClientRestart();
-
-	if (APlayerController* PlayerController = Cast<APlayerController>(Controller))
-	{
-		PlayerController->FlushPressedKeys();
-	}
-
 	ApplyInputMappingContexts();
 }
 
@@ -73,7 +67,6 @@ void AZeroEscapeCharacter::PawnClientRestart()
 void AZeroEscapeCharacter::UnPossessed()
 {
 	RemoveInputMappingContexts();
-	ConsumeMovementInputVector();
 	EndMagneticGrab();
 	StopJumping();
 
@@ -91,7 +84,7 @@ void AZeroEscapeCharacter::PostInitializeComponents()
 	}
 }
 
-/** 校验输入 DataAsset 后集中注册动作，并为所有持续输入补齐 Completed/Canceled 清理路径。 */
+/** 校验输入 DataAsset 后集中注册动作；普通移动直接采用 Enhanced Input 的逐帧 Triggered 值。 */
 void AZeroEscapeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
 {
 	Super::SetupPlayerInputComponent(PlayerInputComponent);
@@ -115,8 +108,6 @@ void AZeroEscapeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	}
 
 	EnhancedInput->BindAction(InputConfig->MoveAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Move);
-	EnhancedInput->BindAction(InputConfig->MoveAction, ETriggerEvent::Completed, this, &AZeroEscapeCharacter::ClearMoveInput);
-	EnhancedInput->BindAction(InputConfig->MoveAction, ETriggerEvent::Canceled, this, &AZeroEscapeCharacter::ClearMoveInput);
 	EnhancedInput->BindAction(InputConfig->LookAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Look);
 	EnhancedInput->BindAction(InputConfig->MouseLookAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Look);
 	EnhancedInput->BindAction(InputConfig->JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
@@ -201,13 +192,6 @@ void AZeroEscapeCharacter::Move(const FInputActionValue& Value)
 	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 	AddMovementInput(ForwardDirection, MovementVector.Y);
 	AddMovementInput(RightDirection, MovementVector.X);
-}
-
-/** 消费尚未进入 CharacterMovement 的方向输入；参数只用于匹配 Enhanced Input 回调签名。 */
-void AZeroEscapeCharacter::ClearMoveInput(const FInputActionValue& Value)
-{
-	static_cast<void>(Value);
-	ConsumeMovementInputVector();
 }
 
 /** 把鼠标或手柄的二维视角值转发给控制器，不在角色中重复实现灵敏度。 */

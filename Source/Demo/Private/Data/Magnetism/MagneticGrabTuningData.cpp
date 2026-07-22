@@ -2,7 +2,7 @@
 
 /**
  * @file MagneticGrabTuningData.cpp
- * 职责：在磁力组件启用前校验调参资产，阻止非法数值进入 Physics Handle 或安全释放逻辑。
+ * 职责：在磁力组件启用前校验调参资产，阻止非法数值进入吸取曲线、Physics Handle 或安全释放逻辑。
  * 边界：不修改组件、不钳制或偷偷修正资产数值，也不提供第二套默认配置。
  * 状态 Owner：资产拥有参数；校验结果由调用方用于决定是否启用磁力功能。
  */
@@ -42,6 +42,10 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		|| !ValidateFloat(TEXT("HoldSideOffset"), HoldSideOffset, -300.0f, 300.0f)
 		|| !ValidateFloat(TEXT("HoldHeight"), HoldHeight, -100.0f, 300.0f)
 		|| !ValidateFloat(TEXT("HeldAngularDamping"), HeldAngularDamping, 0.0f, 50.0f)
+		|| !ValidateFloat(TEXT("PullReferenceSpeed"), PullReferenceSpeed, 500.0f, 5000.0f)
+		|| !ValidateFloat(TEXT("MinimumPullDuration"), MinimumPullDuration, 0.1f, 1.0f)
+		|| !ValidateFloat(TEXT("PullArcHeightRatio"), PullArcHeightRatio, 0.0f, 0.2f)
+		|| !ValidateFloat(TEXT("MaximumPullArcHeight"), MaximumPullArcHeight, 0.0f, 200.0f)
 		|| !ValidateFloat(TEXT("MinimumHoldDistance"), MinimumHoldDistance, 20.0f, 300.0f)
 		|| !ValidateFloat(TEXT("ObstructionClearance"), ObstructionClearance, 0.0f, 100.0f)
 		|| !ValidateFloat(TEXT("ObstructionReleaseDelay"), ObstructionReleaseDelay, 0.05f, 3.0f)

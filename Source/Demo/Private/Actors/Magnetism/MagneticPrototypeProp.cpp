@@ -34,14 +34,6 @@ AMagneticPrototypeProp::AMagneticPrototypeProp()
 	}
 }
 
-/** 允许原型 GameMode 使用同一 Actor 类生成外形不同的铁板、箱体与长条测试体。 */
-void AMagneticPrototypeProp::ConfigurePrototype(const FVector& InScale, const float InMassKilograms)
-{
-	SetActorScale3D(InScale);
-	InitialMassKilograms = FMath::Max(1.0f, InMassKilograms);
-	ApplyConfiguredMass();
-}
-
 /** 确保运行时刚体创建完成后再应用质量覆盖值。 */
 void AMagneticPrototypeProp::BeginPlay()
 {

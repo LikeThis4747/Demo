@@ -2,9 +2,9 @@
 
 /**
  * @file ElectromagneticGrabComponent.h
- * 职责：实现玩家电磁抓取的选取、持有、放下、投掷与安全恢复状态机。
+ * 职责：实现玩家电磁抓取的选取、曲线吸取、持有、放下、投掷与安全恢复状态机。
  * 边界：Chaos/Physics Handle 负责刚体求解；全局手感只从 UMagneticGrabTuningData 读取；输入由角色转发。
- * 状态 Owner：本组件独占当前持有物、临时物理覆盖、输入锁与安全计时状态。
+ * 状态 Owner：本组件独占当前持有物、吸取/持有阶段、临时物理覆盖、输入锁与安全计时状态。
  */
 
 #pragma once
@@ -54,6 +54,14 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 抓取状态只表达玩法锚点阶段；Physics Handle 约束在 Pulling 与 Holding 中始终有效。 */
+	enum class EGrabPhase : uint8
+	{
+		None,
+		Pulling,
+		Holding
+	};
+
 	/** 返回装配引用和 Tuning 资产是否全部通过 Configure 校验。 */
 	bool IsConfigurationReady() const;
 
@@ -65,6 +73,21 @@ private:
 
 	/** 释放 Handle、恢复物理覆盖，并按需要要求右键先松开再允许下一次抓取。 */
 	void ReleaseHeldObject(bool bRequireInputRelease);
+
+	/** 快照并关闭 Handle 目标插值，依据初始安全终点初始化确定性吸取曲线。 */
+	void BeginPull(const FVector& StartLocation, const FVector& InitialSafeHoldLocation);
+
+	/** 根据绝对吸取时间、动态安全终点与固定弧线信息返回当前玩法锚点。 */
+	FVector CalculatePullTarget(const FVector& SafeHoldLocation) const;
+
+	/** 标记曲线结束并延后一帧恢复 Handle 插值，确保终点先直接写入物理锚点。 */
+	void EnterHoldingPhase();
+
+	/** 在正常到位和所有退出路径中恢复抓取前的 Handle 目标插值设置。 */
+	void RestoreHandleTargetInterpolation();
+
+	/** 清空本次吸取的阶段、曲线几何与计时，不修改外部物理对象。 */
+	void ResetPullState();
 
 	/** 使用角色位置和相机方向计算玩家前侧的持有目标点。 */
 	FVector CalculateDesiredHoldLocation() const;
@@ -105,11 +128,38 @@ private:
 	/** 抓取前对 Pawn 通道的碰撞响应快照；释放时恢复，防止永久改变道具碰撞。 */
 	ECollisionResponse PreviousPawnCollisionResponse = ECR_Block;
 
-	/** 当前抓取已持续时间，单位 s；仅由持有 Tick 累加，用于延迟误差断开。 */
-	float HeldElapsedSeconds = 0.0f;
+	/** 当前玩法锚点阶段；GrabCandidate 进入 Pulling，曲线结束进入 Holding，释放时归零。 */
+	EGrabPhase GrabPhase = EGrabPhase::None;
+
+	/** 吸取曲线固定起点，单位 cm；抓取成功时取刚体质心，释放时清零。 */
+	FVector PullStartLocation = FVector::ZeroVector;
+
+	/** 吸取曲线固定弧线方向；从世界上方向运动垂直平面投影得到，避免随镜头扭曲。 */
+	FVector PullArcDirection = FVector::UpVector;
+
+	/** 当前吸取曲线已经过时间，单位 s；仅在 Pulling Tick 中累加并钳制到总时长。 */
+	float PullElapsedSeconds = 0.0f;
+
+	/** 本次吸取曲线总时长，单位 s；由初始直线距离、参考速度和最短时长共同决定。 */
+	float PullDurationSeconds = 0.0f;
+
+	/** 本次吸取曲线弧高，单位 cm；由初始距离比例计算并受全局最大弧高限制。 */
+	float PullArcHeight = 0.0f;
+
+	/** 进入 Holding 后的持续时间，单位 s；从曲线完成时重新计时，用于延迟误差断开。 */
+	float HoldingElapsedSeconds = 0.0f;
 
 	/** 持有目标路径连续受阻时间，单位 s；路径恢复时清零，超过阈值则安全释放。 */
 	float ObstructedElapsedSeconds = 0.0f;
+
+	/** 本次吸取前的 Handle 目标插值状态；BeginPull 快照，正常到位或释放时恢复。 */
+	bool bPreviousHandleInterpolateTarget = true;
+
+	/** 为 true 表示本组件临时关闭了 Handle 目标插值，所有退出路径都必须恢复。 */
+	bool bHandleTargetInterpolationOverridden = false;
+
+	/** 曲线终点帧保持插值关闭；下一次 Holding Tick 开头恢复，避免额外尾部缓动。 */
+	bool bRestoreHandleInterpolationNextTick = false;
 
 	/** Configure 的缓存校验结果；只有引用和 Tuning 均合法时为 true。 */
 	bool bConfigurationReady = false;

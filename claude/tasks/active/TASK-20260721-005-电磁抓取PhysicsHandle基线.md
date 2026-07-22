@@ -2,9 +2,9 @@
 
 - Owner：Codex / 当前会话
 - Status：active
-- Stage：资源装配去硬编码的 C++/Config 检查点已构建通过，待用户完成两个蓝图的人工装配与联合 PIE 验收
+- Stage：吸取曲线机器验证通过；用户已发现普通释放能量漏洞与过早投掷问题，进入修复方案讨论
 - Created：2026-07-21
-- Updated：2026-07-21
+- Updated：2026-07-22
 
 ## 目标与验收
 
@@ -21,6 +21,8 @@
 - 用户已授权范围：确认本方案为 Plan；允许启用 Physics Control，并已明确授权磁力 C++、中心 HUD、蓝图和独立原型关卡实现；UE 编辑器已关闭。
 - 本轮用户已授权范围：专用 PlayerController、输入 DataAsset、移动取消路径、过肩相机基线、磁力 Tuning DataAsset 与现有参数迁移；暂不加入蓄力投掷和新物理算法。
 - 本轮用户已授权并已落盘：GameMode/磁性道具改为“C++ 原生诊断后备 + 蓝图资源装配”，移除两处项目资产路径查找；未来 PCG 可选内容再使用软引用资源池。
+- 2026-07-22 用户已授权：在现有 Physics Handle 基线上实现确定性吸取曲线；只修改磁力 Tuning DataAsset 类与抓取组件四个 C++ 文件，不扩展随机性、质量倍率、投掷或近墙算法。
+- 2026-07-22 用户授权记录计划：先讨论并解决普通释放限速与稳定吸附前禁止投掷，再讨论蓄力投掷；本条仅授权写入讨论计划，尚未授权修改玩法代码或资产。
 
 ## 计划与检查点
 
@@ -38,6 +40,10 @@
 - [x] 在对话中展示本检查点拟修改代码和人工装配步骤，并取得用户明确落盘授权。
 - [x] 完成最小 C++/Config 改动、静态检查和两次完整构建。
 - [x] 用户装配 GameMode 与磁性道具蓝图，并共同完成蓝图编译、PIE 和日志验证。
+- [ ] 确认普通释放的线速度/角速度上限，以及自动安全释放是否采用同一上限。
+- [ ] 确认“稳定吸附完成”的位置、相对速度和持续时间门槛，并在对话中展示拟实现代码。
+- [ ] 用户明确授权后，串行实现释放限速与投掷就绪门禁，再做构建、PIE 和快速甩视角边界验证。
+- [ ] 前置问题验收后，单独讨论蓄力时长、质量映射、摇晃表现、伤害/击退数据与未来体力接口。
 
 ## 验证
 
@@ -74,6 +80,23 @@
 - 已记录旧算法风险：墙面距离小于 `MinimumHoldDistance` 时，现有安全目标公式可能短暂把目标设到墙后，随后才按阻挡延迟释放；本轮只做配置迁移，未夹带安全算法改写，联合验收时需重点复现后再单独确定修法。
 - 下一步：用户试玩后按现象选择只调参、补候选高亮与电弧、做 Physics Control A/B，或在有明确控制缺口时再实现自研控制层。
 
+### 2026-07-22 吸取曲线手感检查点（已授权，实施中）
+
+- Owner：Codex / 当前会话；沿用本任务卡，避免与磁力基线产生重叠文件 Owner。
+- 目标：只增加“吸取阶段的动态曲线锚点”，让 Physics Handle 的目标从物体质心沿小弧线、按距离控制的时长移动到持有点；Chaos 继续决定物体的真实质量、惯性、旋转与碰撞响应。
+- 明确非目标：本检查点不加入随机摆动、磁性强弱倍率、Timeline、蓄力投掷、普通释放限速、Physics Control、自研 PD 或近墙安全算法重写。
+- 预计修改文件：`Source/Demo/Public/Data/Magnetism/MagneticGrabTuningData.h`、`Source/Demo/Private/Data/Magnetism/MagneticGrabTuningData.cpp`、`Source/Demo/Public/Components/Magnetism/ElectromagneticGrabComponent.h`、`Source/Demo/Private/Components/Magnetism/ElectromagneticGrabComponent.cpp`；方案确认后才创建对应 `DOC/DailyPlan/`。
+- 数据边界：全局曲线参数仍只属于 `UMagneticGrabTuningData`；吸取起点、已用时间和吸取/持有阶段只属于 `UElectromagneticGrabComponent`；`UMagneticObjectComponent` 本轮不变。
+- 依赖与冲突：依赖现有 Physics Handle 基线和独立 Tuning DataAsset；与近墙安全、释放限速、蓄力投掷共享磁力组件文件，必须串行实施，不做并行修改。
+- 已确认方案：新增四项全局参数；采用 `S = T^4(5 - 4T)` 非对称进度、小幅确定性弧线和动态安全持有终点；Physics Handle 约束全程有效，Pulling 只关闭目标插值，曲线结束后恢复并进入 Holding。
+- 授权结论：用户已明确要求开始实现；正式范围已写入 `DOC/DailyPlan/2026-07-22-电磁抓取曲线手感.md`。
+- 已落盘：DataAsset 新增四项曲线参数及校验；抓取组件新增 Pulling/Holding 状态、非对称曲线、小弧线、动态安全终点、Handle 插值快照/延迟恢复和 PrePhysics Tick 顺序。
+- 静态验证：`git diff --check` 通过（仅既有 LF→CRLF 提示）；曲线采样确认 `S(0)=0`、`S(1)=1`、全程单调、速度峰值位于 `T=0.75`；独立代码审查未发现阻塞项。
+- 构建检查：用户安全关闭编辑器后重跑 `DemoEditor Win64 Development`，`UnrealEditor-Demo.dll` 链接与目标元数据写入成功，最终 `Result: Succeeded`。
+- 编辑器验证：重启后 UE/MCP ready；`BP_ZeroEscapeCharacter`、`BP_ZeroEscapePrototypeGameMode` 与 `BP_MagneticProp` 均 `UpToDate`、零错误零警告。
+- PIE 烟测：`Level0` 正常运行，GameMode 为 `BP_ZeroEscapePrototypeGameMode_C`；启动后日志区间无 Error，未出现磁力或输入 DataAsset 配置错误，停止 PIE 后状态正常。
+- 当前检查点：机器验证已通过；工具无法可靠模拟真实鼠标抓取，近/中/远距离、5/20/45/70 kg、末段快速转身、Pulling 中松开/投掷与墙体阻挡仍需用户实际试玩，状态保持待用户验收。
+
 ### 2026-07-21 资源装配去硬编码检查点
 
 - 已移除 GameMode 中角色蓝图的 `FClassFinder` 和磁性道具中的项目材质 `FObjectFinder`；C++ 内不再保存 `/Game/ZeroEscape/...` 资产路径。
@@ -83,3 +106,36 @@
 - 下一步人工装配：GameMode 蓝图指定角色与道具子类；磁性道具蓝图删除重复 `MagneticMesh`，在继承的 `MagneticBody` 上指定材质；之后编译保存并 PIE。
 - 人工装配验证：三个相关蓝图均 `UpToDate`、零错误零警告；`BP_MagneticProp` 已无蓝图新增组件；资产依赖包含角色、磁性道具与测试材质。
 - PIE 验证：`Level0` 正常运行，日志确认 `Game class is 'BP_ZeroEscapePrototypeGameMode_C'`，本轮未出现角色、道具或磁力 DataAsset 漏配错误；用户已完成装配，本检查点通过机器验证。
+
+### 2026-07-22 普通释放限速、投掷就绪门禁与蓄力投掷（讨论计划）
+
+#### 已确认的试玩问题
+
+1. 右键持有后快速转动视角再松开右键，刚体会保留 Physics Handle 为追赶锚点产生的高线速度/角速度，可能获得超过正式投掷的动能。
+2. 当前 `IsHoldingObject()` 在 `Pulling` 阶段已经成立，左键可以在物体尚未稳定到达身前时投掷。
+
+#### 必须先完成的两个前置检查点
+
+- **普通释放能量上限**：玩家主动松开、吸取途中松开和安全断开都不能成为攻击手段；释放时保留方向与少量惯性，但分别钳制线速度和角速度。正式投掷不使用普通释放上限，而是由显式投掷参数决定最终速度。
+- **投掷就绪门禁**：曲线结束不等于刚体已经稳定到位。只有物体进入身前允许误差范围、相对持有目标的线速度与自身角速度足够低，并连续稳定一小段时间后，才进入可投掷状态；不满足时左键不投掷、不提前释放物体。
+- 两项都由 `UElectromagneticGrabComponent` 持有运行态；阈值继续由 `UMagneticGrabTuningData` 唯一配置。预计仍只涉及以下文件，且必须与当前磁力任务串行修改：
+  - `D:\UE5projects\Demo\Source\Demo\Public\Components\Magnetism\ElectromagneticGrabComponent.h`
+  - `D:\UE5projects\Demo\Source\Demo\Private\Components\Magnetism\ElectromagneticGrabComponent.cpp`
+  - `D:\UE5projects\Demo\Source\Demo\Public\Data\Magnetism\MagneticGrabTuningData.h`
+  - `D:\UE5projects\Demo\Source\Demo\Private\Data\Magnetism\MagneticGrabTuningData.cpp`
+  - `/Game/ZeroEscape/Data/Magnetism/DA_MagneticGrabTuning`
+
+#### 后续蓄力投掷设想
+
+- 状态顺序暂定为：`Pulling（吸取中） → Settling（到位收敛中） → Ready/Charging（稳定后自动蓄力） → Thrown 或 Dropped`。
+- 物体稳定到身前后，立即按左键执行基础投掷：距离较短、动能较低，只造成轻量影响、少量伤害和轻度打断/击退。
+- 继续按住右键则自动积累蓄力；蓄力期间随时允许按左键，以当前蓄力比例投出。
+- 蓄力越高，物体摇晃越明显；摇晃必须有界且不能依靠持续叠加随机冲量蓄积隐藏动能。正式投掷结果仍由显式的蓄力比例、物体质量/配置和投掷参数决定。
+- 达到最大蓄力后，投掷获得该物体允许的最大速度/动能、最远有效距离、最大伤害和击退；不得通过继续等待或甩镜头突破上限。
+- 质量如何影响距离、速度、冲量、伤害和击退需要单独确定。现有 `ThrowSpeedMultiplier` 可作为物体配置入口，但最终公式尚未确认。
+- 体力属于后续扩展：蓄力消耗体力，耗尽时强制走受限速保护的安全放下，并进入体力恢复；本轮不实现体力属性、UI 或恢复规则。
+
+#### 实施门禁与验收重点
+
+- 当前只记录需求和候选状态机；先确认参数语义与拟实现代码，再由用户明确授权落盘。
+- 验收必须覆盖：吸取中左键、刚进入身前但仍高速摆动时左键、稳定后基础投掷、快速左右甩镜头后松右键、快速俯仰后松右键、不同质量物体、墙边自动释放，以及普通放下速度始终低于正式投掷能力。
