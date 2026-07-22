@@ -9,5 +9,6 @@
 - `scratch/`：随时可清理的临时文件。
 - `artifacts/`：临时报告和输出。
 - `templates/`：任务与交接模板。
+- `reviews/`：AI 代码审计结论；实现/修改代码前先查（索引见 `reviews/README.md`）。
 
-详细规则见 `DOC/AI_WORKFLOW.md`。
+详细规则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`。

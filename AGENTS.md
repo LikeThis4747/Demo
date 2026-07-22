@@ -10,8 +10,9 @@
 
 1. 通过 Memory MCP 读取 `.ai-context/current-task.md`、`.ai-context/latest-error.md` 与 `memory-bank/activeContext.md`；若昨夜 Git 提交或推送失败，开始工作时先提醒用户。不要直接读写记忆文件。
 2. 查看 `claude/tasks/active/`；开始非简单任务前创建任务卡并声明 Owner、范围和可能修改的文件。
-3. 阅读 `DOC/PROJECT_ARCHITECTURE_RULES.md`；仅在任务需要时再读对应 Skill 或 MCP 手册。
-4. 涉及 UE 资产时，先用 UE Editor MCP 检查真实蓝图、引用和配置，禁止只凭 C++ 猜测。
+3. 阅读 `DOC/AI_WORK_GUIDELINES/PROJECT_ARCHITECTURE_RULES.md`；仅在任务需要时再读对应 Skill 或 MCP 手册。
+4. 被要求查看审计意见时，只读 `claude/reviews/` 里未加 `Done-` 前缀的最近一份报告；自主判断哪些建议值得采纳，不必全部落实。处理完后由写代码的 AI 把该报告改名加 `Done-` 前缀并在开头标注已完成。不主动通读历史审计。
+5. 涉及 UE 资产时，先用 UE Editor MCP 检查真实蓝图、引用和配置，禁止只凭 C++ 猜测。
 
 ## 工作与交接
 
@@ -23,21 +24,31 @@
 
 ## 硬规则
 
-- 功能实现遵循"讨论方案 → 确定方案 → 对话中展示拟实现代码 → 用户明确允许后落盘 → 联合验证与用户验收"；未经验收不得标记完成，细则见 `DOC/AI_WORKFLOW.md`。
-- **Git 推送唯一目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`；禁止推送到 GitHub 或任何外部平台。执行 push 前必须核查 remote，详见 `DOC/GIT_INTERNAL.md`。**
+- 功能实现遵循"讨论方案 → 确定方案 → 对话中展示拟实现代码 → 用户明确允许后落盘 → 联合验证与用户验收"；未经验收不得标记完成，细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`。
+- **Git 推送唯一目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`；禁止推送到 GitHub 或任何外部平台。执行 push 前必须核查 remote，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。**
 - 默认关闭 Tick；优先事件、Delegate、Timer、AnimNotify、碰撞、感知和行为树。
 - 不依赖组件名、Actor 名、Widget 函数名或关卡名格式实现逻辑。
 - 不修改无关文件或第三方素材包；不把 Editor-only 依赖加入 Runtime 模块。
 - `claude/` 是 AI 沙盒；可清理 AI 自己创建的临时文件。删除用户文件或非本任务创建的文件前必须征得许可。
 - 完成必须包含适当的 C++ 构建、蓝图编译/保存、实际运行与边界验证；仅生成代码不算完成。
-- 夜间无人值守任务必须遵循 `DOC/AI_WORKFLOW.md` 的夜间红线，禁止修改或删除项目代码、资产、配置和规范。
+- 夜间无人值守任务必须遵循 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md` 的夜间红线，禁止修改或删除项目代码、资产、配置和规范。
+- 新文档必须放入 `DOC/` 下用途明确的分类目录；没有合适目录时创建新目录，并同步更新 `DOC/README.md`。禁止把业务文档直接堆在 `DOC/` 根目录。
+- 用户确认后的当日实施方案写入 `DOC/DailyPlan/`；讨论稿和中间方案留在 `claude/`；夜间再将实际完成、验证和遗留写入 `DOC/DailyReport/`。细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`。
+- 新增 C++ 前必须按稳定职责设计 `Source/Demo/Public` 与 `Private` 的镜像子目录，并在方案中列出每个新增/修改文件的完整路径；细则见 `DOC/AI_WORK_GUIDELINES/PROJECT_ARCHITECTURE_RULES.md`。
 
 ## 按需导航
 
-- 架构边界：`DOC/PROJECT_ARCHITECTURE_RULES.md`
-- AI 记忆、并行与交接：`DOC/AI_WORKFLOW.md`
-- MCP/工具索引：`DOC/AI_Coding_Guide.md`
-- **Git 仓库与推送规范：`DOC/GIT_INTERNAL.md`（所有 git push 必须先查阅）**
+- 文档目录：`DOC/README.md`
+- AI 规范目录：`DOC/AI_WORK_GUIDELINES/README.md`
+- 架构边界：`DOC/AI_WORK_GUIDELINES/PROJECT_ARCHITECTURE_RULES.md`
+- AI 记忆、并行与交接：`DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`
+- MCP/工具索引：`DOC/AI_WORK_GUIDELINES/AI_Coding_Guide.md`
+- **Git 仓库与推送规范：`DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`（所有 git push 必须先查阅）**
+- 待整理规则：`DOC/AI_WORK_GUIDELINES/RULES_INBOX.md`
+- AI 代码审计结论（实现前必查）：`claude/reviews/`（索引见 `claude/reviews/README.md`）
+- 当前正式策划：`DOC/Design/GAME_DESIGN.md`
+- 当前开发排期：`DOC/Design/DEVELOPMENT_SCHEDULE.md`
+- 历史创意与评审：`DOC/Ideas/`
 - MCP 搜索换词：`MCP-SEARCH-GUIDE.md`
 - MCP 能力边界：`MCP/capability-notes/README.md`
 - C++/蓝图/材质/Python 工作流：`.github/skills/`

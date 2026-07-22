@@ -5,7 +5,7 @@
 - SSH 地址：`git@git.woa.com:shiqiqiwang/Demo.git`
 - 仓库主页：https://git.woa.com/shiqiqiwang/Demo
 - 主分支：main
-- 详细操作规范：`DOC/GIT_INTERNAL.md`
+- 详细操作规范：`DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`
 
 ## 引擎与模块
 - Unreal Engine 5.7.4

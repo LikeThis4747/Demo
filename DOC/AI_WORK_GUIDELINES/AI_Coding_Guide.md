@@ -6,7 +6,7 @@
 
 | 服务 | 用途 | 入口 |
 |---|---|---|
-| `project-memory-mcp` | 长短期记忆、搜索、容量检查和安全写入 | `MCP/memory/README.md` |
+| `demo-project-memory-mcp` | Demo 项目的长短期记忆、搜索、容量检查和安全写入 | `MCP/memory/README.md` |
 | `ue-editor-mcp` | UE 资产、蓝图、Widget、材质和编辑器操作 | `Plugins/UEEditorMCP/README.md` |
 | `ue-editor-mcp-logs` | 日志、缩略图和资产差异 | `Plugins/UEEditorMCP/README.md` |
 
@@ -16,7 +16,7 @@ UE Editor MCP 使用 `search → schema → run`。连接前提：Demo Editor �
 
 | 问题 | 阅读 |
 |---|---|
-| Git 仓库地址、推送规范、AI 操作须知 | `DOC/GIT_INTERNAL.md` |
+| Git 仓库地址、推送规范、AI 操作须知 | `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md` |
 | 项目职责、C++/蓝图边界、性能基线 | `PROJECT_ARCHITECTURE_RULES.md` |
 | 记忆、任务卡、并行 AI、交接、每日记录 | `AI_WORKFLOW.md` |
 | 找不到 UE MCP 动作 | `../MCP-SEARCH-GUIDE.md` |

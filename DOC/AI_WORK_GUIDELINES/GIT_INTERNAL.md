@@ -49,4 +49,4 @@ git push -u origin main
 
 ## 夜间自动任务
 
-夜间 Git 快照（commit + push）遵循 `DOC/AI_WORKFLOW.md` 夜间红线，推送目标同样为工蜂仓库。
+夜间 Git 快照（commit + push）遵循 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md` 夜间红线，推送目标同样为工蜂仓库。

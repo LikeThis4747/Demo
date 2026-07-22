@@ -1,6 +1,6 @@
 {
   "servers": {
-    "project-memory-mcp": {
+    "demo-project-memory-mcp": {
       "args": [
         "-m",
         "servers.memory_server",
