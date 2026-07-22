@@ -11,14 +11,24 @@ Saved/
 **/__pycache__/
 *.pyc
 
-# AI workspace: task cards and handoffs are intentionally versioned.
-# Only disposable scratch/output is ignored.
+# AI workspace: task cards, handoffs and Markdown research are intentionally versioned.
+# Only disposable scratch, binary output and local analysis tools are ignored.
 claude/scratch/*
 !claude/scratch/.gitkeep
-claude/artifacts/*
+claude/tmp/
+claude/artifacts/**
+!claude/artifacts/**/
+!claude/artifacts/**/*.md
 !claude/artifacts/.gitkeep
-!claude/artifacts/nightly/
-!claude/artifacts/nightly/*.md
+!claude/artifacts/**/.gitkeep
+
+# Unused UE template content copied with the Third Person feature pack.
+# Keep these rules exact: never ignore __ExternalActors__ or __ExternalObjects__ globally,
+# because authored World Partition levels need those packages for source-control rollback.
+Content/Assets/ThirdPerson/
+Content/LevelPrototyping/
+Content/__ExternalActors__/Assets/ThirdPerson/
+Content/__ExternalObjects__/Assets/ThirdPerson/
 
 # Local AI audit/runtime files
 .ai-memory/events.jsonl
