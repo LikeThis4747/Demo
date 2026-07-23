@@ -1,0 +1,24 @@
+[mcp_servers.project-memory-mcp]
+enabled = true
+command = "D:/UE5projects/Demo/MCP/memory/.venv/Scripts/python.exe"
+args = ["-m", "servers.memory_server", "--root", "D:/UE5projects/Demo"]
+
+[mcp_servers.project-memory-mcp.env]
+PYTHONPATH = "D:/UE5projects/Demo/MCP/memory"
+PYTHONUTF8 = "1"
+
+[mcp_servers.ue-editor-mcp-logs]
+enabled = true
+command = "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python/.venv/Scripts/python.exe"
+args = ["-m", "ue_editor_mcp.server_unreal_logs"]
+
+[mcp_servers.ue-editor-mcp-logs.env]
+PYTHONPATH = "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"
+
+[mcp_servers.ue-editor-mcp]
+enabled = true
+command = "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python/.venv/Scripts/python.exe"
+args = ["-m", "ue_editor_mcp.server_unified"]
+
+[mcp_servers.ue-editor-mcp.env]
+PYTHONPATH = "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"

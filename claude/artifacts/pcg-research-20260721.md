@@ -1,7 +1,7 @@
 # PCG 调研：迷宫房间 + 资源 + 陷阱生成（Demo 项目）
 
 > 辅AI 调研产物，2026-07-21。仅供理解与选型，**未改动任何代码/资产**。
-> 对应任务卡：`claude/tasks/active/TASK-20260721-001-PCG-maze-research.md`
+> 对应任务卡：`claude/tasks/archive/TASK-20260721-001-PCG-maze-research.md`
 
 ---
 
