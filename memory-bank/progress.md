@@ -2,23 +2,19 @@
 
 ## M0 项目基础设施
 
-- [x] 创建 UE 5.7.4 C++ 项目
-- [x] 注入并验证项目 MCP 服务
-- [x] 建立轻量渲染基线
-- [x] 建立 C++ 优先架构和多 AI 工作流
-- [x] 初始化本地 Git/Git LFS 与内部工蜂备份流程
-- [x] 创建夜间只读整理、Git 备份与次日失败提醒
+- [x] UE 5.7.4 C++ 项目、项目 MCP、轻量渲染基线与 C++ 优先工作流
+- [x] 本地 Git/Git LFS、内部工蜂备份与夜间只读维护流程
 
-## M1 题目公布与立项
+## M1 实时 PCG 场景
 
-- [x] 记录题目、实时非工具 PCG 约束和验收边界
-- [x] 定义核心玩法方向、可替换 Flow 与当前非目标
-- [x] 规划三周里程碑和首个 PCG 可运行版本
-- [x] 形成 SFCorridors + Special Socket + A* + 有限 WFC 的 V2.1 方案
-- [x] 吸收独立评审并完成 WFC/Runtime 方案级静态复核
-- [ ] 用户确认并明确授权 PCG 源码/资产实施
-- [ ] 完成 UHT、Build、Automation、Blueprint、PIE 和用户走通验收
+- [x] 冻结 Progression/Spatial Graph → Special Socket → 确定性 A* → 有限 WFC → Closure → 实际图验证 → Runtime HISM 的 V2.1 方案
+- [x] 实现 PCG 纯 C++、项目 DataAsset 契约、Generator Blueprint 装配与详细设计注释
+- [x] 完成 SFC 示例间距测量；逻辑 Cell/Portal 步长为 660 cm，第三方素材通过 Catalog/Presentation 隔离并保持只读
+- [x] DemoEditor Win64 Development 构建成功；Demo.PCG 13/13 成功，含序列化 DataAsset/Generator BP 全链烟测
+- [ ] 在独立 `L_PCG_RuntimeTest` 装配 Generator、Staging、PlayerStart 与灯光并完成 PIE-A
+- [ ] 完成固定 Seed 批量、碰撞/净空/接缝/性能与用户实际走通验收
+- [ ] PIE-A 通过后接入追猎者，再实现生成地图内单局玩法闭环
 
-## 当前状态
+## 当前边界
 
-PCG V2.1 方案与拟实现代码已完成评审收敛，评审报告已标记 Done。当前停在用户确认门禁；没有创建 PCG Source、DataAsset、Blueprint 或关卡，也没有功能级验证结果。
+`L_PCG_RuntimeTest` 包已存在但仍为空。NullRHI 编辑器 Actor Spawn 会触发 UE 视口整数除零，下一步必须在用户正常打开 UE 后装配关卡并执行 PIE。自动化与资产烟测不能替代 HISM 世界实例化、碰撞、导航、性能和用户走通验收；2026-07-24 夜间 UE MCP `ping=false`，蓝图审计未执行。

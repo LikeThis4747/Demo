@@ -59,3 +59,32 @@
 - PCG V2.1 评审收敛：读取最新未 Done 的 PCG 评审并逐项吸收。WFC 改为删除事件 + 四向 Support Count，冻结 256 Active Cell、64 Variant、16 MiB 实时快照和 64 MiB 单 Attempt 累计复制；首版移除 OrderedObjectives 暴露，并补真实选择诊断、多层回溯与失败分类。
 - 拟代码加固：Transform 三个 helper + Test 0、A* int64 G/F 与转向成本、完整 Snapshot 跨文件定义、Public/Internal Clear、Guard 重入规则、对象创建即登记 rollback、实例化结构化失败，以及同步/线程/分批实例化三类性能门槛。
 - 验证与边界：WFC 与 Runtime 各完成两轮只读静态复核，未发现剩余阻塞；评审已重命名为 Done。仍未创建或修改 PCG Source、DataAsset、Blueprint、关卡、Config、插件或第三方资产，无 UHT/Build/Automation/PIE 结论；下一步等待用户确认 V2.1 和明确实施授权。
+
+<!-- written by shiqiqiwang at 2026-07-23 13:33 UTC -->
+
+<!-- written by Codex at 2026-07-23 21:35 UTC+8 -->
+- PCG C++ 实施：落盘 Public/PCG 与 Private/PCG 的 10 个首版文件，覆盖 DataAsset 契约、抽象 Progression、CollectAll/K-of-N、Special Socket、整数 A*、Support-count WFC、Closure/Finalize、实际 Placement 图验证和 Runtime HISM 事务式实例化。
+- 评审修复：补目标叶房随机失败的有界最小折返回退、Strong↔Strong 直连、Anchor Footprint 净空、foreign weak anchor 防误共享、Edge→Socket/A* 硬预算 DFS/完整回滚，以及游戏线程/游戏世界/Construction Script 防护；首版 Actor Policy fail-closed。移除未被算法消费的 WfcBandRadiusCells，避免假配置。
+- 验证：最终 DemoEditor Win64 Development 通过 UHT、编译和链接；Demo.PCG 实际发现 12 项并 12/12 成功，含 64 Seed Objective 回退、T 形 Strong Socket 分支、预算失败原子性与重复 Hash。git diff --check 无错误，仅有既有 LF/CRLF 提示。
+- 遗留：未创建或修改 SFCorridors 第三方资产、项目 DataAsset、Blueprint 或测试关卡，尚未执行 PIE。下一步必须由用户重新打开 UE，再完成最小 Portal/接缝/净空测量、/Game/ZeroEscape/Generation 资产装配与 PIE-A。
+
+<!-- written by shiqiqiwang at 2026-07-23 14:13 UTC -->
+
+<!-- written by Codex at 2026-07-23 22:15 UTC+8 -->
+- PCG 素材适配：只读测量 SFC 两张示例地图，Room_Pass 间距约 658～662 cm，冻结 660 cm 逻辑 Cell/Portal 步长；24～66 cm 外壳外探进入有 100 cm 硬上限的 Presentation Overhang，不改变逻辑占格，第三方 SFCorridors 未修改。
+- 项目资产：创建并保存 Generation Profile、Module Catalog、SFC Presentation、Generator Blueprint 与独立 L_PCG_RuntimeTest Map 包；BP CDO 装配 Seed 12345 / Normal / EscapeOnly / BeginPlay。测试 Map 当前为空。
+- 代码质量：PCG 10 个 C++ 文件补齐详细中文设计注释，覆盖确定性、不变量、Stable Id/Dense Index、K-of-N、Socket/A*/WFC、预算、回滚、HISM 生命周期和素材替换边界。
+- 验证：DemoEditor Win64 Development 成功；Demo.PCG 13/13。新增集成烟测从磁盘读回三份 DataAsset 与 Generator BP GeneratedClass/CDO，核对六个模块、六个 SFC Mesh、Pivot/Overhang 和默认请求，并以全新快照执行两次完整生成，Abstract/Layout Hash 一致。
+- 遗留与边界：-NullRHI 编辑器进程在首次 Spawn 关卡 Actor 时于 FSceneViewport::EnqueueBeginRenderFrame 命中整数除零；已停止重试且未删除资产。下一步用户正常打开 UE 后，在 L_PCG_RuntimeTest 装配 Generator、Staging、PlayerStart 和灯光并执行 PIE-A。当前不能声称接缝、碰撞、净空、导航、性能或实际走通已验收。
+
+<!-- written by shiqiqiwang at 2026-07-23 17:03 UTC -->
+
+
+<!-- written by Codex nightly automation at 2026-07-24 UTC+8 -->
+
+## 2026-07-24 夜间审计
+
+- 今日完成：实施前快照 `4a38b9f9d8507d96603e8dab08f3b200c0daed68` 已推送；PCG 10 个 C++ 文件、三份项目 DataAsset、Generator Blueprint 与空测试 Map 已落盘。既有记录显示 DemoEditor Win64 Development 构建成功、Demo.PCG 13/13 成功，含序列化资产全链烟测；夜间未重复构建或运行会写入工程的测试。
+- 审计：Git 起始与 origin/main 0/0；origin 精确为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`。UE MCP `ping=false`，因此蓝图审计未执行；未猜测 Blueprint、关卡、资产引用或配置状态。
+- 遗留：`L_PCG_RuntimeTest` 仍为空，尚未完成 HISM 世界实例化、视觉接缝、碰撞、净空、导航、性能、固定 Seed 批量或用户实际走通；同步主线程性能需在 packaged Development 采样后判断。
+- 明日建议：用户正常打开 UE 与 `L_PCG_RuntimeTest`，只装配 Generator、Staging、PlayerStart 和基础灯光并执行 PIE-A；通过后再做固定 Seed/碰撞/净空检查，之后才接追猎者与地图内玩法闭环。
