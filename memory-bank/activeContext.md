@@ -1,19 +1,17 @@
 # Active Context — Demo
 
-> 当前主任务的完整状态、阻塞与下一步以 `.ai-context/current-task.md` 为唯一详情源；本文件只维护迭代目标、活跃任务索引与近期决定指针，不重复展开任务细节。
+> 当前任务详情以 `.ai-context/current-task.md` 为唯一来源；此处只保留迭代焦点与任务索引。
 
-## 当前迭代目标
+## 当前迭代焦点
 
-实时、非工具性 PCG 整关生成为第一优先。混合算法、项目资产、测试关卡、结果日志与 Harness 已进入真实 PIE 门禁；材质采用用户授权的三个 SFC 根材质直接启用 HISM Usage，不保留项目映射层。清理后构建与 `Demo.PCG` 13/13 已通过，当前门禁是全新正常渲染进程的首次 PIE 和玩家 Start→Exit 走通。
+PCG V3.2 已通过 UE 5.8 构建、`Demo.PCG` 13/13、288/288 Seed Sweep 与 NewWindow PIE 运行时生成。当前门禁是取得 HydroLab 根材质 HISM Usage 修改许可，并完成正常材质、接缝、碰撞、净空与玩家 Start→Exit 验收；验收前不切到追猎者实现。
 
-## 活跃任务索引
+## 活跃任务
 
-- `TASK-20260723-002`：关键路径，PCG 可玩 PIE 推进。
-- `TASK-20260723-004`：运行时 WFC 素材预览筛选，不抢占 PCG PIE。
-- （`TASK-20260723-003` Demo MCP 诊断已完成并归档。）
+- `TASK-20260723-002`：唯一关键路径，PCG 表现与玩家验收。
+- `TASK-20260723-004`：旧素材预览筛选，可暂停/归档，不抢占关键路径。
+- 两个同号 `TASK-20260724-001`（静态网格体检、追猎者）存在 ID 冲突；夜间仅报告，白天确认归档或重编号。
 
-## 近期决定指针
+## 最新审计边界
 
-- 稳定决策见 `memory-bank/decisions.md`（重点 ADR-006 运行时 PCG 与难度不变量、ADR-007 关卡统一归 `/Game/Levels`）。
-- 里程碑与功能完成状态见 `memory-bank/progress.md`。
-- 当前主任务详情、验证边界与下一步见 `.ai-context/current-task.md`。
+2026-07-25 UE Editor MCP `pong=false`，官方 MCP 工具未暴露，蓝图审计未执行。工作树含来源待确认的未跟踪项，夜间不清理。

@@ -1,6 +1,6 @@
 # SciFiHydroLab PCG 结构素材尺寸与 Trim 表
 
-> 状态：第一轮自动测量完成，结构候选已收敛；Trim 的最终相对偏移仍需在 Level0 组装一套代表组合后确认。
+> 状态：结构测量、Level0 代表组合与 V3.2 Runtime Presentation 绑定均已完成；自动化和 NewWindow PIE 已证明可实例化生成，第三方根材质的 HISM Usage 与玩家视觉/通行验收仍待关闭。
 
 ## 1. 测量口径
 
@@ -97,7 +97,7 @@ Trim 不进入 WFC Tile 状态，也不改变逻辑连通性。首版只建立�
 | 组合字段 | 第一候选 | 规则 |
 |---|---|---|
 | Floor | `LargeFloorB`，或两块 `FloorA–L` | 二选一；逻辑占地始终为 300×300 |
-| Wall | `WallB1` | 仅生成在逻辑闭边 |
+| Wall | `WallH` | 仅生成在逻辑闭边；当前 Runtime 基线使用该薄墙 |
 | Ceiling | `CeilingC` | 每个可行走单元一块；可配置关闭 |
 | Floor edge trim | 首版关闭 | `TrimB + TrimD` 已确认可组成外接平台边条，但不再假定它适合普通走廊墙脚 |
 | Wall trim | `WallTrimG` 或 `WallTrimI` | 作为可选装饰，不影响碰撞和通行 |
@@ -145,11 +145,12 @@ Trim 不进入 WFC Tile 状态，也不改变逻辑连通性。首版只建立�
 
 ### 7.2 房间代表组合
 
-- 小房间首个代表尺寸为 `3×3` 格，即 `900×900 cm`。
-- 房间从 L 形走廊末端接入，当前入口宽两个格，即 `600 cm`；未来可作为配置收窄到一个格。
-- 房间中央放一个 `PillarC`，用于检查玩家绕柱、敌人周旋和视线遮挡空间。
+- V3.2 的 Objective 小房间首个代表尺寸为 `2×2` 个 600 cm 逻辑 Tile，即 `1200×1200 cm`；每个逻辑 Tile 再展开为 `2×2` 个 300 cm 表现单元。
+- 房间默认使用两个朝向主干的入口，构成短距离穿行回路；第三个前向入口只是可选变化，不参与基础可解性保证。
+- Objective Anchor 放在靠主干的入口行，保证完成单个目标相对主干直达路线的额外代价不超过两个 600 cm 逻辑格。
+- `PillarC` 只在结构边界顶点生成，用于覆盖墙与 Trim 端头；未来可另行增加不影响通路净空的房间内装饰柱。
 - 房间与走廊复用同一套 Floor/Wall/Ceiling/Pillar 摆放公式，不新增“房间专用拼接算法”。
-- 当前组合仍需用户完成视觉与 PIE 通行验收；通过后才写入新的 PCG 方案和 Presentation 数据。
+- 当前组合已经写入项目自有 Presentation DataAsset；仍需用户完成正常材质下的视觉、碰撞和 PIE 通行验收。
 
 ## 8. Demonstration 中提取的高频组合候选
 
@@ -193,8 +194,29 @@ Trim 不进入 WFC Tile 状态，也不改变逻辑连通性。首版只建立�
 |---|---|
 | 区域风格 | 全图暂时 1 套 |
 | 地板 | `LargeFloorB` 为主；局部可用两块 `FloorA/B/F/L` |
-| 墙 | `WallB1` 为主，验证后少量 `WallH` |
+| 墙 | `WallH` 为主；后续只在验证相同占地/局部修正后加入同规格变体 |
 | 天花板 | `CeilingC` 为主，少量 `CeilingB` |
 | Trim | 每段走廊固定一套，不逐格切换；可整体开启或关闭 |
 
 未来如果实现数据资产，可将每套风格收敛成一个 `Style Palette`：包含兼容的 Floor、Wall、Ceiling 与 Trim 组合及权重。该设想只定义扩展方向，当前不新增类或配置层。
+
+## 10. V3.2 Runtime 绑定与验证记录
+
+项目自有 `/Game/ZeroEscape/Generation/Presentation/DA_Presentation_SciFiHydroLab` 当前直接绑定以下结构件；固定局部修正只消化供应商 Mesh 的 Pivot，不参与 WFC 邻接：
+
+| 角色 | Mesh | 固定局部平移（cm） | 碰撞 |
+|---|---|---:|---|
+| Floor | `SM_HydroLab_LargeFloorB` | `(150,-150,0)` | `BlockAll` |
+| Ceiling | `SM_HydroLab_CeilingC` | `(-150,-150,0)` | `BlockAll` |
+| Wall | `SM_HydroLab_WallH` | `(0,-150,0)` | `BlockAll` |
+| WallTopTrim | `SM_HydroLab_WallTrimG` | `(18.75,-150,-26.7222)` | `NoCollision` |
+| Pillar | `SM_HydroLab_PillarC` | `(0,0,0)` | `BlockAll` |
+
+截至 2026-07-25 的验证结果：
+
+- UE 5.8 `DemoEditor Win64 Development` 完整构建成功。
+- `Demo.PCG` 新测试集 13/13 通过；其中 3 个难度 × 3 个 Flow × 32 个 Seed 共 288 组均满足连通、K-of-N、路线长度和确定性约束。
+- 真实 HydroLab 资产集成烟测通过；补齐 Pivot 旋转断言后的最终 13/13 报告位于 `Saved/Automation/PCG-V32-FinalAudit-20260725-0050`。
+- `/Game/Levels/L_PCG_RuntimeTest` 的 NewWindow PIE 成功生成 444 个实例、5 个 HISM 组；Seed 12345、Normal、EscapeOnly 的 `ZE_PCG_RESULT` 为 Success，Harness 成功将玩家传送到生成区。
+- PIE 同时发现四个 HydroLab 材质实例缺少 `InstancedStaticMeshes` Usage；它们共同继承 `/Game/SciFiHydroLab/Materials/Parents/M_HydroLab`。在取得修改第三方素材的许可前，不建立材质副本、映射或运行时绕过。
+- 上述证据不替代最终玩家验收；正常材质显示、接缝、碰撞、净空和 Start→Exit 实际走通仍需在修复 Usage 后确认。
