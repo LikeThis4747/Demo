@@ -24,7 +24,10 @@ PROFILE_PATH = "/Game/ZeroEscape/Generation/Data/DA_LevelGenerationProfile"
 CATALOG_PATH = "/Game/ZeroEscape/Generation/Data/DA_LevelModuleCatalog"
 PRESENTATION_PATH = "/Game/ZeroEscape/Generation/Presentation/DA_Presentation_SFCorridors"
 GENERATOR_BP_PATH = "/Game/ZeroEscape/Generation/BP_ZeroEscapeRuntimeLevelGenerator"
-MAP_PATH = "/Game/ZeroEscape/Generation/Maps/L_PCG_RuntimeTest"
+# Maps are project entry points, not implementation details of the PCG feature.
+# Keep them beside Level0 in /Game/Levels; only reusable generation assets live
+# below /Game/ZeroEscape/Generation.
+MAP_PATH = "/Game/Levels/L_PCG_RuntimeTest"
 MANIFEST_NAME = "RuntimeSmokeAssets.json"
 
 # The SFC example map places Room_Pass instances approximately 658-662 cm apart.

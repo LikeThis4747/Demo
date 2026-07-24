@@ -88,6 +88,30 @@ protected:
 
 
 /**
+ * FSetStaticMeshComponentAction
+ *
+ * Sets one Static Mesh on one or more Actor instances in the current editor level.
+ * Each target Actor must own exactly one UStaticMeshComponent; ambiguous Actors are
+ * rejected instead of silently choosing a component. The action modifies the level
+ * instance only and never edits the source Static Mesh or a Blueprint template.
+ */
+class UEEDITORMCP_API FSetStaticMeshComponentAction : public FEditorAction
+{
+public:
+	/** Validate all targets, then assign and verify the requested Static Mesh. */
+	virtual TSharedPtr<FJsonObject> ExecuteInternal(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context) override;
+
+protected:
+	/** Validate the actor_names array and static_mesh asset path parameters. */
+	virtual bool Validate(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context, FString& OutError) override;
+	virtual FString GetActionName() const override { return TEXT("set_static_mesh_component"); }
+
+	/** Leave the edited level dirty so this action never auto-saves unrelated packages. */
+	virtual bool RequiresSave() const override { return false; }
+};
+
+
+/**
  * FGetActorPropertiesAction
  * Gets all properties of an actor.
  * Params: name (string), detailed (bool, default false), editable_only (bool, default false), category (string)
@@ -205,6 +229,32 @@ public:
 protected:
 	virtual bool Validate(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context, FString& OutError) override;
 	virtual FString GetActionName() const override { return TEXT("list_assets"); }
+	virtual bool RequiresSave() const override { return false; }
+};
+
+
+/**
+ * FInspectStaticMeshesAction
+ *
+ * Read-only inspection of every static mesh below a Content path. The action
+ * reports local bounds, dimensions, and the local origin (mesh pivot) relative
+ * to those bounds so modular asset kits can be screened without placing every
+ * mesh manually in a level.
+ *
+ * This action deliberately does not modify assets or decide whether a mesh is
+ * visually compatible. Seam quality, collision, and player clearance remain
+ * representative in-editor validation steps after meshes are grouped.
+ */
+class UEEDITORMCP_API FInspectStaticMeshesAction : public FEditorAction
+{
+public:
+	/** Executes the read-only folder scan and returns one geometry record per loaded static mesh. */
+	virtual TSharedPtr<FJsonObject> ExecuteInternal(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context) override;
+
+protected:
+	/** Rejects missing paths and invalid numeric limits before any mesh is loaded. */
+	virtual bool Validate(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context, FString& OutError) override;
+	virtual FString GetActionName() const override { return TEXT("inspect_static_meshes"); }
 	virtual bool RequiresSave() const override { return false; }
 };
 

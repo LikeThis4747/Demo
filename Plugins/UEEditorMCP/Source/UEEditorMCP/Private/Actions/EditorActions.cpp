@@ -7,7 +7,9 @@
 #include "LevelEditorViewport.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
+#include "Components/StaticMeshComponent.h"
 #include "Engine/DirectionalLight.h"
 #include "Engine/PointLight.h"
 #include "Engine/SpotLight.h"
@@ -48,6 +50,7 @@
 #include "Settings/LevelEditorPlaySettings.h"
 #include "EngineUtils.h"
 #include "Selection.h"
+#include "ScopedTransaction.h"
 
 
 // Helper to find actor by name
@@ -326,6 +329,173 @@ TSharedPtr<FJsonObject> FSetActorTransformAction::ExecuteInternal(const TSharedP
 	UE_LOG(LogMCP, Log, TEXT("UEEditorMCP: Set transform on actor '%s'"), *ActorName);
 
 	return CreateSuccessResponse(FMCPCommonUtils::ActorToJsonObject(Actor));
+}
+
+
+// ============================================================================
+// FSetStaticMeshComponentAction
+// ============================================================================
+
+bool FSetStaticMeshComponentAction::Validate(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context, FString& OutError)
+{
+	const TArray<TSharedPtr<FJsonValue>>* ActorNameValues = nullptr;
+	if (!Params->TryGetArrayField(TEXT("actor_names"), ActorNameValues) ||
+		!ActorNameValues || ActorNameValues->IsEmpty())
+	{
+		OutError = TEXT("'actor_names' must be a non-empty string array");
+		return false;
+	}
+
+	// Duplicate names would modify the same Actor more than once and make the
+	// reported batch result misleading, so reject them before any level change.
+	TSet<FString> UniqueActorNames;
+	for (const TSharedPtr<FJsonValue>& Value : *ActorNameValues)
+	{
+		FString ActorName;
+		if (!Value.IsValid() || !Value->TryGetString(ActorName) || ActorName.IsEmpty())
+		{
+			OutError = TEXT("Every element in 'actor_names' must be a non-empty string");
+			return false;
+		}
+
+		if (UniqueActorNames.Contains(ActorName))
+		{
+			OutError = FString::Printf(TEXT("Duplicate actor name: %s"), *ActorName);
+			return false;
+		}
+
+		UniqueActorNames.Add(ActorName);
+	}
+
+	FString StaticMeshPath;
+	return GetRequiredString(Params, TEXT("static_mesh"), StaticMeshPath, OutError);
+}
+
+TSharedPtr<FJsonObject> FSetStaticMeshComponentAction::ExecuteInternal(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context)
+{
+	UWorld* World = GEditor ? GEditor->GetEditorWorldContext().World() : nullptr;
+	if (!World)
+	{
+		return CreateErrorResponse(TEXT("No editor world available"), TEXT("no_world"));
+	}
+
+	FString StaticMeshPath;
+	FString Error;
+	GetRequiredString(Params, TEXT("static_mesh"), StaticMeshPath, Error);
+
+	// Load through the editor asset API so both package paths and complete object
+	// paths work. Cast validation prevents assigning a non-Static-Mesh asset.
+	UStaticMesh* NewStaticMesh = Cast<UStaticMesh>(UEditorAssetLibrary::LoadAsset(StaticMeshPath));
+	if (!NewStaticMesh)
+	{
+		return CreateErrorResponse(
+			FString::Printf(TEXT("Static Mesh could not be loaded: %s"), *StaticMeshPath),
+			TEXT("static_mesh_not_found"));
+	}
+
+	struct FResolvedStaticMeshTarget
+	{
+		AActor* Actor = nullptr;
+		UStaticMeshComponent* Component = nullptr;
+		UStaticMesh* PreviousStaticMesh = nullptr;
+	};
+
+	TArray<FResolvedStaticMeshTarget> ResolvedTargets;
+	const TArray<TSharedPtr<FJsonValue>>* ActorNameValues = nullptr;
+	Params->TryGetArrayField(TEXT("actor_names"), ActorNameValues);
+	ResolvedTargets.Reserve(ActorNameValues->Num());
+
+	// Resolve the complete batch before starting the transaction. This prevents a
+	// missing or ambiguous Actor near the end of the request from causing a partial
+	// assignment to earlier Actors.
+	for (const TSharedPtr<FJsonValue>& ActorNameValue : *ActorNameValues)
+	{
+		FString ActorName;
+		ActorNameValue->TryGetString(ActorName);
+
+		AActor* Actor = FindActorByName(World, ActorName);
+		if (!Actor)
+		{
+			return CreateErrorResponse(
+				FString::Printf(TEXT("Actor not found in current level: %s"), *ActorName),
+				TEXT("actor_not_found"));
+		}
+
+		TArray<UStaticMeshComponent*> StaticMeshComponents;
+		Actor->GetComponents<UStaticMeshComponent>(StaticMeshComponents);
+
+		if (StaticMeshComponents.IsEmpty())
+		{
+			return CreateErrorResponse(
+				FString::Printf(TEXT("Actor '%s' has no StaticMeshComponent"), *ActorName),
+				TEXT("static_mesh_component_not_found"));
+		}
+
+		if (StaticMeshComponents.Num() > 1)
+		{
+			return CreateErrorResponse(
+				FString::Printf(
+					TEXT("Actor '%s' has %d StaticMeshComponents; refusing to choose one implicitly"),
+					*ActorName,
+					StaticMeshComponents.Num()),
+				TEXT("ambiguous_static_mesh_component"));
+		}
+
+		FResolvedStaticMeshTarget& Target = ResolvedTargets.AddDefaulted_GetRef();
+		Target.Actor = Actor;
+		Target.Component = StaticMeshComponents[0];
+		Target.PreviousStaticMesh = Target.Component->GetStaticMesh();
+	}
+
+	const FScopedTransaction Transaction(NSLOCTEXT(
+		"UEEditorMCP",
+		"SetStaticMeshComponent",
+		"MCP Set Static Mesh Component"));
+
+	TArray<TSharedPtr<FJsonValue>> ChangedActorResults;
+	ChangedActorResults.Reserve(ResolvedTargets.Num());
+
+	for (const FResolvedStaticMeshTarget& Target : ResolvedTargets)
+	{
+		// Register both objects with the editor transaction before mutation so the
+		// entire batch can be reverted through the normal Undo command.
+		Target.Actor->Modify();
+		Target.Component->Modify();
+
+		// Use the component API rather than writing the reflected StaticMesh pointer;
+		// SetStaticMesh performs the required render and collision state updates.
+		Target.Component->SetStaticMesh(NewStaticMesh);
+
+		if (Target.Component->GetStaticMesh() != NewStaticMesh)
+		{
+			return CreateErrorResponse(
+				FString::Printf(TEXT("Static Mesh verification failed for actor: %s"), *Target.Actor->GetName()),
+				TEXT("static_mesh_verification_failed"));
+		}
+
+		Target.Component->MarkRenderStateDirty();
+		Target.Actor->MarkPackageDirty();
+
+		TSharedPtr<FJsonObject> ChangedActor = MakeShared<FJsonObject>();
+		ChangedActor->SetStringField(TEXT("actor"), Target.Actor->GetName());
+		ChangedActor->SetStringField(TEXT("component"), Target.Component->GetName());
+		ChangedActor->SetStringField(
+			TEXT("previous_static_mesh"),
+			Target.PreviousStaticMesh ? Target.PreviousStaticMesh->GetPathName() : TEXT("None"));
+		ChangedActor->SetStringField(TEXT("static_mesh"), NewStaticMesh->GetPathName());
+		ChangedActorResults.Add(MakeShared<FJsonValueObject>(ChangedActor));
+	}
+
+	// Mark only the current World package dirty. RequiresSave() is false, so the
+	// MCP base class will not save unrelated dirty assets as a side effect.
+	Context.MarkPackageDirty(World->GetOutermost());
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetArrayField(TEXT("changed_actors"), ChangedActorResults);
+	Result->SetNumberField(TEXT("changed_actor_count"), ChangedActorResults.Num());
+	Result->SetStringField(TEXT("static_mesh"), NewStaticMesh->GetPathName());
+	Result->SetBoolField(TEXT("level_dirty"), true);
+	return CreateSuccessResponse(Result);
 }
 
 
@@ -1124,6 +1294,222 @@ TSharedPtr<FJsonObject> FListAssetsAction::ExecuteInternal(const TSharedPtr<FJso
 	Result->SetNumberField(TEXT("total_unfiltered"), AssetList.Num());
 	Result->SetStringField(TEXT("path"), Path);
 	Result->SetArrayField(TEXT("assets"), AssetsArray);
+
+	return CreateSuccessResponse(Result);
+}
+
+
+// ========================================================================
+// FInspectStaticMeshesAction
+// ========================================================================
+
+namespace
+{
+	/** Converts an Unreal vector to the stable [X, Y, Z] JSON representation used by editor actions. */
+	TArray<TSharedPtr<FJsonValue>> StaticMeshVectorToJsonArray(const FVector& Value)
+	{
+		return {
+			MakeShared<FJsonValueNumber>(Value.X),
+			MakeShared<FJsonValueNumber>(Value.Y),
+			MakeShared<FJsonValueNumber>(Value.Z)
+		};
+	}
+
+	/**
+	 * Classifies the local origin on one bounds axis.
+	 *
+	 * The mesh pivot is local coordinate zero. Reporting its relationship to
+	 * Min/Max is more useful than returning another zero vector: it reveals
+	 * whether the author placed the pivot at a boundary, at the center, inside
+	 * the geometry, or entirely outside the geometry.
+	 */
+	FString ClassifyStaticMeshPivotAxis(const double BoundsMin, const double BoundsMax, const double Tolerance)
+	{
+		if (FMath::Abs(BoundsMin) <= Tolerance)
+		{
+			return TEXT("min_boundary");
+		}
+
+		if (FMath::Abs(BoundsMax) <= Tolerance)
+		{
+			return TEXT("max_boundary");
+		}
+
+		if (FMath::Abs(BoundsMin + BoundsMax) <= Tolerance)
+		{
+			return TEXT("center");
+		}
+
+		if (BoundsMin < 0.0 && BoundsMax > 0.0)
+		{
+			return TEXT("interior");
+		}
+
+		return TEXT("outside");
+	}
+
+	/** Builds a concise overall pivot label while retaining per-axis details in the response. */
+	FString ClassifyStaticMeshPivot(const FString& XClass, const FString& YClass, const FString& ZClass)
+	{
+		const auto IsBoundary = [](const FString& AxisClass)
+		{
+			return AxisClass == TEXT("min_boundary") || AxisClass == TEXT("max_boundary");
+		};
+
+		const int32 BoundaryAxisCount =
+			static_cast<int32>(IsBoundary(XClass)) +
+			static_cast<int32>(IsBoundary(YClass)) +
+			static_cast<int32>(IsBoundary(ZClass));
+
+		if (BoundaryAxisCount == 3)
+		{
+			return TEXT("corner");
+		}
+
+		if (BoundaryAxisCount == 2)
+		{
+			return TEXT("edge");
+		}
+
+		if (BoundaryAxisCount == 1)
+		{
+			return TEXT("face");
+		}
+
+		if (XClass == TEXT("center") && YClass == TEXT("center") && ZClass == TEXT("center"))
+		{
+			return TEXT("center");
+		}
+
+		if (XClass != TEXT("outside") && YClass != TEXT("outside") && ZClass != TEXT("outside"))
+		{
+			return TEXT("interior");
+		}
+
+		return TEXT("custom");
+	}
+}
+
+bool FInspectStaticMeshesAction::Validate(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context, FString& OutError)
+{
+	FString Path;
+	if (!Params->TryGetStringField(TEXT("path"), Path) || Path.IsEmpty())
+	{
+		OutError = TEXT("Missing required 'path' parameter.");
+		return false;
+	}
+
+	double GridSize = 300.0;
+	Params->TryGetNumberField(TEXT("grid_size"), GridSize);
+	if (GridSize <= 0.0)
+	{
+		OutError = TEXT("'grid_size' must be greater than zero.");
+		return false;
+	}
+
+	double Tolerance = 0.1;
+	Params->TryGetNumberField(TEXT("tolerance"), Tolerance);
+	if (Tolerance < 0.0)
+	{
+		OutError = TEXT("'tolerance' cannot be negative.");
+		return false;
+	}
+
+	return true;
+}
+
+TSharedPtr<FJsonObject> FInspectStaticMeshesAction::ExecuteInternal(const TSharedPtr<FJsonObject>& Params, FMCPEditorContext& Context)
+{
+	const FString Path = Params->GetStringField(TEXT("path"));
+
+	bool bRecursive = true;
+	Params->TryGetBoolField(TEXT("recursive"), bRecursive);
+
+	double GridSize = 300.0;
+	Params->TryGetNumberField(TEXT("grid_size"), GridSize);
+
+	double Tolerance = 0.1;
+	Params->TryGetNumberField(TEXT("tolerance"), Tolerance);
+
+	double RequestedMaxResults = 500.0;
+	Params->TryGetNumberField(TEXT("max_results"), RequestedMaxResults);
+	const int32 MaxResults = FMath::Clamp(static_cast<int32>(RequestedMaxResults), 1, 2000);
+
+	IAssetRegistry& AssetRegistry =
+		FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get();
+
+	FARFilter Filter;
+	Filter.PackagePaths.Add(FName(*Path));
+	Filter.ClassPaths.Add(UStaticMesh::StaticClass()->GetClassPathName());
+	Filter.bRecursivePaths = bRecursive;
+	Filter.bRecursiveClasses = true;
+
+	TArray<FAssetData> AssetList;
+	AssetRegistry.GetAssets(Filter, AssetList);
+
+	// Deterministic ordering makes repeated scans and generated comparison tables stable.
+	AssetList.Sort([](const FAssetData& Left, const FAssetData& Right)
+	{
+		return Left.GetObjectPathString() < Right.GetObjectPathString();
+	});
+
+	TArray<TSharedPtr<FJsonValue>> MeshResults;
+	TArray<TSharedPtr<FJsonValue>> FailedAssets;
+
+	for (const FAssetData& AssetData : AssetList)
+	{
+		if (MeshResults.Num() >= MaxResults)
+		{
+			break;
+		}
+
+		UStaticMesh* StaticMesh = Cast<UStaticMesh>(AssetData.GetAsset());
+		if (!StaticMesh)
+		{
+			FailedAssets.Add(MakeShared<FJsonValueString>(AssetData.GetObjectPathString()));
+			continue;
+		}
+
+		const FBox Bounds = StaticMesh->GetBoundingBox();
+		if (!Bounds.IsValid)
+		{
+			FailedAssets.Add(MakeShared<FJsonValueString>(AssetData.GetObjectPathString()));
+			continue;
+		}
+
+		const FVector Size = Bounds.GetSize();
+		const FString PivotX = ClassifyStaticMeshPivotAxis(Bounds.Min.X, Bounds.Max.X, Tolerance);
+		const FString PivotY = ClassifyStaticMeshPivotAxis(Bounds.Min.Y, Bounds.Max.Y, Tolerance);
+		const FString PivotZ = ClassifyStaticMeshPivotAxis(Bounds.Min.Z, Bounds.Max.Z, Tolerance);
+
+		TSharedPtr<FJsonObject> PivotAxes = MakeShared<FJsonObject>();
+		PivotAxes->SetStringField(TEXT("x"), PivotX);
+		PivotAxes->SetStringField(TEXT("y"), PivotY);
+		PivotAxes->SetStringField(TEXT("z"), PivotZ);
+
+		TSharedPtr<FJsonObject> MeshResult = MakeShared<FJsonObject>();
+		MeshResult->SetStringField(TEXT("asset_name"), AssetData.AssetName.ToString());
+		MeshResult->SetStringField(TEXT("asset_path"), AssetData.GetObjectPathString());
+		MeshResult->SetArrayField(TEXT("bounds_min"), StaticMeshVectorToJsonArray(Bounds.Min));
+		MeshResult->SetArrayField(TEXT("bounds_max"), StaticMeshVectorToJsonArray(Bounds.Max));
+		MeshResult->SetArrayField(TEXT("size"), StaticMeshVectorToJsonArray(Size));
+		MeshResult->SetObjectField(TEXT("pivot_axes"), PivotAxes);
+		MeshResult->SetStringField(TEXT("pivot_class"), ClassifyStaticMeshPivot(PivotX, PivotY, PivotZ));
+
+		// Grid units are descriptive only. Thickness and decorative overhangs must not cause automatic rejection.
+		MeshResult->SetArrayField(TEXT("grid_units"), StaticMeshVectorToJsonArray(Size / GridSize));
+		MeshResults.Add(MakeShared<FJsonValueObject>(MeshResult));
+	}
+
+	TSharedPtr<FJsonObject> Result = MakeShared<FJsonObject>();
+	Result->SetStringField(TEXT("path"), Path);
+	Result->SetNumberField(TEXT("grid_size"), GridSize);
+	Result->SetNumberField(TEXT("tolerance"), Tolerance);
+	Result->SetNumberField(TEXT("total_found"), AssetList.Num());
+	Result->SetNumberField(TEXT("returned_count"), MeshResults.Num());
+	Result->SetBoolField(TEXT("truncated"), MeshResults.Num() < AssetList.Num());
+	Result->SetArrayField(TEXT("meshes"), MeshResults);
+	Result->SetArrayField(TEXT("failed_assets"), FailedAssets);
 
 	return CreateSuccessResponse(Result);
 }

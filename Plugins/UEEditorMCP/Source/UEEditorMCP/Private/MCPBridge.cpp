@@ -89,6 +89,7 @@ void UMCPBridge::RegisterActions()
 	ActionHandlers.Add(TEXT("spawn_actor"), MakeShared<FSpawnActorAction>());
 	ActionHandlers.Add(TEXT("delete_actor"), MakeShared<FDeleteActorAction>());
 	ActionHandlers.Add(TEXT("set_actor_transform"), MakeShared<FSetActorTransformAction>());
+	ActionHandlers.Add(TEXT("set_static_mesh_component"), MakeShared<FSetStaticMeshComponentAction>());
 	ActionHandlers.Add(TEXT("get_actor_properties"), MakeShared<FGetActorPropertiesAction>());
 	ActionHandlers.Add(TEXT("set_actor_property"), MakeShared<FSetActorPropertyAction>());
 	ActionHandlers.Add(TEXT("focus_viewport"), MakeShared<FFocusViewportAction>());
@@ -96,6 +97,7 @@ void UMCPBridge::RegisterActions()
 	ActionHandlers.Add(TEXT("set_viewport_transform"), MakeShared<FSetViewportTransformAction>());
 	ActionHandlers.Add(TEXT("save_all"), MakeShared<FSaveAllAction>());
 	ActionHandlers.Add(TEXT("list_assets"), MakeShared<FListAssetsAction>());
+	ActionHandlers.Add(TEXT("inspect_static_meshes"), MakeShared<FInspectStaticMeshesAction>());
 	ActionHandlers.Add(TEXT("rename_assets"), MakeShared<FRenameAssetsAction>());
 	ActionHandlers.Add(TEXT("get_selected_asset_thumbnail"), MakeShared<FGetSelectedAssetThumbnailAction>());
 	ActionHandlers.Add(TEXT("get_selected_assets"), MakeShared<FGetSelectedAssetsAction>());

@@ -380,6 +380,39 @@ _EDITOR_ACTIONS = [
         examples=({"name": "MyActor", "location": [100, 0, 50]},),
     ),
     ActionDef(
+        id="editor.set_static_mesh_component",
+        command="set_static_mesh_component",
+        tags=("editor", "actor", "component", "static-mesh", "set", "batch"),
+        description=(
+            "Set one Static Mesh on one or more level Actor instances. "
+            "Each Actor must own exactly one StaticMeshComponent."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "actor_names": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "minItems": 1,
+                    "description": "Exact object names of Actor instances in the current level",
+                },
+                "static_mesh": {
+                    "type": "string",
+                    "description": "Static Mesh asset package path or complete object path",
+                },
+            },
+            "required": ["actor_names", "static_mesh"],
+        },
+        capabilities=("write",),
+        risk="low",
+        examples=(
+            {
+                "actor_names": ["PCG_StyleB_Wall_01", "PCG_StyleB_Wall_02"],
+                "static_mesh": "/Game/SciFiHydroLab/Meshes/Walls/SM_HydroLab_WallB1.SM_HydroLab_WallB1",
+            },
+        ),
+    ),
+    ActionDef(
         id="editor.get_actor_properties",
         command="get_actor_properties",
         tags=("editor", "actor", "properties", "read"),
@@ -469,6 +502,43 @@ _EDITOR_ACTIONS = [
         },
         capabilities=("read",),
         examples=({"path": "/Game/Blueprints", "class_filter": "Blueprint"},),
+    ),
+    ActionDef(
+        id="editor.inspect_static_meshes",
+        command="inspect_static_meshes",
+        tags=("editor", "assets", "static-mesh", "bounds", "pivot", "read"),
+        description=(
+            "Inspect static meshes under a Content path. Returns local bounds, dimensions, "
+            "pivot placement and size in configurable grid units without modifying assets."
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Content path, for example /Game/SciFiHydroLab",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Search subfolders (default: true)",
+                },
+                "grid_size": {
+                    "type": "number",
+                    "description": "Reference grid size in centimeters (default: 300)",
+                },
+                "tolerance": {
+                    "type": "number",
+                    "description": "Pivot classification tolerance in centimeters (default: 0.1)",
+                },
+                "max_results": {
+                    "type": "integer",
+                    "description": "Maximum returned meshes (default: 500, maximum: 2000)",
+                },
+            },
+            "required": ["path"],
+        },
+        capabilities=("read",),
+        examples=({"path": "/Game/SciFiHydroLab", "recursive": True, "grid_size": 300},),
     ),
     ActionDef(
         id="editor.rename_assets",

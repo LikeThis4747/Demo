@@ -1,7 +1,7 @@
 # Latest Error
 
-当前无 C++ 编译、DataAsset 联合契约、Generator Blueprint CDO 装配或纯数据求解错误。最新 DemoEditor Win64 Development 构建成功，Demo.PCG 13/13 Automation 成功。
+当前无已知 C++ 编译或 `Demo.PCG` 自动化错误。材质映射层清理后，`DemoEditor Win64 Development` 构建成功；全新命令行编辑器运行 `Demo.PCG` 13/13、0 warning、0 error。
 
-当前唯一有效错误发生在一次性资产作者化进程的编辑器关卡装配阶段：三份 DataAsset、Generator Blueprint 与空测试 Map 已保存后，-NullRHI 下第一次调用 EditorActorSubsystem::SpawnActorFromClass，UE 5.7 在 FSceneViewport::EnqueueBeginRenderFrame 命中 EXCEPTION_INT_DIVIDE_BY_ZERO。故障属于无渲染视口下的编辑器 Actor Spawn 路径，不是 PCG 算法、序列化资产或 Runtime Generator 错误。
+此前首次真实 PIE 因过度设计的材质映射只覆盖三项、漏掉 `MI_floor` 而在配置阶段 fail-closed；该映射机制现已完整删除，不再作为当前错误。用户已明确授权并保存三个 SFC 根材质的 `Used with Instanced Static Meshes`，其材质实例无需单独修改。
 
-处理：已停止重复同一路径；没有删除已保存项目资产，没有修改第三方 SFCorridors、.uproject 或 Config。测试 Map 保持空壳。下一步需要用户正常打开 UE 和 L_PCG_RuntimeTest，再通过已连接 UE MCP 在正常视口装配 Actor、保存并执行 PIE。
+当前待验证项不是已确认错误：必须在全新正常渲染编辑器进程的第一次 NewWindow PIE 中确认根材质 Usage 持久化、零相关 warning、Generator 到达 Ready 且 Harness 成功传送。NullRHI 自动化不能替代该门禁。

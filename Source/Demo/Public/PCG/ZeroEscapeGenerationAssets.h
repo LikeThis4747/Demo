@@ -305,7 +305,8 @@ class DEMO_API UZeroEscapeModuleCatalog final : public UPrimaryDataAsset
 
 	/**
 	 * 项目拥有的结构语言资产：定义占格、逻辑开口、角色和玩法锚点。
-	 * 第三方素材包本身保持只读；测量结果被翻译成 Catalog 契约，而不是反向修改素材。
+	 * 测量结果被翻译成 Catalog 契约；经用户授权对素材做纯表现配置修正时，也不能反向改变
+	 * 占格、Portal、WFC 或玩法语义。
 	 */
 
 public:

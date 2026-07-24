@@ -79,6 +79,14 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
 	bool GenerateFromRequest(const FZeroEscapeGenerationRequest& Request);
 
+	/**
+	 * 当前生命周期是否允许接纳新的同步生成请求。
+	 * 这里只回答游戏线程、Game World、Construction Script、重入锁和 EndPlay 门禁；不会预先校验
+	 * DataAsset 或 Request 内容。完成 Delegate 广播期间 State 已是 Ready/Failed，但本函数仍会返回 false。
+	 */
+	UFUNCTION(BlueprintPure, Category = "PCG")
+	bool CanAcceptGenerationRequest() const;
+
 	/** 非生成期间幂等清空所有实例和 Plan，并回到 Idle；忙碌时返回 false 且不改状态。 */
 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
 	bool ClearGeneratedScene();
@@ -123,8 +131,15 @@ private:
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		FZeroEscapeGenerationReport& InOutReport);
 
-	/** 提交最终报告、状态并广播；不会清理或再次生成。 */
-	void FinishGeneration(bool bSuccess, const FZeroEscapeGenerationReport& Report);
+	/**
+	 * 提交最终报告、状态和单条版本化运行时证据，再广播完成事件；不会清理或再次生成。
+	 * Request 必须是本次公开调用的实际输入，不能回读 DefaultRequest：显式 GenerateFromRequest
+	 * 允许使用不同 Seed/难度/Flow，而结果日志需要与真正参与求解的输入一一对应。
+	 */
+	void FinishGeneration(
+		bool bSuccess,
+		const FZeroEscapeGenerationReport& Report,
+		const FZeroEscapeGenerationRequest& Request);
 
 	/** 按 Stable Anchor Id 查询并转换到世界；仅供三个公开查询复用。 */
 	bool GetGeneratedAnchorWorldTransform(

@@ -89,7 +89,7 @@
 - 数据边界：全局曲线参数仍只属于 `UMagneticGrabTuningData`；吸取起点、已用时间和吸取/持有阶段只属于 `UElectromagneticGrabComponent`；`UMagneticObjectComponent` 本轮不变。
 - 依赖与冲突：依赖现有 Physics Handle 基线和独立 Tuning DataAsset；与近墙安全、释放限速、蓄力投掷共享磁力组件文件，必须串行实施，不做并行修改。
 - 已确认方案：新增四项全局参数；采用 `S = T^4(5 - 4T)` 非对称进度、小幅确定性弧线和动态安全持有终点；Physics Handle 约束全程有效，Pulling 只关闭目标插值，曲线结束后恢复并进入 Holding。
-- 授权结论：用户已明确要求开始实现；正式范围已写入 `DOC/DailyPlan/2026-07-22-电磁抓取曲线手感.md`。
+- 授权结论：用户已明确要求开始实现；正式范围已写入 `DOC/DailyPlan/archive/Done-2026-07-22-电磁抓取曲线手感.md`。
 - 已落盘：DataAsset 新增四项曲线参数及校验；抓取组件新增 Pulling/Holding 状态、非对称曲线、小弧线、动态安全终点、Handle 插值快照/延迟恢复和 PrePhysics Tick 顺序。
 - 静态验证：`git diff --check` 通过（仅既有 LF→CRLF 提示）；曲线采样确认 `S(0)=0`、`S(1)=1`、全程单调、速度峰值位于 `T=0.75`；独立代码审查未发现阻塞项。
 - 构建检查：用户安全关闭编辑器后重跑 `DemoEditor Win64 Development`，`UnrealEditor-Demo.dll` 链接与目标元数据写入成功，最终 `Result: Succeeded`。

@@ -20,8 +20,47 @@
 
 namespace LevelGen = ZeroEscape::LevelGeneration;
 
+/**
+ * Runtime Generator 的专用日志类别。
+ * `ZE_PCG_RESULT` 是测试和人工排障的观测出口，不是玩法协议；任何游戏逻辑都必须继续通过
+ * State、LastReport、LastPlan 查询函数或 OnGenerationFinished Delegate 取得结构化结果。
+ */
+DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePCG, Log, All);
+
 namespace
 {
+	/**
+	 * UENUM 的短枚举名比本地化文本更适合稳定日志，同时保留未知值的数值回退，避免新增枚举值时
+	 * 整条结果记录失去可读性。该字符串只用于诊断，不进入 Seed、Hash 或任何生成决策。
+	 */
+	template <typename TEnum>
+	FString GetStableEnumName(const TEnum Value)
+	{
+		const UEnum* Enum = StaticEnum<TEnum>();
+		const FString ReflectedName = Enum != nullptr
+			? Enum->GetNameStringByValue(static_cast<int64>(Value))
+			: FString();
+		// GetNameStringByValue 对未知值返回空字符串而不是 nullptr；显式检查空值，才能兑现
+		// 上方注释承诺的 Unknown(n) 回退，并让损坏/未来版本枚举仍可从日志定位原始数值。
+		return !ReflectedName.IsEmpty()
+			? ReflectedName
+			: FString::Printf(TEXT("Unknown(%lld)"), static_cast<long long>(Value));
+	}
+
+	/**
+	 * 最终报告必须保持严格单行，方便 Output Log、MCP 与自动化脚本按一次生成一条记录读取。
+	 * Message 仍然只是给人看的补充信息，因此这里只净化换行、制表和引号，不允许调用者解析它。
+	 */
+	FString MakeSingleLineLogValue(const FString& Value)
+	{
+		FString Result = Value;
+		Result.ReplaceInline(TEXT("\r"), TEXT(" "));
+		Result.ReplaceInline(TEXT("\n"), TEXT(" "));
+		Result.ReplaceInline(TEXT("\t"), TEXT(" "));
+		Result.ReplaceInline(TEXT("\""), TEXT("'"));
+		return Result;
+	}
+
 	/** 签名逐字段比较，避免只校验算法版本而接受不属于本次请求的布局。 */
 	bool AreGenerationSignaturesEqual(
 		const FZeroEscapeGenerationSignature& A,
@@ -81,22 +120,28 @@ bool AZeroEscapeRuntimeLevelGenerator::Generate()
 	return GenerateFromRequest(DefaultRequest);
 }
 
-bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
-	const FZeroEscapeGenerationRequest& Request)
+bool AZeroEscapeRuntimeLevelGenerator::CanAcceptGenerationRequest() const
 {
-	// UObject、组件注册和实例数组都只允许由游戏线程触碰；拒绝时不得先清掉旧场景。
+	// State 不是重入锁：FinishGeneration 会先提交 Ready/Failed，再在锁仍有效时广播完成事件。
+	// 将完整的生命周期门禁集中在这里，调用者才能在移动玩家或清理旧场景之前安全预检。
 	if (!IsInGameThread())
 	{
 		return false;
 	}
-	UWorld* World = GetWorld();
-	if (World == nullptr
-		|| !World->IsGameWorld()
-		|| IsRunningUserConstructionScript())
-	{
-		return false;
-	}
-	if (bGenerationInProgress || bEndingPlay)
+
+	const UWorld* World = GetWorld();
+	return World != nullptr
+		&& World->IsGameWorld()
+		&& !IsRunningUserConstructionScript()
+		&& !bGenerationInProgress
+		&& !bEndingPlay;
+}
+
+bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
+	const FZeroEscapeGenerationRequest& Request)
+{
+	// 拒绝时不得先清掉旧场景；公开预检与真正入口共用同一组生命周期条件，避免语义漂移。
+	if (!CanAcceptGenerationRequest())
 	{
 		return false;
 	}
@@ -116,7 +161,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Stage = EZeroEscapeGenerationStage::Configuration;
 		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
 		Report.Message = TEXT("GeneratedRoot 必须已注册，并具有有限 Unit Scale 世界 Transform。");
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -127,7 +172,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Stage = EZeroEscapeGenerationStage::Configuration;
 		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
 		Report.Message = TEXT("GenerationProfile、ModuleCatalog 与 PresentationProfile 必须全部装配。");
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -143,7 +188,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Stage = EZeroEscapeGenerationStage::Configuration;
 		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
 		Report.Message = MoveTemp(ConfigurationError);
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -154,7 +199,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	if (!LevelGen::BuildGenerationSnapshot(*GenerationProfile, ProfileSnapshot, Report)
 		|| !LevelGen::BuildCatalogSnapshot(*ModuleCatalog, CatalogSnapshot, Report))
 	{
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -169,7 +214,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 			Signature,
 			Report))
 	{
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -185,7 +230,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	{
 		Report.Metrics.AbstractMilliseconds +=
 			(FPlatformTime::Seconds() - AbstractStartSeconds) * 1000.0;
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 	Report.Metrics.AbstractMilliseconds +=
@@ -212,7 +257,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Stage = EZeroEscapeGenerationStage::Progression;
 		Report.Failure = EZeroEscapeGenerationFailure::SolverInvariantViolation;
 		Report.Message = TEXT("规范抽象 Hash 构建失败。");
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -231,7 +276,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	{
 		LayoutReport.Metrics.AbstractMilliseconds += AbstractMilliseconds;
 		Report = MoveTemp(LayoutReport);
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 	LayoutReport.Metrics.AbstractMilliseconds += AbstractMilliseconds;
@@ -248,7 +293,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Stage = EZeroEscapeGenerationStage::GlobalValidation;
 		Report.Failure = EZeroEscapeGenerationFailure::SolverInvariantViolation;
 		Report.Message = TEXT("Layout 输出没有保留本次请求的完整 Signature 或规范 Hash。");
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 
@@ -261,7 +306,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		Report.Metrics.InstantiationMilliseconds +=
 			(FPlatformTime::Seconds() - InstantiationStartSeconds) * 1000.0;
 		ClearGeneratedSceneInternal();
-		FinishGeneration(false, Report);
+		FinishGeneration(false, Report, Request);
 		return false;
 	}
 	if (bEndingPlay)
@@ -280,7 +325,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		TEXT("PCG 生成成功：%d 个模块，%d 个玩法 Anchor。"),
 		LastPlan.Modules.Num(),
 		LastPlan.GameplayAnchors.Num());
-	FinishGeneration(true, Report);
+	FinishGeneration(true, Report, Request);
 	return true;
 }
 
@@ -362,6 +407,7 @@ bool AZeroEscapeRuntimeLevelGenerator::InstantiateValidatedPlan(
 			{
 				return FailInstantiation(InOutReport, Binding.StableModuleId, TEXT("SetStaticMesh.HISM"));
 			}
+
 			Component->SetCollisionProfileName(Binding.CollisionProfileName, false);
 
 			TArray<FTransform> LocalTransforms;
@@ -486,7 +532,8 @@ void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
 
 void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	const bool bSuccess,
-	const FZeroEscapeGenerationReport& Report)
+	const FZeroEscapeGenerationReport& Report,
+	const FZeroEscapeGenerationRequest& Request)
 {
 	if (bEndingPlay)
 	{
@@ -496,6 +543,75 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	State = bSuccess
 		? EZeroEscapeRuntimeGenerationState::Ready
 		: EZeroEscapeRuntimeGenerationState::Failed;
+
+	// 先提交 State、LastReport 和（成功时）LastPlan，再生成日志。这样日志中的 HasStart/HasExit、
+	// HISM 实例数和 Hash 描述的是 Delegate 监听者即将看到的同一个终态，而不是中间快照。
+	int32 ValidHismComponentCount = 0;
+	int32 HismInstanceCount = 0;
+	for (const UHierarchicalInstancedStaticMeshComponent* Component : GeneratedHismComponents)
+	{
+		if (IsValid(Component))
+		{
+			++ValidHismComponentCount;
+			HismInstanceCount += Component->GetInstanceCount();
+		}
+	}
+
+	FTransform StartWorldTransform = FTransform::Identity;
+	FTransform ExitWorldTransform = FTransform::Identity;
+	const bool bHasStart = GetGeneratedStartWorldTransform(StartWorldTransform);
+	const bool bHasExit = GetGeneratedExitWorldTransform(ExitWorldTransform);
+	const UWorld* World = GetWorld();
+	const FString WorldPackage = World != nullptr && World->GetOutermost() != nullptr
+		? World->GetOutermost()->GetName()
+		: TEXT("None");
+	const FString SingleLineMessage = MakeSingleLineLogValue(LastReport.Message);
+
+	// Schema=1 冻结字段名与“一次对外提交的终态恰好一条结果”的约定。EndPlay 中止沿用既有
+	// 生命周期契约：既不提交终态、不广播 Delegate，也不伪造完成日志。正常结果能证明生成事务
+	// 在指定 World 中到达终态，但不能代替材质、视觉接缝、碰撞、导航、性能或玩家走通验收。
+	UE_LOG(
+		LogZeroEscapePCG,
+		Display,
+		TEXT("ZE_PCG_RESULT Schema=1 Success=%d State=%s IsGameWorld=%d IsPIE=%d WorldPackage=\"%s\" Seed=%d Difficulty=%s Flow=\"%s\" Stage=%s Failure=%s Attempts=%d AbstractHash=%lld LayoutHash=%lld Modules=%d PortalConnections=%d GameplayAnchors=%d Objectives=%d HISMComponents=%d HISMInstances=%d HasStart=%d HasExit=%d WfcActiveCells=%d WfcVariants=%d WfcObservations=%d WfcContradictions=%d WfcBacktracks=%d EffectiveWFC=%d AbstractMs=%.3f SocketMs=%.3f AStarMs=%.3f WfcMs=%.3f ValidationMs=%.3f InstantiationMs=%.3f RelatedStableId=%d Actual=%d Limit=%d Message=\"%s\""),
+		bSuccess ? 1 : 0,
+		*GetStableEnumName(State),
+		World != nullptr && World->IsGameWorld() ? 1 : 0,
+		World != nullptr && World->WorldType == EWorldType::PIE ? 1 : 0,
+		*WorldPackage,
+		Request.Seed,
+		*GetStableEnumName(Request.Difficulty),
+		*Request.FlowProfileId.ToString(),
+		*GetStableEnumName(LastReport.Stage),
+		*GetStableEnumName(LastReport.Failure),
+		LastReport.AttemptsExecuted,
+		static_cast<long long>(LastPlan.CanonicalAbstractHash),
+		static_cast<long long>(LastPlan.CanonicalLayoutHash),
+		LastPlan.Modules.Num(),
+		LastPlan.PortalConnections.Num(),
+		LastPlan.GameplayAnchors.Num(),
+		LastPlan.ObjectiveBindings.Num(),
+		ValidHismComponentCount,
+		HismInstanceCount,
+		bHasStart ? 1 : 0,
+		bHasExit ? 1 : 0,
+		LastReport.Metrics.WfcActiveCellCount,
+		LastReport.Metrics.WfcVariantCount,
+		LastReport.Metrics.WfcObservationCount,
+		LastReport.Metrics.WfcContradictionCount,
+		LastReport.Metrics.WfcBacktrackCount,
+		LastReport.Metrics.bHadEffectiveWfcChoice ? 1 : 0,
+		LastReport.Metrics.AbstractMilliseconds,
+		LastReport.Metrics.SocketMilliseconds,
+		LastReport.Metrics.AStarMilliseconds,
+		LastReport.Metrics.WfcMilliseconds,
+		LastReport.Metrics.ValidationMilliseconds,
+		LastReport.Metrics.InstantiationMilliseconds,
+		LastReport.RelatedStableId,
+		LastReport.ActualValue,
+		LastReport.LimitValue,
+		*SingleLineMessage);
+
 	// 广播发生时 bGenerationInProgress 仍由外层 TGuardValue 保持为 true。
 	// 监听者可以读取报告和 Anchor，但不能在回调里递归 Generate/Clear 破坏当前终态。
 	OnGenerationFinished.Broadcast(bSuccess, LastReport);
