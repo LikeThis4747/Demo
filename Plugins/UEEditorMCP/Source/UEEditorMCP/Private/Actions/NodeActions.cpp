@@ -1451,7 +1451,7 @@ TSharedPtr<FJsonObject> FAddBlueprintFunctionNodeAction::ExecuteInternal(const T
 	{
 		for (const auto& Pair : ExtraParams->Values)
 		{
-			const FString PinName = Pair.Key;
+			const FString PinName = *Pair.Key;
 			UEdGraphPin* Pin = FMCPCommonUtils::FindPin(FunctionNode, PinName, EGPD_Input);
 			if (!Pin) continue;
 
@@ -3010,7 +3010,7 @@ TSharedPtr<FJsonObject> FAddMakeStructNodeAction::ExecuteInternal(const TSharedP
 			FString Value;
 			if (Pair.Value->TryGetString(Value))
 			{
-				UEdGraphPin* Pin = FMCPCommonUtils::FindPin(MakeStructNode, Pair.Key, EGPD_Input);
+				UEdGraphPin* Pin = FMCPCommonUtils::FindPin(MakeStructNode, *Pair.Key, EGPD_Input);
 				if (Pin)
 				{
 					Pin->DefaultValue = Value;

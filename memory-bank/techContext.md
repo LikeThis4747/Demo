@@ -8,7 +8,7 @@
 - 详细操作规范：`DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`
 
 ## 引擎与模块
-- Unreal Engine 5.7.4
+- Unreal Engine 5.8（源码构建，由 5.7.4 升级；引擎目录 `d:/UE5_8`）
 - 项目根：`D:/UE5projects/Demo`
 - Runtime 模块：`Source/Demo`
 - UE 资产：`Content`（`/Game`）

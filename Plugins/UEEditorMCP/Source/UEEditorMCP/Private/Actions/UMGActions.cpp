@@ -308,7 +308,7 @@ TSharedPtr<FJsonObject> FCreateUMGWidgetBlueprintAction::ExecuteInternal(const T
 			{
 				UE_LOG(LogMCP, Log, TEXT("Widget Blueprint '%s' found in memory, cleaning up"), *AssetName);
 				FString TempName = FString::Printf(TEXT("%s_OLD_%d"), *AssetName, FMath::Rand());
-				ExistingBP->Rename(*TempName, GetTransientPackage(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_NonTransactional | REN_ForceNoResetLoaders);
+				ExistingBP->Rename(*TempName, GetTransientPackage(), REN_DoNotDirty | REN_DontCreateRedirectors | REN_NonTransactional);
 				ExistingBP->ClearFlags(RF_Public | RF_Standalone);
 				ExistingBP->MarkAsGarbage();
 			}

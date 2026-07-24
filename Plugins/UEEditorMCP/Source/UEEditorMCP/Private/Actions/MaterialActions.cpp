@@ -136,7 +136,7 @@ static bool ValidateParameterOverrideKeys(const TSharedPtr<FJsonObject>& Params,
 	const TSharedPtr<FJsonObject> ParamObject = Params->GetObjectField(FieldName);
 	for (const auto& Pair : ParamObject->Values)
 	{
-		if (IsInvalidMaterialParameterName(Pair.Key))
+		if (IsInvalidMaterialParameterName(*Pair.Key))
 		{
 			OutError = FString::Printf(TEXT("Invalid parameter name '%s' in '%s'. Parameter names cannot be empty or None/NAME_None."), *Pair.Key, *FieldName);
 			return false;
@@ -574,7 +574,7 @@ void FAddMaterialExpressionAction::SetExpressionProperties(UMaterialExpression* 
 
 	for (const auto& Pair : Properties->Values)
 	{
-		const FString& PropName = Pair.Key;
+		const FString PropName = *Pair.Key;
 		const TSharedPtr<FJsonValue>& PropValue = Pair.Value;
 
 		// Handle specific expression types and their properties

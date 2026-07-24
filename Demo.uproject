@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{D7FECB97-47AA-2A16-1B3A-99A596D68764}",
+	"EngineAssociation": "{25D15C22-4EA7-62BA-67B8-23A4BC29C515}",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -24,6 +24,30 @@
 		},
 		{
 			"Name": "PhysicsControl",
+			"Enabled": true
+		},
+		{
+			"Name": "ModelContextProtocol",
+			"Enabled": true
+		},
+		{
+			"Name": "EditorToolset",
+			"Enabled": true
+		},
+		{
+			"Name": "PhysicsToolsets",
+			"Enabled": true
+		},
+		{
+			"Name": "UMGToolSet",
+			"Enabled": true
+		},
+		{
+			"Name": "AutomationTestToolset",
+			"Enabled": true
+		},
+		{
+			"Name": "SemanticSearchToolset",
 			"Enabled": true
 		}
 	]

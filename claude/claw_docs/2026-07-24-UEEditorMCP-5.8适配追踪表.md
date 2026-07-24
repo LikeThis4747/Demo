@@ -60,3 +60,31 @@
 - 编辑器启动无插件加载错误。
 - MCP bridge 端口 55558 能连上（`ue_ping` 或简单 `editor.is_ready`）。
 - 抽测 3 类操作：一个只读（`graph.describe`/`editor.get_actors`）、一个建图（`node.add_event`）、一个 UMG（`widget.get_tree`），确认功能未回归。
+
+---
+
+## 2026-07-24 首次编译实测结果（`DemoEditor Win64 Development`）
+
+**结论：编译已通过（`Result: Succeeded`），比预检预期乐观得多。**
+
+### 实际改动（仅 2 类）
+1. **构建设置**：`Demo.Target.cs` + `DemoEditor.Target.cs` 的 `DefaultBuildSettings` V6 → **V7**（`IncludeOrderVersion` 暂留 `Unreal5_7`）。这是过配置门槛的必需项。
+2. **FJsonObject 键类型变更**（5.8 把 `Values` 的 key 从 `FString` 改为 `UE::FSharedString`）——共修 5 处，写法统一为 `Pair.Key` → `*Pair.Key`：
+   - `GraphActions.cpp:1091`　`FindPin(FuncNode, *DefaultPair.Key, …)`
+   - `MaterialActions.cpp:139`　`IsInvalidMaterialParameterName(*Pair.Key)`
+   - `MaterialActions.cpp:577`　`const FString PropName = *Pair.Key;`
+   - `NodeActions.cpp:1454`　`const FString PinName = *Pair.Key;`
+   - `NodeActions.cpp:3013`　`FindPin(MakeStructNode, *Pair.Key, …)`
+
+### 预检里担心但**未兑现**的风险
+- 预期的 K2Node / Kismet / BlueprintGraph 大面 API 破坏 **没有发生**（这些 API 5.7→5.8 稳定）。
+- 磁力（★☆☆☆☆）与自写 PCG（★★☆☆☆）**零改动通过**，印证预检判断。
+
+### 遗留（未阻塞，建议后续处理）
+- ⚠ `UMGActions.cpp:311` warning **C4996**：`UObject::Rename` 的 `REN_ResetLoaders` 标志已弃用，提示改用 `REN_AllowPackageLinkerMismatch`。当前只是警告，**下个引擎版本会变编译错误**，建议尽早修。
+- 📌 `IncludeOrderVersion` 仍是 `Unreal5_7`（backward-compatible）。想彻底对齐 5.8 可升到 `Unreal5_8`，但可能引入头文件顺序错误，等其余验证稳定后再做。
+
+### 待运行验证（🧪，尚未做）
+- 打开编辑器无插件加载错误；MCP bridge 55558 连通。
+- 磁力 PIE 手感对比 5.7.4。
+- 重跑 `Demo.PCG` 自动化（5.7.4 下 13/13）。

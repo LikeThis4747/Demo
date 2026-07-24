@@ -2,9 +2,10 @@
 
 ## 项目身份
 
-- UE 5.7.4，预计工期三周的单机 Demo，C++ 优先；默认不使用 GAS、不设计联机。
+- UE 5.8（由 5.7.4 升级），预计工期三周的单机 Demo，C++ 优先；默认不使用 GAS、不设计联机。
 - 工程根：`D:\UE5projects\Demo`；主模块：`Source/Demo`；UE 资产根：`Content`（`/Game`）。
 - 蓝图只负责资源装配、UI、关卡配置和 AnimBP 连线；数据使用 DataAsset/DataTable。
+- 编辑器操作有**两个 MCP 可同时使用**：本地 `ue-editor-mcp`（socket 55558，擅长蓝图微操/重构、PIE、日志断言、审计）与 UE5.8 官方 `ue58-official-mcp`（HTTP 8000 `/mcp`，擅长语义搜索、自动化测试、物理资产、各类资产 CRUD、属性/类发现、Python 编排）。**选型与协同规则必须遵循 `MCP/capability-notes/dual-mcp-usage-guide.md`**。官方 MCP 随编辑器自动启动（`bAutoStartServer=True`），走 `list_toolsets`→`describe_toolset`→`call_tool` 三步；两者端口不冲突。
 
 ## 每次开始
 
@@ -52,4 +53,5 @@
 - 历史创意与评审：`DOC/Ideas/`
 - MCP 搜索换词：`MCP-SEARCH-GUIDE.md`
 - MCP 能力边界：`MCP/capability-notes/README.md`
+- **双 MCP 协同使用规范（同时用 ue-editor-mcp 与官方 MCP 前必读）：`MCP/capability-notes/dual-mcp-usage-guide.md`**
 - C++/蓝图/材质/Python 工作流：`.github/skills/`

@@ -1088,7 +1088,7 @@ FPatchOpResult FApplyPatchAction::ExecuteAddNode(const FPatchOp& Op, UBlueprint*
 		{
 			for (const auto& DefaultPair : (*DefaultsObj)->Values)
 			{
-				UEdGraphPin* Pin = FMCPCommonUtils::FindPin(FuncNode, DefaultPair.Key, EGPD_Input);
+				UEdGraphPin* Pin = FMCPCommonUtils::FindPin(FuncNode, *DefaultPair.Key, EGPD_Input);
 				if (Pin)
 				{
 					FString DefaultStr;

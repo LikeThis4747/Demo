@@ -2,6 +2,8 @@
 
 > **何时读这份文档**：当你用 MCP 遇到"做不了"的操作时，**先看这里，不要立即下结论说 MCP 不支持**。
 
+> **本项目有两个 MCP 可同时使用**：本地 `ue-editor-mcp`（socket 55558）与 UE5.8 官方 `ue58-official-mcp`（HTTP 8000 `/mcp`）。**同时使用时的选型与协同规则见 `dual-mcp-usage-guide.md`（必读）。** 本文件夹下"确认能力不足的流程"同样适用于官方 MCP——官方走 `list_toolsets`→`describe_toolset`→`call_tool` 三步发现能力，下结论前先 `describe` 对应 toolset。
+
 ---
 
 ## 核心规范：确认 MCP 能力不足的流程
@@ -52,6 +54,9 @@ MCP 能力缺口初步判断：
 
 | 文档 | 覆盖范围 |
 |---|---|
+| `dual-mcp-usage-guide.md` | **双 MCP 协同使用规范**：ue-editor-mcp 与官方 MCP 的定位、能力矩阵、决策规则（同时用两者前必读） |
+| `mcp_capability_overview.md` | UE5.8 官方 MCP 全部 23 个 toolset 的工具清单（实测汇总，数据附录） |
+| `mcp_describe_blueprint.md` | 官方 `BlueprintTools` 完整工具签名与描述（实测，数据附录） |
 | `widget-umg-capabilities.md` | UMG Widget Blueprint 操作（创建、属性、事件、布局等） |
 | `blueprint-capabilities.md` | Blueprint 蓝图操作（变量、函数、节点、连线等）— 待创建 |
 | `editor-capabilities.md` | 编辑器/场景操作（Actor、关卡、资源管理等）— 待创建 |
