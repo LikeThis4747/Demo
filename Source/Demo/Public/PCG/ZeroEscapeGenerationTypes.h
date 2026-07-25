@@ -18,6 +18,8 @@ namespace ZeroEscape::GenerationLimits
 {
 	/** 首版 K-of-N 目标使用 32 位掩码验证；12 个目标也足以覆盖当前单局规模。 */
 	inline constexpr int32 MaxObjectiveCandidates = 12;
+	/** 首版仅提供六个双 Lane 进度带；同时作为纯值入口的硬校验，不能只依赖编辑器 Clamp。 */
+	inline constexpr int32 MaxObjectiveProgressBands = 6;
 	/** 防止 DataAsset 误配导致同步生成在游戏线程申请过大的工作集。 */
 	inline constexpr int32 MaxGridCells = 1024;
 	/** 单轴至少能容纳起点、终点、目标房间和边界。 */
@@ -95,7 +97,7 @@ enum class EZeroEscapeGenerationStage : uint8
 	Instantiation = 6
 };
 
-/** 精简后的结构化失败原因；已删除旧 Graph、Socket、A-star 与回溯重试专用状态。 */
+/** 精简后的结构化失败原因；已删除旧 Graph、Socket、A-star 与外层换 Seed 重试专用状态。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeGenerationFailure : uint8
 {
@@ -108,7 +110,13 @@ enum class EZeroEscapeGenerationFailure : uint8
 	RequiredRouteTooLong = 6,
 	LongRetraceLimitExceeded = 7,
 	PresentationMissing = 8,
-	InstantiationFailed = 9
+	InstantiationFailed = 9,
+
+	/** 输入与配置均合法，但有界回溯已经证明当前 WFC 搜索空间不存在满足全部约束的结果。 */
+	NoValidWfcSolution = 10,
+
+	/** 搜索空间尚未证明无解，但候选尝试或回溯次数已经达到本局配置的确定性上限。 */
+	SolverBudgetExhausted = 11
 };
 
 /**
@@ -372,30 +380,68 @@ struct DEMO_API FZeroEscapeGeneratedLevelPlan
 	FZeroEscapeJunctionMetrics JunctionMetrics;
 };
 
-/** 纯算法与实例化阶段共享的轻量指标；不再记录旧版重试、A* 或回溯预算。 */
+/**
+ * 纯算法与实例化阶段共享的轻量指标。
+ * 搜索指标只累计本次求解实际做过的工作，回溯恢复 Domain 时不得把计数回滚。
+ */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeGenerationMetrics
 {
 	GENERATED_BODY()
 
+	/** 成功布局中 OpeningMask 非零的逻辑格数量；失败时允许保持为 0。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 RequiredCellCount = 0;
+	int32 WalkableCellCount = 0;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 OptionalCellCount = 0;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 PrunedOptionalCellCount = 0;
-
-	/** 选择一个最小熵格并确定形态的次数。 */
+	/** 新建一个最小熵决策帧的次数；同一帧回溯后改试其他候选不重复计数。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WfcObservationCount = 0;
 
-	/** 相邻约束使候选 domain 实际缩小的次数。 */
+	/** 本局实际启动的 WFC 搜索树数量；成功通常小于配置的最大尝试数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcSolveAttemptCount = 0;
+
+	/** 实际把决策 Cell 收窄到一个 singleton 候选的次数，包括最终失败分支。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcCandidateAttemptCount = 0;
+
+	/** 局部邻接传播或全局约束使候选 Domain 实际缩小的次数。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WfcPropagationCount = 0;
 
-	/** 发现空 domain 或最终邻接不一致的次数；成功运行应为 0。 */
+	/** 当前搜索分支发生可恢复 contradiction 的次数；它是正常回溯成本，不是不变量错误。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcContradictionCount = 0;
+
+	/** 局部 OpeningMask 邻接传播把某个 Domain 缩为空的次数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcLocalAdjacencyContradictionCount = 0;
+
+	/** Count 约束直接证明当前分支不满足非空 Cell 数量上下界的次数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcCountContradictionCount = 0;
+
+	/** MaxConsecutive 约束直接证明当前分支含有过长连续贯通段的次数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcMaxConsecutiveContradictionCount = 0;
+
+	/** Connected 约束直接证明 Required/被迫非空节点已无法连通的次数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcConnectedContradictionCount = 0;
+
+	/** 合并后的全局约束 Ban 立即把某个 Domain 缩为空的次数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcGlobalBanContradictionCount = 0;
+
+	/** 为尝试替代候选而恢复一个决策帧的次数；弹出已耗尽的帧同样计入。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcBacktrackCount = 0;
+
+	/** 完整折叠后因路线总长或额外折返超限而被 Grid 完成态验收拒绝的候选数。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcCollapsedCandidateRejectionCount = 0;
+
+	/** 只统计非法内部状态或代码不变量；成功运行必须为 0。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WfcInvariantFailureCount = 0;
 

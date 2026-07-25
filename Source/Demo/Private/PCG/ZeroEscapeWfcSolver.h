@@ -3,20 +3,23 @@
 /**
  * @file ZeroEscapeWfcSolver.h
  *
- * 职责：声明单层四邻域 Grid-WFC 的纯值输入、固定 16 状态变体和无回溯求解入口。
- * 边界：不读取 UObject、DataAsset、World 或 StaticMesh；不生成房间、地标和表现实例。
+ * 职责：声明单层四邻域 Grid-WFC 的纯值输入、固定 16 状态变体、有界回溯和完成态验收入口。
+ * 边界：不读取 UObject、DataAsset、World 或 StaticMesh；不解释 K-of-N、房间路线或表现资源。
  *
- * V3.2 的核心前提是完整保留 OpeningMask 0..15。每条相邻边只有 Open/Closed 两种状态，
- * 因而只要 RequiredOpen/RequiredClosed 约束自身一致，任意一次合法观察都能继续扩展，不需要
- * Snapshot、Decision Trail、回溯、换 Seed 重试或备用骨架。
+ * Solver 只负责局部开闭边传播、具体全局约束、最小熵观察、chronological backtracking 与原子导出。
+ * Grid 通过 FWfcCollapsedCandidateValidator 验收完整叶子；RejectBranch 继续回溯，FatalError 立即失败。
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Containers/ArrayView.h"
 #include "Containers/StaticArray.h"
 #include "Math/RandomStream.h"
+#include "Templates/Function.h"
+
 #include "PCG/ZeroEscapeGenerationTypes.h"
+#include "PCG/ZeroEscapeWfcConstraints.h"
 
 struct FZeroEscapeWfcShapeWeights;
 
@@ -25,8 +28,8 @@ namespace ZeroEscape::LevelGeneration
 	/**
 	 * Cell 是否参与本次 WFC。
 	 *
-	 * Outside 固定折叠为空；Required 属于必达骨架且必须至少有一条 RequiredOpen；
-	 * Optional 可以折叠为空，也可以由相邻边传播为任意非空四向形态。
+	 * Outside 固定为空；Required 必须选择非空 OpeningMask，但不要求调用方预刻一条外部开口；
+	 * Optional 可以为空，也可以选择满足一元和相邻约束的任意非空四向形态。
 	 */
 	enum class EGridCellDomain : uint8
 	{
@@ -63,12 +66,71 @@ namespace ZeroEscape::LevelGeneration
 		int32 Weight = 1;
 	};
 
+	/** 完整折叠候选交给 Grid 玩法验收后的三态结论。 */
+	enum class EWfcCollapsedCandidateVerdict : uint8
+	{
+		/** 当前完整布局满足全部调用方规则，可以原子提交。 */
+		Accept = 0,
+
+		/** 当前布局结构合法但不满足路线/折返规则；作为当前分支矛盾继续回溯。 */
+		RejectBranch = 1,
+
+		/** 调用方发现配置或代码不变量错误；不得用回溯掩盖。 */
+		FatalError = 2
+	};
+
 	/**
-	 * 完整 16 状态的 Simple-Tiled WFC。
+	 * 完整候选验收的轻量返回值。
 	 *
-	 * 求解器只负责：一元过滤、最小熵 Cell 选择、加权观察、相邻开闭边传播和原子导出。
-	 * Grid 骨架雕刻、房间区域、孤岛裁剪、全局可达性与结构 Mesh 展开属于调用方职责。
+	 * Solver 不解释 Message、ActualValue 或 LimitValue 的玩法语义；它只区分接受、可恢复拒绝和致命错误。
 	 */
+	struct FWfcCollapsedCandidateEvaluation
+	{
+		EWfcCollapsedCandidateVerdict Verdict = EWfcCollapsedCandidateVerdict::Accept;
+		FString Message;
+		int32 ActualValue = 0;
+		int32 LimitValue = 0;
+		int32 RelatedStableId = INDEX_NONE;
+
+		static FWfcCollapsedCandidateEvaluation Accept()
+		{
+			return {};
+		}
+
+		static FWfcCollapsedCandidateEvaluation Reject(
+			FString InMessage,
+			const int32 InActualValue,
+			const int32 InLimitValue)
+		{
+			FWfcCollapsedCandidateEvaluation Result;
+			Result.Verdict = EWfcCollapsedCandidateVerdict::RejectBranch;
+			Result.Message = MoveTemp(InMessage);
+			Result.ActualValue = InActualValue;
+			Result.LimitValue = InLimitValue;
+			return Result;
+		}
+
+		static FWfcCollapsedCandidateEvaluation Fatal(
+			FString InMessage,
+			const int32 InRelatedStableId = INDEX_NONE)
+		{
+			FWfcCollapsedCandidateEvaluation Result;
+			Result.Verdict = EWfcCollapsedCandidateVerdict::FatalError;
+			Result.Message = MoveTemp(InMessage);
+			Result.RelatedStableId = InRelatedStableId;
+			return Result;
+		}
+	};
+
+	/**
+	 * 同步完成态验收函数。
+	 *
+	 * 输入 View 只在本次调用期间有效；调用方不得保存它，也不得修改 Solver 或 Random 状态。
+	 */
+	using FWfcCollapsedCandidateValidator =
+		TFunctionRef<FWfcCollapsedCandidateEvaluation(TConstArrayView<uint8>)>;
+
+	/** 完整 16 OpeningMask 的 Simple-Tiled WFC。 */
 	class FWfcSolver final
 	{
 	public:
@@ -78,30 +140,18 @@ namespace ZeroEscape::LevelGeneration
 			TStaticArray<FTileVariant, 16>& OutVariants);
 
 		/**
-		 * 在进入随机观察前验证“必然有解”契约。
+		 * 运行带 Count、MaxConsecutive、Connected 和有界 chronological backtracking 的 WFC。
 		 *
-		 * 检查完整矩形覆盖、坐标唯一、Mask 合法、RequiredOpen 双向、边界关闭、
-		 * Open/Closed 不冲突以及 Required Cell 非零。成功意味着至少存在“仅打开 RequiredOpen”
-		 * 的构造性见证解；失败只返回可定位文本，不修改任何 World 状态。
-		 */
-		static bool ValidateGuaranteedSolvableConstraints(
-			FIntPoint GridSize,
-			const TArray<FGridCellConstraint>& Constraints,
-			FString& OutError);
-
-		/**
-		 * 运行无回溯 WFC。
-		 *
-		 * OutOpeningMaskByCell 按 ZeroEscape::Grid::ToIndex 的 (Y, X) 稳定顺序导出。
-		 * 入口立即清空输出；只有全部 Cell 折叠成功才一次性提交结果。完整 16 状态契约下出现
-		 * 空 Domain 表示配置或实现不变量被破坏，函数会报告 WfcLayout/SolverInvariantViolation，
-		 * 而不会用重试掩盖错误。
+		 * OutOpeningMaskByCell 按 ZeroEscape::Grid::ToIndex 的 (Y, X) 稳定顺序导出。入口立即清空输出；
+		 * 只有全部 Cell 折叠且 ValidateCollapsedCandidate 返回 Accept，才一次性提交结果。
 		 */
 		static bool Solve(
 			FIntPoint GridSize,
 			const TArray<FGridCellConstraint>& Constraints,
+			const FZeroEscapeWfcSolveSettings& SolveSettings,
 			const TArray<FTileVariant>& Variants,
 			FRandomStream& Random,
+			FWfcCollapsedCandidateValidator ValidateCollapsedCandidate,
 			TArray<uint8>& OutOpeningMaskByCell,
 			FZeroEscapeGenerationReport& OutReport);
 	};

@@ -3,22 +3,23 @@
 ## M0 基础设施与 UE 5.8
 
 - [x] C++ 优先单机 Demo、轻量渲染基线、项目 Memory MCP、Git LFS 与内部工蜂备份
-- [x] 从 UE 5.7.4 升级到 UE 5.8；DemoEditor 构建成功
-- [x] 本地 UE Editor MCP 与官方 UE5.8 MCP 共存规则、能力矩阵已归档
+- [x] UE 5.8 DemoEditor 构建成功；本地 UE Editor MCP 与官方 MCP 协同规范已归档
 - [ ] UE 5.8 下磁力 PIE 手感回归
 
 ## M1 实时 PCG 场景
 
-- [x] V3.2 Progression + 构造性 Grid Layout + 16 Mask 无回溯 WFC
-- [x] 600 cm 逻辑 Tile 展开为 300 cm Floor/Ceiling/Wall/Trim/Pillar，并以 Runtime HISM 实例化
-- [x] 删除旧 Graph/Socket/Portal/Catalog/A*/回溯 Solver 链与死配置
-- [x] 项目自有 HydroLab Presentation 与 Generator 装配
-- [x] UE 5.8 构建、`Demo.PCG` 13/13、288/288 Seed Sweep
-- [x] 第三方共同根材质 `M_HydroLab` 启用 Instanced Static Mesh Usage；无副本、映射或 Runtime 绕过
-- [x] 全新正常渲染 NewWindow PIE：27 Cells、444 Instances、5 HISM，Harness 传送成功，零相关 Usage 警告
-- [ ] 用户验收材质、接缝、碰撞、净空与 Start→Exit 实际走通
-- [ ] 通过 PCG 验收后接入追猎者，再做单局玩法闭环
+- [x] V4 全图 16 OpeningMask Grid-WFC；最低带权熵、Domain Trail、有界 chronological backtracking
+- [x] Count、MaxConsecutive、Connected 五节点展开图与迭代 Tarjan 传播
+- [x] NoValid 完整树无解立即停止；仅预算失败进行确定性有限尝试并共享整局预算
+- [x] 600 cm 逻辑 Tile 展开为 300 cm Floor/Ceiling/Wall/Trim/Pillar，Runtime HISM 实例化
+- [x] HydroLab Presentation、V4 Profile、Generator/Harness 装配；根材质 HISM Usage 已处理
+- [x] UE 5.8 构建、`Demo.PCG` 19/19、288/288 Seed Sweep
+- [x] SelectedViewport 技术烟测：48 Cells、798 Instances、5 HISM，Harness 传送成功
+- [x] 只读 UE 审计：Generator/Harness Blueprint UpToDate、无自定义连线
+- [ ] 玩家抽查至少 10 个 Seed，验收路线、接缝、碰撞、净空与 Start→Exit
+- [ ] 补齐真实导航证据；当前测试关卡未见 NavMesh Bounds/Recast actor
+- [ ] 玩家验收后接入追猎者，再做单局玩法闭环
 
 ## 当前边界
 
-构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。当前没有已知源码或素材设置阻塞；旧 `DA_LevelModuleCatalog` 在用户验收前不删除。
+构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。当前无已确认代码阻断；Planning Max 约 622 ms 需目标设备体验。导航、玩家走通和视觉/碰撞验收通过前，不进入追猎者或室内灯扩展。

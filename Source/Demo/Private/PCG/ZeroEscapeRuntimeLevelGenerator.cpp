@@ -3,7 +3,8 @@
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.cpp
  * 职责：同步执行 Profile 快照、流程意图、Grid/WFC、独立校验与五类结构 HISM 事务提交。
- * 边界：不在 Construction Script/Tick 中生成，不使用 Catalog、Socket、A-star、回溯或备用布局。
+ * 边界：不在 Construction Script/Tick 中生成；Actor 不自行实现 Catalog、Socket、A-star、
+ *       拓扑求解或备用布局，只消费纯值 Solver 的原子结果。
  */
 
 #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
@@ -234,9 +235,11 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	LevelGen::FGridLayoutRequest LayoutRequest;
 	LayoutRequest.Signature = Signature;
 	LayoutRequest.Progression = Progression;
-	LayoutRequest.MaxOptionalSideBranches = ProgressionSettings.MaxOptionalSideBranches;
-	LayoutRequest.MaxOptionalForwardLinks = ProgressionSettings.MaxOptionalForwardLinks;
 
+	/**
+	 * Runtime 只把已经验证的 DataAsset 快照复制成纯值 Solver 设置。
+	 * Count、连续直线和搜索预算属于所有难度共享的单局边界；形态权重则取当前难度快照。
+	 */
 	LevelGen::FGridLayoutSettings LayoutSettings;
 	LayoutSettings.GridSize = Snapshot.SharedRouteConstraints.GridSize;
 	LayoutSettings.LogicalTileSizeCm = FMath::RoundToInt(
@@ -244,8 +247,18 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	LayoutSettings.RoomSizeTiles = Snapshot.SharedRouteConstraints.RoomSizeTiles;
 	LayoutSettings.ObjectiveProgressBandCount =
 		Snapshot.SharedRouteConstraints.ObjectiveProgressBandCount;
-	LayoutSettings.OptionalEnvelopeRadius =
-		Snapshot.SharedRouteConstraints.OptionalEnvelopeRadius;
+	LayoutSettings.MinWalkableCellCount =
+		Snapshot.SharedRouteConstraints.MinWalkableCellCount;
+	LayoutSettings.MaxWalkableCellCount =
+		Snapshot.SharedRouteConstraints.MaxWalkableCellCount;
+	LayoutSettings.MaxConsecutiveStraightTiles =
+		Snapshot.SharedRouteConstraints.MaxConsecutiveStraightTiles;
+	LayoutSettings.MaxWfcCandidateAttempts =
+		Snapshot.SharedRouteConstraints.MaxWfcCandidateAttempts;
+	LayoutSettings.MaxWfcBacktrackCount =
+		Snapshot.SharedRouteConstraints.MaxWfcBacktrackCount;
+	LayoutSettings.MaxWfcSolveAttempts =
+		Snapshot.SharedRouteConstraints.MaxWfcSolveAttempts;
 	LayoutSettings.MaxRequiredRouteLengthTiles =
 		Snapshot.SharedRouteConstraints.MaxRequiredRouteLengthTiles;
 	LayoutSettings.MaxRequiredRouteExtraTiles =
@@ -257,7 +270,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	if (!LevelGen::FGridLayoutSolver::Solve(
 		LayoutRequest,
 		LayoutSettings,
-		Snapshot.WfcShapeWeights,
+		ProgressionSettings.WfcShapeWeights,
 		Request.Seed,
 		CandidatePlan,
 		Report))
@@ -446,7 +459,8 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	UE_LOG(
 		LogZeroEscapePCG,
 		Display,
-		TEXT("ZE_PCG_RESULT schema=2 success=%d seed=%d difficulty=%s flow=%s stage=%s failure=%s cells=%d required=%d optional=%d pruned=%d observations=%d propagations=%d instances=%d hism=%d progression_hash=%lld layout_hash=%lld total_ms=%.3f message=\"%s\""),
+		// schema=4 增加有限 WFC 尝试次数和五类矛盾来源，便于直接定位 Seed 长尾。
+		TEXT("ZE_PCG_RESULT schema=4 success=%d seed=%d difficulty=%s flow=%s stage=%s failure=%s cells=%d walkable=%d solve_attempts=%d observations=%d candidate_attempts=%d propagations=%d contradictions=%d contradiction_local=%d contradiction_count=%d contradiction_max_straight=%d contradiction_connected=%d contradiction_global_ban=%d backtracks=%d leaf_rejections=%d instances=%d hism=%d progression_hash=%lld layout_hash=%lld total_ms=%.3f message=\"%s\""),
 		bSuccess ? 1 : 0,
 		Request.Seed,
 		*GetStableEnumName(Request.Difficulty),
@@ -454,11 +468,19 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 		*GetStableEnumName(Report.Stage),
 		*GetStableEnumName(Report.Failure),
 		LastPlan.Cells.Num(),
-		Report.Metrics.RequiredCellCount,
-		Report.Metrics.OptionalCellCount,
-		Report.Metrics.PrunedOptionalCellCount,
+		Report.Metrics.WalkableCellCount,
+		Report.Metrics.WfcSolveAttemptCount,
 		Report.Metrics.WfcObservationCount,
+		Report.Metrics.WfcCandidateAttemptCount,
 		Report.Metrics.WfcPropagationCount,
+		Report.Metrics.WfcContradictionCount,
+		Report.Metrics.WfcLocalAdjacencyContradictionCount,
+		Report.Metrics.WfcCountContradictionCount,
+		Report.Metrics.WfcMaxConsecutiveContradictionCount,
+		Report.Metrics.WfcConnectedContradictionCount,
+		Report.Metrics.WfcGlobalBanContradictionCount,
+		Report.Metrics.WfcBacktrackCount,
+		Report.Metrics.WfcCollapsedCandidateRejectionCount,
 		Report.Metrics.InstancedMeshCount,
 		Report.Metrics.HismComponentCount,
 		static_cast<long long>(LastPlan.CanonicalProgressionHash),

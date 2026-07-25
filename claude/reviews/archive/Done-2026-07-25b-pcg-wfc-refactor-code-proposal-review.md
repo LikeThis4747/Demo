@@ -1,5 +1,7 @@
 # 审计：PCG 全图 WFC 路线重构 拟实现代码 V1
 
+> 处理状态：已完成（2026-07-25）。已落实根固定点、活动决策叶与根完成叶回溯边界；单次稠密输入构建；Grid 唯一完成态验收；内部下标 `check`；最低带权 Shannon 熵；Count / MaxConsecutive / Connected；总预算分片与仅预算失败重试。UE 5.8 构建、19 项 `Demo.PCG`、288/288 Seed Sweep、真实 Profile 字段 smoke 和 SelectedViewport PIE 技术烟测均通过；独立终审无代码阻断，玩家验收仍单独保留。
+
 - 审计日期：2026-07-25（当日第 2 次）
 - 提案：`claude/docs/2026-07-25-pcg-wfc-route-refactor-code-proposal.md`（未落盘、未编译）
 - 对照源码：当前 `ZeroEscapeWfcSolver.cpp`(838) / `GridLayoutSolver.cpp`(1519) / Types / Assets / Core

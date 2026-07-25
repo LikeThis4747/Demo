@@ -2,9 +2,9 @@
 
 /**
  * @file ZeroEscapeGridLayoutSolver.cpp
- * 职责：在固定矩形单层网格中构造必达骨架、2x2 Objective 房、有限 Optional 区，
- *       调用完整 16-mask 无回溯 WFC，并在原子提交 Plan 前完成连通性与路线上限验证。
- * 边界：不使用 Socket、A*、障碍物或布局重试；不读资产对象，不实例化世界对象。
+ * 职责：在固定矩形单层网格中嵌入 Start/Exit/2x2 Objective 局部约束，
+ *       调用完整 16-mask、带界时间序回溯 WFC，并在原子提交 Plan 前完成全局玩法验证。
+ * 边界：不使用 Socket、A* 或预雕刻固定路线；不读资产对象，不实例化世界对象。
  * 状态 Owner：FGridWorkingState 只属于当前 Solve；任何失败都丢弃候选态，不污染 OutPlan。
  */
 
@@ -14,6 +14,7 @@
 #include "ZeroEscapeWfcSolver.h"
 
 #include "Algo/Sort.h"
+#include "Containers/ArrayView.h"
 #include "Containers/Queue.h"
 
 namespace ZeroEscape::LevelGeneration
@@ -72,30 +73,6 @@ namespace ZeroEscape::LevelGeneration
 			return false;
 		}
 
-		/** 规范无向 Grid Edge；A 始终按 (Y, X) 早于 B。 */
-		struct FGridEdgeKey
-		{
-			FIntPoint A = FIntPoint::ZeroValue;
-			FIntPoint B = FIntPoint::ZeroValue;
-
-			bool operator==(const FGridEdgeKey& Other) const
-			{
-				return A == Other.A && B == Other.B;
-			}
-		};
-
-		/** 为 TSet/FGridEdgeKey 提供与规范端点一致的 Hash。 */
-		uint32 GetTypeHash(const FGridEdgeKey& Edge)
-		{
-			return HashCombine(GetTypeHash(Edge.A), GetTypeHash(Edge.B));
-		}
-
-		/** 从相邻坐标建立不受输入方向影响的 Edge Key。 */
-		FGridEdgeKey MakeGridEdge(const FIntPoint A, const FIntPoint B)
-		{
-			return CoordinateLess(B, A) ? FGridEdgeKey{B, A} : FGridEdgeKey{A, B};
-		}
-
 		/** 一个已预验证的 2x2 Objective 房位置及其流程身份。 */
 		struct FObjectiveRoomPlacement
 		{
@@ -103,7 +80,6 @@ namespace ZeroEscape::LevelGeneration
 			FIntPoint MinCoordinate = FIntPoint::ZeroValue;
 			FIntPoint AnchorCoordinate = FIntPoint::ZeroValue;
 			int32 RegionId = INDEX_NONE;
-			TSet<FGridEdgeKey> GateEdges;
 		};
 
 		/** Solve 私有中间态；Constraints 始终是完整 Grid 的 row-major 数组。 */
@@ -116,8 +92,6 @@ namespace ZeroEscape::LevelGeneration
 			FProgressionLandmark ExitLandmark;
 			FIntPoint StartCoordinate = FIntPoint::ZeroValue;
 			FIntPoint ExitCoordinate = FIntPoint::ZeroValue;
-			/** 固定中央横向主干所在行；目标房双 Gate 都直接连接这一行。 */
-			int32 BackboneY = 0;
 		};
 
 		/** 检查坐标是否位于半开区间 [0, GridSize) 内。 */
@@ -177,7 +151,7 @@ namespace ZeroEscape::LevelGeneration
 			{
 				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
 					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("Grid 骨架开口指向了网格外。"));
+					TEXT("Grid Required 开口指向了网格外。"));
 			}
 
 			const int32 Direction = DirectionFromDelta(B - A);
@@ -185,7 +159,7 @@ namespace ZeroEscape::LevelGeneration
 			{
 				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
 					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("Grid 骨架只允许单步四邻域连接。"));
+					TEXT("Grid Required 开口只允许单步四邻域连接。"));
 			}
 
 			FGridCellConstraint& CellA = ConstraintAt(State, A);
@@ -206,99 +180,6 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
-		/**
-		 * 对称写入一条必闭边。关闭约束不会把 Outside/Optional 提升为 Required，
-		 * 因此房间外侧仍可保持空 Tile，只是不能穿墙。
-		 */
-		bool AddRequiredClosedEdge(
-			FGridWorkingState& State,
-			const FIntPoint A,
-			const FIntPoint B,
-			FZeroEscapeGenerationReport& OutReport)
-		{
-			if (!IsInsideGrid(A, State.GridSize) || !IsInsideGrid(B, State.GridSize))
-			{
-				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
-					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("房间外墙约束指向了网格外。"));
-			}
-
-			const int32 Direction = DirectionFromDelta(B - A);
-			if (Direction == INDEX_NONE)
-			{
-				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
-					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("房间外墙只允许单步四邻域边。"));
-			}
-
-			FGridCellConstraint& CellA = ConstraintAt(State, A);
-			FGridCellConstraint& CellB = ConstraintAt(State, B);
-			const uint8 ABit = DirectionBit(Direction);
-			const uint8 BBit = DirectionBit(OppositeDirection(Direction));
-			if ((CellA.RequiredOpenMask & ABit) != 0 || (CellB.RequiredOpenMask & BBit) != 0)
-			{
-				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
-					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("房间封闭边覆盖了已雕刻的 Gate/骨架开口。"));
-			}
-
-			CellA.RequiredClosedMask |= ABit;
-			CellB.RequiredClosedMask |= BBit;
-			return true;
-		}
-
-		/**
-		 * 在无障碍矩形网格中雕刻确定性正交路线。Seed 只决定先 X 还是先 Y；
-		 * 两种次序都是构造性成功，因此不需要 A* Open Set 或路线重试。
-		 */
-		bool CarveOrthogonalRoute(
-			FGridWorkingState& State,
-			const FIntPoint From,
-			const FIntPoint To,
-			const bool bHorizontalFirst,
-			FZeroEscapeGenerationReport& OutReport)
-		{
-			if (!IsInsideGrid(From, State.GridSize) || !IsInsideGrid(To, State.GridSize))
-			{
-				return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
-					EZeroEscapeGenerationFailure::CapacityInsufficient,
-					TEXT("正交路线端点超出已验证 Grid 容量。"));
-			}
-
-			FIntPoint Current = From;
-			MarkRequired(State, Current);
-			auto StepAxis = [&](const bool bHorizontal) -> bool
-			{
-				const int32 Target = bHorizontal ? To.X : To.Y;
-				while ((bHorizontal ? Current.X : Current.Y) != Target)
-				{
-					FIntPoint Next = Current;
-					int32& Axis = bHorizontal ? Next.X : Next.Y;
-					Axis += Target > Axis ? 1 : -1;
-					if (!AddRequiredOpening(State, Current, Next, OutReport))
-					{
-						return false;
-					}
-					Current = Next;
-				}
-				return true;
-			};
-
-			return bHorizontalFirst
-				? StepAxis(true) && StepAxis(false)
-				: StepAxis(false) && StepAxis(true);
-		}
-
-		/** 就地 Fisher-Yates 洗牌；所有随机消费都由显式 Domain 子流供给。 */
-		template <typename ElementType>
-		void ShuffleArray(TArray<ElementType>& Values, FRandomStream& Random)
-		{
-			for (int32 Index = Values.Num() - 1; Index > 0; --Index)
-			{
-				Values.Swap(Index, Random.RandRange(0, Index));
-			}
-		}
-
 		/** 初始化完整 row-major Constraint Grid，并封闭四周越界方向。 */
 		void InitializeConstraintGrid(const FIntPoint GridSize, FGridWorkingState& OutState)
 		{
@@ -312,7 +193,8 @@ namespace ZeroEscape::LevelGeneration
 					FGridCellConstraint& Cell = OutState.Constraints[Y * GridSize.X + X];
 					Cell = {};
 					Cell.Coordinate = FIntPoint(X, Y);
-					Cell.Domain = EGridCellDomain::Outside;
+					// V4 让完整 Grid 参与 WFC；只有最终被折叠为 Empty 的格子才不进入可行走计划。
+					Cell.Domain = EGridCellDomain::Optional;
 					Cell.RegionId = INDEX_NONE;
 					Cell.RegionKind = EZeroEscapeGridRegionKind::Corridor;
 					if (Y == GridSize.Y - 1) Cell.RequiredClosedMask |= DirectionBit(0);
@@ -324,7 +206,7 @@ namespace ZeroEscape::LevelGeneration
 		}
 
 		/**
-		 * 验证 V3.2 固定尺度、网格安全边界和可用进度槽容量。
+		 * 验证 V4 固定尺度、WFC 预算、全局布局上下界和可用进度槽容量。
 		 * 这一阶段不使用 Seed，保证合法 Profile 不会在地标摆放时 rejection sampling。
 		 */
 		bool ValidateRequestAndSettings(
@@ -332,23 +214,30 @@ namespace ZeroEscape::LevelGeneration
 			const FGridLayoutSettings& Settings,
 			FZeroEscapeGenerationReport& OutReport)
 		{
+			const int64 GridCellCount = static_cast<int64>(Settings.GridSize.X) * Settings.GridSize.Y;
 			if (Settings.GridSize.X < 14 || Settings.GridSize.Y < 10
 				|| Settings.LogicalTileSizeCm != 600 || Settings.RoomSizeTiles != 2
 				|| Settings.ObjectiveProgressBandCount <= 0
-				|| Settings.OptionalEnvelopeRadius < 0
+				|| Settings.ObjectiveProgressBandCount
+					> ZeroEscape::GenerationLimits::MaxObjectiveProgressBands
+				|| Settings.MinWalkableCellCount <= 0
+				|| Settings.MaxWalkableCellCount < Settings.MinWalkableCellCount
+				|| Settings.MaxWalkableCellCount > GridCellCount
+				|| Settings.MaxConsecutiveStraightTiles <= 0
+				|| Settings.MaxConsecutiveStraightTiles > FMath::Max(Settings.GridSize.X, Settings.GridSize.Y)
+				|| Settings.MaxWfcCandidateAttempts <= 0
+				|| Settings.MaxWfcBacktrackCount <= 0
+				|| Settings.MaxWfcSolveAttempts <= 0
+				|| Settings.MaxWfcSolveAttempts > 16
+				|| Settings.MaxWfcCandidateAttempts < Settings.MaxWfcSolveAttempts
+				|| Settings.MaxWfcBacktrackCount < Settings.MaxWfcSolveAttempts
 				|| Settings.MaxRequiredRouteLengthTiles <= 0
 				|| Settings.MaxRequiredRouteExtraTiles < 0
 				|| !FMath::IsFinite(Settings.GameplayAnchorHeightCm))
 			{
 				return Fail(OutReport, EZeroEscapeGenerationStage::Configuration,
 					EZeroEscapeGenerationFailure::InvalidConfiguration,
-					TEXT("Grid V3.2 需要至少 14x10 网格、600 cm Tile、2x2 房间与有效路线上限。"));
-			}
-			if (Request.MaxOptionalSideBranches < 0 || Request.MaxOptionalForwardLinks < 0)
-			{
-				return Fail(OutReport, EZeroEscapeGenerationStage::Configuration,
-					EZeroEscapeGenerationFailure::InvalidConfiguration,
-					TEXT("Optional 侧支和前向连接上限不能为负数。"));
+					TEXT("Grid V4 需要有效的尺度、非空格数量、连续直线、WFC 尝试/总预算与路线上限。"));
 			}
 
 			int32 StartCount = 0;
@@ -466,8 +355,8 @@ namespace ZeroEscape::LevelGeneration
 
 			const int32 MinRoomBaseX = 4;
 			/**
-			 * 同带上房会在 BaseX 基础上右移一格，使上下目标分别占用相邻且不重复的主干边。
-			 * 因此右侧容量必须额外预留这一格；再扣除房宽和四格结构/可选连接缓冲。
+			 * 同带上房会在 BaseX 基础上右移一格，避免上下目标房重叠。
+			 * 因此右侧容量必须额外预留这一格；再扣除房宽和 WFC 连通空间缓冲。
 			 */
 			const int32 MaxRoomBaseX = Settings.GridSize.X - Settings.RoomSizeTiles - 5;
 			const int32 RoomSpan = MaxRoomBaseX - MinRoomBaseX;
@@ -484,20 +373,20 @@ namespace ZeroEscape::LevelGeneration
 			const int32 CenterY = Settings.GridSize.Y / 2;
 			const int32 LowerLaneY = CenterY - Settings.RoomSizeTiles;
 			const int32 UpperLaneY = CenterY + 1;
-			// 两条 Lane 必须紧邻中央主干，但外侧仍需保留至少一格，供房间封闭边和可选侧向连接使用。
+			// 两条 Lane 保持在中部，但外侧仍需至少一格，供 WFC 自主选择房间的外部连接。
 			if (LowerLaneY < 1
 				|| UpperLaneY + Settings.RoomSizeTiles > Settings.GridSize.Y - 1)
 			{
 				return Fail(OutReport, EZeroEscapeGenerationStage::Configuration,
 					EZeroEscapeGenerationFailure::CapacityInsufficient,
-					TEXT("Grid Y 尺寸无法在中央主干两侧容纳相邻 2x2 房间 Lane 和外侧缓冲格。"));
+					TEXT("Grid Y 尺寸无法容纳相邻 2x2 房间 Lane 和外侧连接缓冲格。"));
 			}
 			return true;
 		}
 
 		/**
 		 * 把 Progression Landmark 嵌入完全可数的进度槽。
-		 * Start/Exit 固定在中央主干上下相邻行；目标房固定紧贴主干，布局不再随机选择主干折向。
+		 * 这里只确定语义位置和房间内部，不预先规定 Start、房间与 Exit 之间的路线形状。
 		 */
 		bool EmbedLandmarks(
 			const FGridLayoutRequest& Request,
@@ -574,23 +463,15 @@ namespace ZeroEscape::LevelGeneration
 				{
 					FObjectiveRoomPlacement Room;
 					Room.Landmark = Objective;
-					/**
-					 * 同一进度带若同时有上下两个房间，上房向右错开一格：下房环路替代
-					 * Backbone[BaseX, BaseX+1]，上房替代 [BaseX+1, BaseX+2]。
-					 * 两个目标因此不会共用同一主干边，CollectAll 的额外成本可严格按每目标 2 格累加。
-					 */
+					// 同一进度带若同时有上下两个房间，上房向右错开一格，避免两个 2x2 区域重叠。
 					Room.MinCoordinate = FIntPoint(
 						BaseRoomX + Objective.LaneIndex,
 						Objective.LaneIndex == 0 ? LowerLaneY : UpperLaneY);
-					/**
-					 * Anchor 固定放在朝向主干的左侧 Gate Cell。
-					 * 对 2x2 房而言，玩家可用“主干左格 -> Anchor -> 房内右格 -> 主干右格”穿过房间；
-					 * 相比主干原本的一条边只多 2 步，因此收集单个目标不会产生长距离往返。
-					 */
-					const int32 NearBackboneLocalY = Objective.LaneIndex == 0
+					// Anchor 放在房间靠网格中部的一侧；外部入口数量与方向仍由 WFC 决定。
+					const int32 NearCenterLocalY = Objective.LaneIndex == 0
 						? Settings.RoomSizeTiles - 1
 						: 0;
-					Room.AnchorCoordinate = Room.MinCoordinate + FIntPoint(0, NearBackboneLocalY);
+					Room.AnchorCoordinate = Room.MinCoordinate + FIntPoint(0, NearCenterLocalY);
 					Room.RegionId = NextObjectiveRegionId++;
 					OutState.ObjectiveRooms.Add(MoveTemp(Room));
 				}
@@ -605,67 +486,20 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
-		/** 检查坐标是否在指定房间的半开 2D 范围内。 */
-		bool IsInsideRoom(
-			const FIntPoint Coordinate,
-			const FObjectiveRoomPlacement& Room,
-			const int32 RoomSizeTiles)
-		{
-			return Coordinate.X >= Room.MinCoordinate.X
-				&& Coordinate.Y >= Room.MinCoordinate.Y
-				&& Coordinate.X < Room.MinCoordinate.X + RoomSizeTiles
-				&& Coordinate.Y < Room.MinCoordinate.Y + RoomSizeTiles;
-		}
-
 		/**
-		 * 先雕刻固定中央横向主干，再构造 2x2 房内部边和两扇朝向主干的固定 Gate。
-		 * 两扇 Gate 让每个目标房成为替代一条主干边的可穿行环路；选中的少量房间还会在
-		 * 靠 Exit 的一侧增加第三扇可选 Gate，但该可选复杂度不再承担基础可解性。
+		 * 把 Start、Exit 与 Objective 房内部提升为 Required，并只固定房间内部开口。
+		 * 房间外部入口与地标之间的路线全部交给 WFC；这样不会再预雕刻固定横向主干。
 		 */
-		bool CarveRequiredSkeleton(
-			const FGridLayoutRequest& Request,
+		bool ApplyLandmarkConstraints(
 			const FGridLayoutSettings& Settings,
-			const int32 MasterSeed,
 			FGridWorkingState& State,
 			FZeroEscapeGenerationReport& OutReport)
 		{
-			/**
-			 * 主干固定在 CenterY：Start 先向上连接一格，Exit 再向上连接一格。
-			 * 这样 Start/Exit 仍位于中央上下相邻行，但所有目标房都能以相同的双 Gate 契约
-			 * 直接接入一条不随 Seed 改变折向的横向主干。
-			 */
-			State.BackboneY = Settings.GridSize.Y / 2;
-			const FIntPoint StartBackbone(State.StartCoordinate.X, State.BackboneY);
-			const FIntPoint ExitBackbone(State.ExitCoordinate.X, State.BackboneY);
-			if (!AddRequiredOpening(State, State.StartCoordinate, StartBackbone, OutReport)
-				|| !CarveOrthogonalRoute(State, StartBackbone, ExitBackbone, true, OutReport)
-				|| !AddRequiredOpening(State, ExitBackbone, State.ExitCoordinate, OutReport))
-			{
-				return false;
-			}
 			MarkRequired(State, State.StartCoordinate, 1, EZeroEscapeGridRegionKind::Start);
 			MarkRequired(State, State.ExitCoordinate, 2, EZeroEscapeGridRegionKind::Exit);
 
-			TArray<int32> ForwardRoomIndices;
-			ForwardRoomIndices.Reserve(State.ObjectiveRooms.Num());
-			for (int32 Index = 0; Index < State.ObjectiveRooms.Num(); ++Index)
+			for (FObjectiveRoomPlacement& Room : State.ObjectiveRooms)
 			{
-				ForwardRoomIndices.Add(Index);
-			}
-			FRandomStream OptionalRandom = FGenerationCore::MakeRandomStream(
-				MasterSeed, Request.Signature.AlgorithmVersion, ERandomDomain::OptionalLayout, 0);
-			ShuffleArray(ForwardRoomIndices, OptionalRandom);
-			const int32 ForwardRoomCount = FMath::Min(
-				Request.MaxOptionalForwardLinks, ForwardRoomIndices.Num());
-			TSet<int32> ForwardRooms;
-			for (int32 Index = 0; Index < ForwardRoomCount; ++Index)
-			{
-				ForwardRooms.Add(ForwardRoomIndices[Index]);
-			}
-
-			for (int32 RoomIndex = 0; RoomIndex < State.ObjectiveRooms.Num(); ++RoomIndex)
-			{
-				FObjectiveRoomPlacement& Room = State.ObjectiveRooms[RoomIndex];
 				for (int32 LocalY = 0; LocalY < Settings.RoomSizeTiles; ++LocalY)
 				{
 					for (int32 LocalX = 0; LocalX < Settings.RoomSizeTiles; ++LocalX)
@@ -684,168 +518,8 @@ namespace ZeroEscape::LevelGeneration
 						}
 					}
 				}
-
-				/**
-				 * 每个 2x2 房的朝主干一侧固定开放两扇 Gate，分别对应房间的 LocalX=0/1。
-				 * 两个 Gate 的 Outside Cell 正好是主干上相邻的两个 Cell，房间内部横向开口则
-				 * 构成一条成本为 3 的替代路径；相对被替代的主干边成本只增加 2。
-				 */
-				const bool bRoomAboveBackbone = Room.MinCoordinate.Y > State.BackboneY;
-				const int32 NearBackboneLocalY = bRoomAboveBackbone
-					? 0
-					: Settings.RoomSizeTiles - 1;
-				for (int32 GateLocalX = 0; GateLocalX < Settings.RoomSizeTiles; ++GateLocalX)
-				{
-					const FIntPoint GateInside = Room.MinCoordinate
-						+ FIntPoint(GateLocalX, NearBackboneLocalY);
-					const FIntPoint GateOutside(GateInside.X, State.BackboneY);
-					if (!AddRequiredOpening(State, GateInside, GateOutside, OutReport))
-					{
-						return false;
-					}
-					Room.GateEdges.Add(MakeGridEdge(GateInside, GateOutside));
-				}
-
-				if (ForwardRooms.Contains(RoomIndex))
-				{
-					// 第三 Gate 也位于朝主干的一排；随机域只决定哪些房间获得它，不随机基础 Gate 位置。
-					const int32 GateLocalY = NearBackboneLocalY;
-					const FIntPoint ForwardInside(
-						Room.MinCoordinate.X + Settings.RoomSizeTiles - 1,
-						Room.MinCoordinate.Y + GateLocalY);
-					const FIntPoint ForwardOutside = ForwardInside + FIntPoint(1, 0);
-					if (!AddRequiredOpening(State, ForwardInside, ForwardOutside, OutReport))
-					{
-						return false;
-					}
-					Room.GateEdges.Add(MakeGridEdge(ForwardInside, ForwardOutside));
-					const FIntPoint ForwardTarget(ForwardOutside.X, State.BackboneY);
-					if (!CarveOrthogonalRoute(State, ForwardOutside, ForwardTarget, false, OutReport))
-					{
-						return false;
-					}
-				}
-			}
-
-			// Gate 全部确定后才封闭其余房间周界，避免先封墙再开门的人为冲突。
-			for (FObjectiveRoomPlacement& Room : State.ObjectiveRooms)
-			{
-				for (int32 LocalY = 0; LocalY < Settings.RoomSizeTiles; ++LocalY)
-				{
-					for (int32 LocalX = 0; LocalX < Settings.RoomSizeTiles; ++LocalX)
-					{
-						const FIntPoint Cell = Room.MinCoordinate + FIntPoint(LocalX, LocalY);
-						for (int32 Direction = 0; Direction < 4; ++Direction)
-						{
-							const FIntPoint Neighbor = ZeroEscape::Grid::Step(
-								Cell, static_cast<uint8>(Direction));
-							if (IsInsideRoom(Neighbor, Room, Settings.RoomSizeTiles))
-							{
-								continue;
-							}
-							const FGridEdgeKey Edge = MakeGridEdge(Cell, Neighbor);
-							if (!Room.GateEdges.Contains(Edge)
-								&& !AddRequiredClosedEdge(State, Cell, Neighbor, OutReport))
-							{
-								return false;
-							}
-						}
-					}
-				}
 			}
 			return true;
-		}
-
-		/**
-		 * 从必达骨架的 Outside 邻格中选择有限中心，将附近 Outside 格放宽为 Optional。
-		 * MaxOptionalSideBranches 是候选区上限；WFC 仍可以选 Empty，所以这里不实施死路配额。
-		 */
-		void BuildOptionalEnvelope(
-			const FGridLayoutRequest& Request,
-			const FGridLayoutSettings& Settings,
-			const int32 MasterSeed,
-			FGridWorkingState& State)
-		{
-			if (Request.MaxOptionalSideBranches <= 0 || Settings.OptionalEnvelopeRadius <= 0)
-			{
-				return;
-			}
-
-			TSet<FIntPoint> UniqueCandidates;
-			for (const FGridCellConstraint& Cell : State.Constraints)
-			{
-				if (Cell.Domain != EGridCellDomain::Required
-					|| Cell.RegionKind == EZeroEscapeGridRegionKind::Objective)
-				{
-					continue;
-				}
-				for (int32 Direction = 0; Direction < 4; ++Direction)
-				{
-					const FIntPoint Neighbor = ZeroEscape::Grid::Step(
-						Cell.Coordinate, static_cast<uint8>(Direction));
-					if (IsInsideGrid(Neighbor, State.GridSize)
-						&& ConstraintAt(State, Neighbor).Domain == EGridCellDomain::Outside)
-					{
-						UniqueCandidates.Add(Neighbor);
-					}
-				}
-			}
-
-			TArray<FIntPoint> Candidates = UniqueCandidates.Array();
-			Candidates.Sort(CoordinateLess);
-			FRandomStream OptionalRandom = FGenerationCore::MakeRandomStream(
-				MasterSeed, Request.Signature.AlgorithmVersion, ERandomDomain::OptionalLayout, 1);
-			ShuffleArray(Candidates, OptionalRandom);
-			TArray<FIntPoint> SelectedCenters;
-			const int32 MinimumCenterDistance = Settings.OptionalEnvelopeRadius * 2 + 1;
-			for (const FIntPoint Candidate : Candidates)
-			{
-				bool bTooClose = false;
-				for (const FIntPoint Existing : SelectedCenters)
-				{
-					if (FMath::Abs(Candidate.X - Existing.X) + FMath::Abs(Candidate.Y - Existing.Y)
-						< MinimumCenterDistance)
-					{
-						bTooClose = true;
-						break;
-					}
-				}
-				if (!bTooClose)
-				{
-					SelectedCenters.Add(Candidate);
-					if (SelectedCenters.Num() >= Request.MaxOptionalSideBranches)
-					{
-						break;
-					}
-				}
-			}
-
-			for (const FIntPoint Center : SelectedCenters)
-			{
-				for (int32 DeltaY = -Settings.OptionalEnvelopeRadius;
-					DeltaY <= Settings.OptionalEnvelopeRadius; ++DeltaY)
-				{
-					for (int32 DeltaX = -Settings.OptionalEnvelopeRadius;
-						DeltaX <= Settings.OptionalEnvelopeRadius; ++DeltaX)
-					{
-						if (FMath::Abs(DeltaX) + FMath::Abs(DeltaY) > Settings.OptionalEnvelopeRadius)
-						{
-							continue;
-						}
-						const FIntPoint Coordinate = Center + FIntPoint(DeltaX, DeltaY);
-						if (IsInsideGrid(Coordinate, State.GridSize))
-						{
-							FGridCellConstraint& Cell = ConstraintAt(State, Coordinate);
-							if (Cell.Domain == EGridCellDomain::Outside)
-							{
-								Cell.Domain = EGridCellDomain::Optional;
-								Cell.RegionId = 0;
-								Cell.RegionKind = EZeroEscapeGridRegionKind::Corridor;
-							}
-						}
-					}
-				}
-			}
 		}
 
 		/** 将 WFC 的完整稠密输出转换为 Plan 的非空稀疏 Cells，并建立地标/Anchor 稳定绑定。 */
@@ -853,7 +527,7 @@ namespace ZeroEscape::LevelGeneration
 			const FGridLayoutRequest& Request,
 			const FGridLayoutSettings& Settings,
 			const FGridWorkingState& State,
-			const TArray<uint8>& OpeningMasks,
+			const TConstArrayView<uint8> OpeningMasks,
 			FZeroEscapeGeneratedLevelPlan& OutPlan,
 			FZeroEscapeGenerationReport& OutReport)
 		{
@@ -968,7 +642,13 @@ namespace ZeroEscape::LevelGeneration
 			{
 				return A.StableObjectiveId < B.StableObjectiveId;
 			});
-			return OutPlan.CanonicalProgressionHash != 0;
+			if (OutPlan.CanonicalProgressionHash == 0)
+			{
+				return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::SolverInvariantViolation,
+					TEXT("规范 Progression Hash 不能为 0。"));
+			}
+			return true;
 		}
 
 		/** 用当前 OpeningMask 从 Start 做 BFS，返回稀疏 Cell 索引到最短距离的数组。 */
@@ -1013,37 +693,6 @@ namespace ZeroEscape::LevelGeneration
 				}
 			}
 			return Distances;
-		}
-
-		/**
-		 * 移除与 Start 不连通的纯 Optional 非空分量。Required 格不在此处修复，
-		 * 会保留给后续全局验证作为明确的不变量错误。
-		 */
-		void PruneDisconnectedOptional(
-			const FGridWorkingState& State,
-			FZeroEscapeGeneratedLevelPlan& Plan,
-			FZeroEscapeGenerationReport& OutReport)
-		{
-			TMap<FIntPoint, int32> CellByCoordinate;
-			const TArray<int32> Distances = BuildDistances(Plan, Plan.StartCoordinate, CellByCoordinate);
-			TArray<FZeroEscapeCollapsedTile> Kept;
-			Kept.Reserve(Plan.Cells.Num());
-			for (int32 Index = 0; Index < Plan.Cells.Num(); ++Index)
-			{
-				const FZeroEscapeCollapsedTile& Cell = Plan.Cells[Index];
-				const FGridCellConstraint& Constraint = ConstraintAt(State, Cell.GridCoordinate);
-				if (Distances[Index] == INDEX_NONE && Constraint.Domain == EGridCellDomain::Optional)
-				{
-					++OutReport.Metrics.PrunedOptionalCellCount;
-					continue;
-				}
-				Kept.Add(Cell);
-			}
-			for (int32 Index = 0; Index < Kept.Num(); ++Index)
-			{
-				Kept[Index].StableCellId = Index;
-			}
-			Plan.Cells = MoveTemp(Kept);
 		}
 
 		/** 根据非空 Mask 形态更新观测指标；任何计数为 0 都不是失败条件。 */
@@ -1151,6 +800,16 @@ namespace ZeroEscape::LevelGeneration
 			FZeroEscapeGenerationReport& OutReport)
 		{
 			TMap<FIntPoint, int32> CellByCoordinate;
+			if (Plan.Cells.Num() < Settings.MinWalkableCellCount
+				|| Plan.Cells.Num() > Settings.MaxWalkableCellCount)
+			{
+				return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::SolverInvariantViolation,
+					TEXT("最终非空 Tile 数量越过了已传播的 Count 约束。"),
+					Plan.Cells.Num(), Plan.Cells.Num() < Settings.MinWalkableCellCount
+						? Settings.MinWalkableCellCount
+						: Settings.MaxWalkableCellCount);
+			}
 			for (int32 Index = 0; Index < Plan.Cells.Num(); ++Index)
 			{
 				const FZeroEscapeCollapsedTile& Cell = Plan.Cells[Index];
@@ -1172,8 +831,51 @@ namespace ZeroEscape::LevelGeneration
 				{
 					return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
 						EZeroEscapeGenerationFailure::SolverInvariantViolation,
-						TEXT("WFC 或剪枝丢失了必达骨架 Cell。"),
+						TEXT("WFC 丢失了 Required Cell。"),
 						ToCellIndex(Constraint.Coordinate, State.GridSize));
+				}
+			}
+
+			/**
+			 * 独立复核连续直线约束，避免约束传播实现退化时把非法叶节点当作可提交计划。
+			 * 横向只统计同时具备 E/W 开口的贯通格，纵向同理统计 N/S 贯通格。
+			 */
+			const uint8 HorizontalThroughMask = DirectionBit(1) | DirectionBit(3);
+			const uint8 VerticalThroughMask = DirectionBit(0) | DirectionBit(2);
+			for (int32 Y = 0; Y < Plan.GridSize.Y; ++Y)
+			{
+				int32 ConsecutiveCount = 0;
+				for (int32 X = 0; X < Plan.GridSize.X; ++X)
+				{
+					const int32* CellIndex = CellByCoordinate.Find(FIntPoint(X, Y));
+					const bool bHorizontalThrough = CellIndex != nullptr
+						&& (Plan.Cells[*CellIndex].OpeningMask & HorizontalThroughMask) == HorizontalThroughMask;
+					ConsecutiveCount = bHorizontalThrough ? ConsecutiveCount + 1 : 0;
+					if (ConsecutiveCount > Settings.MaxConsecutiveStraightTiles)
+					{
+						return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
+							EZeroEscapeGenerationFailure::SolverInvariantViolation,
+							TEXT("最终布局存在超过上限的水平连续直行 Tile。"),
+							ConsecutiveCount, Settings.MaxConsecutiveStraightTiles);
+					}
+				}
+			}
+			for (int32 X = 0; X < Plan.GridSize.X; ++X)
+			{
+				int32 ConsecutiveCount = 0;
+				for (int32 Y = 0; Y < Plan.GridSize.Y; ++Y)
+				{
+					const int32* CellIndex = CellByCoordinate.Find(FIntPoint(X, Y));
+					const bool bVerticalThrough = CellIndex != nullptr
+						&& (Plan.Cells[*CellIndex].OpeningMask & VerticalThroughMask) == VerticalThroughMask;
+					ConsecutiveCount = bVerticalThrough ? ConsecutiveCount + 1 : 0;
+					if (ConsecutiveCount > Settings.MaxConsecutiveStraightTiles)
+					{
+						return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
+							EZeroEscapeGenerationFailure::SolverInvariantViolation,
+							TEXT("最终布局存在超过上限的垂直连续直行 Tile。"),
+							ConsecutiveCount, Settings.MaxConsecutiveStraightTiles);
+					}
 				}
 			}
 
@@ -1201,7 +903,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
 						EZeroEscapeGenerationFailure::SolverInvariantViolation,
-						TEXT("最终 Required Cell 没有保留骨架开口或穿过了必闭边。"),
+						TEXT("最终 Required Cell 没有保留必开边或穿过了必闭边。"),
 						Cell.StableCellId);
 				}
 			}
@@ -1214,7 +916,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
 						EZeroEscapeGenerationFailure::SolverInvariantViolation,
-						TEXT("剪枝后仍有非空 Tile 不可从 Start 到达。"), Index);
+						TEXT("最终布局仍有非空 Tile 不可从 Start 到达。"), Index);
 				}
 			}
 			for (const FZeroEscapeLandmarkBinding& Binding : Plan.LandmarkBindings)
@@ -1270,6 +972,48 @@ namespace ZeroEscape::LevelGeneration
 			}
 			return true;
 		}
+
+		/**
+		 * 把一棵 WFC 搜索树的纯搜索指标累加到整局总计。
+		 *
+		 * Walkable、Planning 和实例化字段由 Grid/Runtime 在成功提交后写入，不能在重试间相加。
+		 */
+		void AccumulateWfcSearchMetrics(
+			FZeroEscapeGenerationMetrics& InOutTotal,
+			const FZeroEscapeGenerationMetrics& Attempt)
+		{
+			InOutTotal.WfcSolveAttemptCount += Attempt.WfcSolveAttemptCount;
+			InOutTotal.WfcObservationCount += Attempt.WfcObservationCount;
+			InOutTotal.WfcCandidateAttemptCount += Attempt.WfcCandidateAttemptCount;
+			InOutTotal.WfcPropagationCount += Attempt.WfcPropagationCount;
+			InOutTotal.WfcContradictionCount += Attempt.WfcContradictionCount;
+			InOutTotal.WfcLocalAdjacencyContradictionCount +=
+				Attempt.WfcLocalAdjacencyContradictionCount;
+			InOutTotal.WfcCountContradictionCount += Attempt.WfcCountContradictionCount;
+			InOutTotal.WfcMaxConsecutiveContradictionCount +=
+				Attempt.WfcMaxConsecutiveContradictionCount;
+			InOutTotal.WfcConnectedContradictionCount +=
+				Attempt.WfcConnectedContradictionCount;
+			InOutTotal.WfcGlobalBanContradictionCount +=
+				Attempt.WfcGlobalBanContradictionCount;
+			InOutTotal.WfcBacktrackCount += Attempt.WfcBacktrackCount;
+			InOutTotal.WfcCollapsedCandidateRejectionCount +=
+				Attempt.WfcCollapsedCandidateRejectionCount;
+			InOutTotal.WfcInvariantFailureCount += Attempt.WfcInvariantFailureCount;
+		}
+
+		/** 把整局总预算稳定地平均分给各棵搜索树；全部分片之和严格等于 TotalBudget。 */
+		int32 GetWfcAttemptBudget(
+			const int32 TotalBudget,
+			const int32 AttemptIndex,
+			const int32 AttemptCount)
+		{
+			check(AttemptCount > 0 && AttemptIndex >= 0 && AttemptIndex < AttemptCount);
+			check(TotalBudget >= AttemptCount);
+			const int32 BaseBudget = TotalBudget / AttemptCount;
+			const int32 Remainder = TotalBudget % AttemptCount;
+			return BaseBudget + (AttemptIndex < Remainder ? 1 : 0);
+		}
 	}
 
 	bool FGridLayoutSolver::Solve(
@@ -1290,23 +1034,9 @@ namespace ZeroEscape::LevelGeneration
 
 		FGridWorkingState State;
 		if (!EmbedLandmarks(Request, Settings, State, OutReport)
-			|| !CarveRequiredSkeleton(Request, Settings, MasterSeed, State, OutReport))
+			|| !ApplyLandmarkConstraints(Settings, State, OutReport))
 		{
 			return false;
-		}
-		BuildOptionalEnvelope(Request, Settings, MasterSeed, State);
-		for (const FGridCellConstraint& Constraint : State.Constraints)
-		{
-			if (Constraint.Domain == EGridCellDomain::Required) ++OutReport.Metrics.RequiredCellCount;
-			else if (Constraint.Domain == EGridCellDomain::Optional) ++OutReport.Metrics.OptionalCellCount;
-		}
-
-		FString ConstraintError;
-		if (!FWfcSolver::ValidateGuaranteedSolvableConstraints(
-			Settings.GridSize, State.Constraints, ConstraintError))
-		{
-			return Fail(OutReport, EZeroEscapeGenerationStage::GridLayout,
-				EZeroEscapeGenerationFailure::SolverInvariantViolation, ConstraintError);
 		}
 
 		TStaticArray<FTileVariant, 16> StaticVariants;
@@ -1314,39 +1044,181 @@ namespace ZeroEscape::LevelGeneration
 		TArray<FTileVariant> Variants;
 		Variants.Reserve(16);
 		for (const FTileVariant& Variant : StaticVariants) Variants.Add(Variant);
-		FRandomStream WfcRandom = FGenerationCore::MakeRandomStream(
-			MasterSeed, Request.Signature.AlgorithmVersion, ERandomDomain::WfcLayout, 0);
-		TArray<uint8> OpeningMasks;
-		if (!FWfcSolver::Solve(
-			Settings.GridSize, State.Constraints, Variants, WfcRandom, OpeningMasks, OutReport))
+		FZeroEscapeWfcSolveSettings WfcSettings;
+		WfcSettings.StartCoordinate = State.StartCoordinate;
+		WfcSettings.MinWalkableCellCount = Settings.MinWalkableCellCount;
+		WfcSettings.MaxWalkableCellCount = Settings.MaxWalkableCellCount;
+		WfcSettings.MaxConsecutiveStraightTiles = Settings.MaxConsecutiveStraightTiles;
+
+		FZeroEscapeGeneratedLevelPlan AcceptedCandidate;
+		TArray<uint8> AcceptedOpeningMasks;
+		FZeroEscapeGenerationMetrics AggregateWfcMetrics;
+		bool bSolved = false;
+		for (int32 AttemptIndex = 0;
+			AttemptIndex < Settings.MaxWfcSolveAttempts;
+			++AttemptIndex)
 		{
-			return false;
+			/**
+			 * 有限重试沿用请求 Seed，只把 AttemptIndex 作为 WFC 随机域的稳定子流编号。
+			 * 因此同一 Signature 永远得到相同的尝试序列；它不是运行时偷偷换玩家 Seed。
+			 */
+			FRandomStream WfcRandom = FGenerationCore::MakeRandomStream(
+				MasterSeed,
+				Request.Signature.AlgorithmVersion,
+				ERandomDomain::WfcLayout,
+				AttemptIndex);
+			WfcSettings.MaxCandidateAttempts = GetWfcAttemptBudget(
+				Settings.MaxWfcCandidateAttempts,
+				AttemptIndex,
+				Settings.MaxWfcSolveAttempts);
+			WfcSettings.MaxBacktrackCount = GetWfcAttemptBudget(
+				Settings.MaxWfcBacktrackCount,
+				AttemptIndex,
+				Settings.MaxWfcSolveAttempts);
+
+			AcceptedCandidate = {};
+			FZeroEscapeGenerationReport FatalCandidateReport;
+			bool bHasFatalCandidateReport = false;
+			auto ValidateCollapsedCandidate = [&](const TConstArrayView<uint8> OpeningMasks)
+				-> FWfcCollapsedCandidateEvaluation
+			{
+				FZeroEscapeGeneratedLevelPlan Candidate;
+				FZeroEscapeGenerationReport CandidateReport;
+				if (!ExportCandidatePlan(
+						Request,
+						Settings,
+						State,
+						OpeningMasks,
+						Candidate,
+						CandidateReport))
+				{
+					FatalCandidateReport = MoveTemp(CandidateReport);
+					bHasFatalCandidateReport = true;
+					return FWfcCollapsedCandidateEvaluation::Fatal(
+						FatalCandidateReport.Message,
+						FatalCandidateReport.RelatedStableId);
+				}
+				if (!ValidateFinalPlan(Request, Settings, State, Candidate, CandidateReport))
+				{
+					const bool bRecoverableRouteFailure =
+						(CandidateReport.Failure == EZeroEscapeGenerationFailure::RequiredRouteTooLong
+							|| CandidateReport.Failure == EZeroEscapeGenerationFailure::LongRetraceLimitExceeded)
+						&& CandidateReport.ActualValue != INDEX_NONE;
+					if (bRecoverableRouteFailure)
+					{
+						return FWfcCollapsedCandidateEvaluation::Reject(
+							MoveTemp(CandidateReport.Message),
+							CandidateReport.ActualValue,
+							CandidateReport.LimitValue);
+					}
+
+					FatalCandidateReport = MoveTemp(CandidateReport);
+					bHasFatalCandidateReport = true;
+					return FWfcCollapsedCandidateEvaluation::Fatal(
+						FatalCandidateReport.Message,
+						FatalCandidateReport.RelatedStableId);
+				}
+
+				AcceptedCandidate = MoveTemp(Candidate);
+				return FWfcCollapsedCandidateEvaluation::Accept();
+			};
+
+			FZeroEscapeGenerationReport AttemptReport;
+			const bool bAttemptSolved = FWfcSolver::Solve(
+				Settings.GridSize,
+				State.Constraints,
+				WfcSettings,
+				Variants,
+				WfcRandom,
+				ValidateCollapsedCandidate,
+				AcceptedOpeningMasks,
+				AttemptReport);
+			AccumulateWfcSearchMetrics(AggregateWfcMetrics, AttemptReport.Metrics);
+
+			if (bAttemptSolved)
+			{
+				OutReport = MoveTemp(AttemptReport);
+				OutReport.Metrics = AggregateWfcMetrics;
+				bSolved = true;
+				break;
+			}
+
+			if (bHasFatalCandidateReport)
+			{
+				OutReport = MoveTemp(FatalCandidateReport);
+				OutReport.Metrics = AggregateWfcMetrics;
+				return false;
+			}
+
+			// 带回溯求解器返回 NoValid 时已经穷尽当前完整搜索树，属于无解证明；
+			// 只有分片预算耗尽才需要用同一请求 Seed 的下一个确定性子流继续搜索。
+			const bool bRetryableSearchFailure =
+				AttemptReport.Failure == EZeroEscapeGenerationFailure::SolverBudgetExhausted;
+			if (!bRetryableSearchFailure
+				|| AttemptIndex + 1 >= Settings.MaxWfcSolveAttempts)
+			{
+				OutReport = MoveTemp(AttemptReport);
+				OutReport.Metrics = AggregateWfcMetrics;
+				if (bRetryableSearchFailure)
+				{
+					const int32 CompletedAttemptCount = OutReport.Metrics.WfcSolveAttemptCount;
+					OutReport.RelatedStableId = INDEX_NONE;
+					// Actual/Limit 明确表示“已用尝试数/尝试上限”；候选和回溯使用量保留在 Metrics 与 Message。
+					// 这避免把未在各分片之间结转的剩余工作量误报成已经用满的整局候选预算。
+					OutReport.ActualValue = CompletedAttemptCount;
+					OutReport.LimitValue = Settings.MaxWfcSolveAttempts;
+					OutReport.Message = FString::Printf(
+						TEXT("已完成 %d/%d 次确定性 WFC 尝试，每次均达到其候选或回溯分片上限；候选尝试累计 %d/%d，回溯累计 %d/%d。"),
+						CompletedAttemptCount,
+						Settings.MaxWfcSolveAttempts,
+						OutReport.Metrics.WfcCandidateAttemptCount,
+						Settings.MaxWfcCandidateAttempts,
+						OutReport.Metrics.WfcBacktrackCount,
+						Settings.MaxWfcBacktrackCount);
+				}
+				else if (OutReport.Failure == EZeroEscapeGenerationFailure::NoValidWfcSolution)
+				{
+					// 单棵树的 NoValid 已是完整无解证明；若此前有预算失败尝试，
+					// ActualValue 仍应与已经替换进报告的整局矛盾累计值保持同一口径。
+					OutReport.ActualValue = OutReport.Metrics.WfcContradictionCount;
+					OutReport.LimitValue = 0;
+				}
+				return false;
+			}
 		}
 
-		FZeroEscapeGeneratedLevelPlan Candidate;
-		if (!ExportCandidatePlan(Request, Settings, State, OpeningMasks, Candidate, OutReport))
+		if (!bSolved)
 		{
-			return false;
+			return Fail(OutReport, EZeroEscapeGenerationStage::WfcLayout,
+				EZeroEscapeGenerationFailure::SolverInvariantViolation,
+				TEXT("WFC 尝试循环结束后既没有成功结果，也没有返回失败。"));
 		}
-		PruneDisconnectedOptional(State, Candidate, OutReport);
-		if (!ValidateFinalPlan(Request, Settings, State, Candidate, OutReport))
+		if (AcceptedOpeningMasks.Num() != State.Constraints.Num() || AcceptedCandidate.Cells.IsEmpty())
 		{
-			return false;
+			return Fail(OutReport, EZeroEscapeGenerationStage::WfcLayout,
+				EZeroEscapeGenerationFailure::SolverInvariantViolation,
+				TEXT("WFC 接受候选后没有原子移交完整稠密结果与非空计划。"),
+				AcceptedOpeningMasks.Num(), State.Constraints.Num());
 		}
-		BuildJunctionMetrics(Candidate);
-		Candidate.CanonicalLayoutHash = FGenerationCore::ComputeCanonicalLayoutHash(Candidate);
-		if (Candidate.CanonicalProgressionHash == 0 || Candidate.CanonicalLayoutHash == 0)
+
+		BuildJunctionMetrics(AcceptedCandidate);
+		AcceptedCandidate.CanonicalLayoutHash = FGenerationCore::ComputeCanonicalLayoutHash(AcceptedCandidate);
+		if (AcceptedCandidate.CanonicalLayoutHash == 0)
 		{
 			return Fail(OutReport, EZeroEscapeGenerationStage::GlobalValidation,
 				EZeroEscapeGenerationFailure::SolverInvariantViolation,
-				TEXT("规范 Progression/Layout Hash 不能为 0。"));
+				TEXT("规范 Layout Hash 不能为 0。"));
 		}
 
 		OutReport.Stage = EZeroEscapeGenerationStage::None;
 		OutReport.Failure = EZeroEscapeGenerationFailure::None;
+		OutReport.RelatedStableId = INDEX_NONE;
+		OutReport.ActualValue = 0;
+		OutReport.LimitValue = 0;
 		OutReport.Message.Reset();
+		OutReport.Metrics.WalkableCellCount = AcceptedCandidate.Cells.Num();
 		OutReport.Metrics.PlanningMilliseconds = (FPlatformTime::Seconds() - StartSeconds) * 1000.0;
-		OutPlan = MoveTemp(Candidate);
+		OutPlan = MoveTemp(AcceptedCandidate);
 		return true;
 	}
 

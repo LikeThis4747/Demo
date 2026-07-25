@@ -90,6 +90,19 @@ int32 FZeroEscapeWfcShapeWeights::GetWeightForMask(const uint8 OpeningMask) cons
 	}
 }
 
+int64 FZeroEscapeWfcShapeWeights::GetTotalNonEmptyVariantWeight() const
+{
+	/**
+	 * 15 个非空 mask 按旋转展开后分别为：4 个单出口、2 个直线、4 个转角、
+	 * 4 个 T 字和 1 个十字。使用 int64 计算，避免非法超大配置在校验前发生溢出。
+	 */
+	return 4LL * DeadEndWeight
+		+ 2LL * StraightWeight
+		+ 4LL * CornerWeight
+		+ 4LL * TJunctionWeight
+		+ CrossWeight;
+}
+
 bool FZeroEscapeWfcShapeWeights::IsConfigured(FString& OutError) const
 {
 	OutError.Reset();
@@ -97,6 +110,14 @@ bool FZeroEscapeWfcShapeWeights::IsConfigured(FString& OutError) const
 		|| CornerWeight <= 0 || TJunctionWeight <= 0 || CrossWeight <= 0)
 	{
 		OutError = TEXT("WfcShapeWeights 的六类权重都必须大于 0。");
+		return false;
+	}
+
+	const int64 TotalVariantWeight = static_cast<int64>(EmptyWeight)
+		+ GetTotalNonEmptyVariantWeight();
+	if (TotalVariantWeight > MAX_int32)
+	{
+		OutError = TEXT("WfcShapeWeights 的 16 个 Variant 总权重超过 int32 加权抽样上限。");
 		return false;
 	}
 	return true;
@@ -111,7 +132,8 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		return false;
 	}
 
-	const FIntPoint GridSize = SharedRouteConstraints.GridSize;
+	const FZeroEscapeSharedRouteConstraints& Route = SharedRouteConstraints;
+	const FIntPoint GridSize = Route.GridSize;
 	if (GridSize.X < ZeroEscape::GenerationLimits::MinGridAxis
 		|| GridSize.Y < ZeroEscape::GenerationLimits::MinGridAxis
 		|| GridSize.X > ZeroEscape::GenerationLimits::MaxGridAxis
@@ -121,63 +143,89 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		OutError = TEXT("SharedRouteConstraints.GridSize 超出运行时安全范围。");
 		return false;
 	}
+	const int32 GridCellCount = GridSize.X * GridSize.Y;
 
-	// Grid Solver 的构造性布局需要左右各留起终点/安全边界，并为上下两条 2x2 房间 Lane
-	// 保留中部骨架。把 14x10 门槛留在 Profile 边界，可避免合法资产进入随机阶段后才失败。
+	// 当前 Landmark 槽位仍需在左右为 Start/Exit 留安全边界，并在上下容纳两条 2x2 房间 Lane。
+	// 该检查只验证语义占格容量，不再证明或预刻任何中央主干路线。
 	if (GridSize.X < 14 || GridSize.Y < 10)
 	{
-		OutError = TEXT("V3.2 的 2x2 房间布局要求 GridSize 至少为 14x10。");
+		OutError = TEXT("V4 的 Start/Exit 与 2x2 Objective 槽位要求 GridSize 至少为 14x10。");
 		return false;
 	}
 
-	// V3.2 首版只接受已经测量并验证的 600/300 双层网格，避免再次引入不透明适配层。
-	if (!FMath::IsNearlyEqual(SharedRouteConstraints.LogicalTileSizeCm, 600.0)
-		|| SharedRouteConstraints.RoomSizeTiles != 2)
+	// 首版表现层只接受已经测量并验证的 600/300 双层网格，避免再次引入不透明适配层。
+	if (!FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0)
+		|| Route.RoomSizeTiles != 2)
 	{
-		OutError = TEXT("V3.2 要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
+		OutError = TEXT("V4 首版要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
 		return false;
 	}
 
-	if (SharedRouteConstraints.ObjectiveProgressBandCount <= 0
-		|| SharedRouteConstraints.OptionalEnvelopeRadius < 0
-		|| SharedRouteConstraints.MaxRequiredRouteLengthTiles <= 0
-		|| SharedRouteConstraints.MaxRequiredRouteExtraTiles < 0
-		|| !FMath::IsFinite(SharedRouteConstraints.GameplayAnchorHeightCm)
-		|| SharedRouteConstraints.GameplayAnchorHeightCm < 0.0)
+	if (Route.ObjectiveProgressBandCount <= 0
+		|| Route.ObjectiveProgressBandCount > ZeroEscape::GenerationLimits::MaxObjectiveProgressBands
+		|| Route.MaxRequiredRouteLengthTiles <= 0
+		|| Route.MaxRequiredRouteExtraTiles < 0
+		|| !FMath::IsFinite(Route.GameplayAnchorHeightCm)
+		|| Route.GameplayAnchorHeightCm < 0.0)
 	{
 		OutError = TEXT("SharedRouteConstraints 包含非法进度、路线或 Anchor 参数。");
 		return false;
 	}
 
+	if (Route.MinWalkableCellCount <= 0
+		|| Route.MaxWalkableCellCount < Route.MinWalkableCellCount
+		|| Route.MaxWalkableCellCount > GridCellCount)
+	{
+		OutError = TEXT("非空 Cell 数量必须满足 0 < MinWalkable <= MaxWalkable <= GridCells。");
+		return false;
+	}
+
+	if (Route.MaxConsecutiveStraightTiles <= 0
+		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y)
+		|| Route.MaxWfcCandidateAttempts <= 0
+		|| Route.MaxWfcBacktrackCount <= 0
+		|| Route.MaxWfcSolveAttempts <= 0
+		|| Route.MaxWfcSolveAttempts > 16
+		|| Route.MaxWfcCandidateAttempts < Route.MaxWfcSolveAttempts
+		|| Route.MaxWfcBacktrackCount < Route.MaxWfcSolveAttempts)
+	{
+		OutError = TEXT(
+			"连续轴向贯通上限或 WFC 尝试/候选/回溯预算配置非法；"
+			"总候选与总回溯预算必须至少能为每次尝试分配 1 次。");
+		return false;
+	}
+
 	// Objective 房沿 X 轴按进度带离散放置。每个 2x2 房之间至少留一格，左右还要保留
-	// Start/Exit 与安全边界；该公式与 Grid Solver 的构造性槽位完全一致。
+	// Start/Exit 与安全边界；这些只是 Landmark 占格约束，不再暗含一条固定连接路线。
 	const int32 MinRoomX = 4;
-	// 同带上房会向右错开一格，确保上下两房各自替代不同的主干边；右侧因此比旧单门布局
-	// 多预留一格。该值必须与 Grid Solver 的 MaxRoomBaseX 保持一致。
-	const int32 MaxRoomX = GridSize.X - SharedRouteConstraints.RoomSizeTiles - 5;
+	// 同一进度带的上下房在 X 轴错开一格，避免房间投影重叠；该值必须与 Grid Solver
+	// 的 Landmark 槽位公式保持一致，但不再承担固定 Gate 或主干边证明。
+	const int32 MaxRoomX = GridSize.X - Route.RoomSizeTiles - 5;
 	const int32 RoomSpan = MaxRoomX - MinRoomX;
-	const int32 MinimumBandSpacing = SharedRouteConstraints.RoomSizeTiles + 1;
+	const int32 MinimumBandSpacing = Route.RoomSizeTiles + 1;
 	if (MaxRoomX < MinRoomX
-		|| (SharedRouteConstraints.ObjectiveProgressBandCount > 1
-			&& RoomSpan < (SharedRouteConstraints.ObjectiveProgressBandCount - 1)
+		|| (Route.ObjectiveProgressBandCount > 1
+			&& RoomSpan < (Route.ObjectiveProgressBandCount - 1)
 				* MinimumBandSpacing))
 	{
 		OutError = TEXT("GridSize.X 无法容纳当前进度带数量、2x2 房间与安全间距。");
 		return false;
 	}
 
-	// 上下 Lane 紧邻中央主干；仍为地图外圈保留一格封闭边界。
+	// 上下 Lane 分列在中线两侧，并为地图外圈保留一格封闭边界。
 	const int32 CenterY = GridSize.Y / 2;
-	const int32 LowerLaneMinY = CenterY - SharedRouteConstraints.RoomSizeTiles;
+	const int32 LowerLaneMinY = CenterY - Route.RoomSizeTiles;
 	const int32 UpperLaneMinY = CenterY + 1;
 	if (LowerLaneMinY < 1
-		|| UpperLaneMinY + SharedRouteConstraints.RoomSizeTiles > GridSize.Y - 1)
+		|| UpperLaneMinY + Route.RoomSizeTiles > GridSize.Y - 1)
 	{
-		OutError = TEXT("GridSize.Y 无法容纳紧邻中央主干的上下 2x2 房间 Lane。");
+		OutError = TEXT("GridSize.Y 无法在中线两侧容纳上下 2x2 房间 Lane 与外圈边界。");
 		return false;
 	}
 
 	bool SeenDifficulties[3] = {false, false, false};
+	int32 SharedEmptyWeight = INDEX_NONE;
+	int64 SharedNonEmptyWeight = INDEX_NONE;
 	for (const FZeroEscapeDifficultyDefinition& Definition : Difficulties)
 	{
 		const int32 DifficultyIndex = static_cast<int32>(Definition.Difficulty);
@@ -189,21 +237,62 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		}
 		SeenDifficulties[DifficultyIndex] = true;
 
-		if (Definition.MaxOptionalSideBranches < 0
-			|| Definition.MaxOptionalForwardLinks < 0
-			|| Definition.ObjectiveCandidateCount < 0
+		if (Definition.ObjectiveCandidateCount < 0
 			|| Definition.ObjectiveCandidateCount > ZeroEscape::GenerationLimits::MaxObjectiveCandidates
 			|| Definition.RequiredObjectiveCount < 0
 			|| Definition.RequiredObjectiveCount > Definition.ObjectiveCandidateCount)
 		{
-			OutError = TEXT("DifficultyDefinition 的分支或 K/N 参数非法。");
+			OutError = TEXT("DifficultyDefinition 的 K/N 参数非法。");
 			return false;
 		}
 
-		const int32 RoomSlotCapacity = SharedRouteConstraints.ObjectiveProgressBandCount * 2;
+		const int32 RoomSlotCapacity = Route.ObjectiveProgressBandCount * 2;
 		if (Definition.ObjectiveCandidateCount > RoomSlotCapacity)
 		{
 			OutError = TEXT("ObjectiveCandidateCount 超过进度带上下房间槽容量。");
+			return false;
+		}
+
+		/**
+		 * Start、Exit 各占一格；每个候选 Objective 房固定占 RoomSizeTiles² 个 Required 格。
+		 * 这里只验证 MaxWalkable 能容纳所有固定语义格，不假定这些格之间如何连接。
+		 */
+		const int64 FixedNonEmptyCellCount = 2LL
+			+ static_cast<int64>(Definition.ObjectiveCandidateCount)
+				* Route.RoomSizeTiles * Route.RoomSizeTiles;
+		if (FixedNonEmptyCellCount > Route.MaxWalkableCellCount)
+		{
+			OutError = FString::Printf(
+				TEXT("难度 %d 至少需要 %lld 个 Start/Exit/Objective 非空格，超过 MaxWalkable=%d。"),
+				DifficultyIndex,
+				static_cast<long long>(FixedNonEmptyCellCount),
+				Route.MaxWalkableCellCount);
+			return false;
+		}
+
+		FString WeightError;
+		if (!Definition.WfcShapeWeights.IsConfigured(WeightError))
+		{
+			OutError = FString::Printf(
+				TEXT("难度 %d 的 WFC 权重非法：%s"),
+				DifficultyIndex,
+				*WeightError);
+			return false;
+		}
+
+		const int64 NonEmptyWeight =
+			Definition.WfcShapeWeights.GetTotalNonEmptyVariantWeight();
+		if (SharedEmptyWeight == INDEX_NONE)
+		{
+			SharedEmptyWeight = Definition.WfcShapeWeights.EmptyWeight;
+			SharedNonEmptyWeight = NonEmptyWeight;
+		}
+		else if (SharedEmptyWeight != Definition.WfcShapeWeights.EmptyWeight
+			|| SharedNonEmptyWeight != NonEmptyWeight)
+		{
+			OutError = TEXT(
+				"Easy、Normal、Hard 必须保持相同 EmptyWeight 与非空 Variant 总权重；"
+				"难度只能重新分配 DeadEnd/Straight/Corner/T/Cross 的形态比例。");
 			return false;
 		}
 	}
@@ -224,6 +313,18 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 			OutError = TEXT("Flows 包含空 Id、重复 Id 或非法版本。");
 			return false;
 		}
+
+		switch (Flow.CompletionRule)
+		{
+		case EZeroEscapeCompletionRule::EscapeOnly:
+		case EZeroEscapeCompletionRule::CollectAll:
+		case EZeroEscapeCompletionRule::CollectKOfN:
+			break;
+		default:
+			OutError = TEXT("Flows 包含未支持的 CompletionRule。");
+			return false;
+		}
+
 		StableFlowIds.Add(Flow.StableFlowId);
 		bHasEscapeOnly |= Flow.StableFlowId == TEXT("EscapeOnly")
 			&& Flow.CompletionRule == EZeroEscapeCompletionRule::EscapeOnly;
@@ -235,46 +336,8 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		return false;
 	}
 
-	// 双门房替代一条主干边，收集一个目标相对直走最多增加 2 格。把最坏 K 值与
-	// 两个共享路线上限在 Profile 阶段联合验证，正常 Seed 就不会在生成后才因路线预算失败。
-	for (const FZeroEscapeDifficultyDefinition& Difficulty : Difficulties)
-	{
-		for (const FZeroEscapeFlowDefinition& Flow : Flows)
-		{
-			int32 EffectiveRequiredCount = 0;
-			switch (Flow.CompletionRule)
-			{
-			case EZeroEscapeCompletionRule::EscapeOnly:
-				EffectiveRequiredCount = 0;
-				break;
-			case EZeroEscapeCompletionRule::CollectAll:
-				EffectiveRequiredCount = Difficulty.ObjectiveCandidateCount;
-				break;
-			case EZeroEscapeCompletionRule::CollectKOfN:
-				EffectiveRequiredCount = Difficulty.RequiredObjectiveCount;
-				break;
-			default:
-				OutError = TEXT("Flow 使用了未支持的 CompletionRule。");
-				return false;
-			}
-
-			const int32 ConstructiveExtraTiles = EffectiveRequiredCount * 2;
-			const int32 ConstructiveCompletionTiles = GridSize.X - 1 + ConstructiveExtraTiles;
-			if (ConstructiveExtraTiles > SharedRouteConstraints.MaxRequiredRouteExtraTiles
-				|| ConstructiveCompletionTiles > SharedRouteConstraints.MaxRequiredRouteLengthTiles)
-			{
-				OutError = FString::Printf(
-					TEXT("难度 %d / Flow %s 的构造路线至少需要总长 %d、额外 %d 格，超过共享上限。"),
-					static_cast<int32>(Difficulty.Difficulty),
-					*Flow.StableFlowId.ToString(),
-					ConstructiveCompletionTiles,
-					ConstructiveExtraTiles);
-				return false;
-			}
-		}
-	}
-
-	return WfcShapeWeights.IsConfigured(OutError);
+	// 路线长度由完整 WFC 候选的最终 BFS/K-of-N 验收决定；Profile 不再用固定主干公式证明可解。
+	return true;
 }
 
 bool UZeroEscapePresentationProfile::IsConfigured(

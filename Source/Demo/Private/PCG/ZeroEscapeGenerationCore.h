@@ -14,14 +14,13 @@
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** V3.2 纯 Grid/WFC 的确定性算法版本。 */
-	inline constexpr int32 GAlgorithmVersion = 3;
+	/** V4 全图 Grid-WFC、三项全局约束与有界回溯使用的确定性算法版本。 */
+	inline constexpr int32 GAlgorithmVersion = 4;
 
 	/** 相互隔离的随机子流；向一个阶段增加抽样不会扰动其他阶段。 */
 	enum class ERandomDomain : uint32
 	{
 		Landmark = 0x20B8A51Du,
-		OptionalLayout = 0x7D9C2E13u,
 		WfcLayout = 0x95E27B43u,
 		Presentation = 0xE13A5C89u
 	};
@@ -33,7 +32,6 @@ namespace ZeroEscape::LevelGeneration
 		FZeroEscapeSharedRouteConstraints SharedRouteConstraints;
 		TArray<FZeroEscapeDifficultyDefinition> Difficulties;
 		TArray<FZeroEscapeFlowDefinition> Flows;
-		FZeroEscapeWfcShapeWeights WfcShapeWeights;
 	};
 
 	/** 一次 Request 解析后的权威流程参数；Grid/WFC 不再回读 DataAsset。 */
@@ -45,8 +43,9 @@ namespace ZeroEscape::LevelGeneration
 		EZeroEscapeCompletionRule CompletionRule = EZeroEscapeCompletionRule::EscapeOnly;
 		int32 ObjectiveCandidateCount = 0;
 		int32 RequiredObjectiveCount = 0;
-		int32 MaxOptionalSideBranches = 0;
-		int32 MaxOptionalForwardLinks = 0;
+
+		/** 当前 Request 难度对应的形态权重快照；Grid/WFC 不再回读或索引 Difficulty 数组。 */
+		FZeroEscapeWfcShapeWeights WfcShapeWeights;
 	};
 
 	/** Landmark 只描述路线进度和候选房间槽，不预先写死道路形状。 */

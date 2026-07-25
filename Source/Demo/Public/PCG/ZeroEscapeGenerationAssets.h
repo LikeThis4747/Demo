@@ -39,9 +39,17 @@ struct DEMO_API FZeroEscapeSharedRouteConstraints
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Progression", meta = (ClampMin = "1", ClampMax = "6"))
 	int32 ObjectiveProgressBandCount = 3;
 
-	/** Required 路线外允许 WFC 产生局部支路的包络半径；0 表示只保留必需结构。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "0", ClampMax = "3"))
-	int32 OptionalEnvelopeRadius = 1;
+	/** 最终非空逻辑格数量下限；首轮数值用于灰盒 Seed Sweep，后续应以实测分布校准。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+	int32 MinWalkableCellCount = 48;
+
+	/** 最终非空逻辑格数量上限；所有难度共享，避免困难难度通过扩大地图拖长单局。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+	int32 MaxWalkableCellCount = 72;
+
+	/** 同一轴上同时拥有两侧开口的连续格上限；Straight、T 和 Cross 都计入。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+	int32 MaxConsecutiveStraightTiles = 4;
 
 	/** 起点到终点或满足通关条件后的必需路线最大步数，所有难度共用。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Route", meta = (ClampMin = "1"))
@@ -51,12 +59,74 @@ struct DEMO_API FZeroEscapeSharedRouteConstraints
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Route", meta = (ClampMin = "0"))
 	int32 MaxRequiredRouteExtraTiles = 14;
 
+	/** 一次 WFC 求解允许的 singleton 候选赋值次数；达到上限时报告预算耗尽而非无解。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1"))
+	int32 MaxWfcCandidateAttempts = 100000;
+
+	/** 一次 WFC 求解允许恢复决策帧的次数；首轮宽上限必须在 Seed Sweep 后重新评估。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1"))
+	int32 MaxWfcBacktrackCount = 25000;
+
+	/**
+	 * 同一请求最多建立多少棵确定性的 WFC 搜索树。
+	 *
+	 * 每次尝试使用由请求 Seed 派生的独立 WFC 子流；不会修改玩家选择的 Seed，也不会改变
+	 * Generation Signature。Candidate/Backtrack 是整局总预算，会平均分摊到这些尝试中，
+	 * 因而增加尝试次数不会放大最坏运行成本。默认 10 是首轮 288 Seed Sweep 对少数困难 Collect
+	 * 长尾做出的“更多浅搜索树、少深挖单树”调整；正式值仍以完整 P95/Max 数据为准。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1", ClampMax = "16"))
+	int32 MaxWfcSolveAttempts = 10;
+
 	/** Player、Exit 与 Objective Anchor 相对地板顶面的默认高度。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Gameplay", meta = (ClampMin = "0.0"))
 	double GameplayAnchorHeightCm = 100.0;
 };
 
-/** 一局难度只控制局部可选复杂度和目标数量，不改变共同路线长度上限。 */
+/** WFC 对 0..15 开口形态的权重策略；路口是可能结果，不是硬性配额。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeWfcShapeWeights
+{
+	GENERATED_BODY()
+
+	/**
+	 * Empty 的抽样权重。它不能直接换算成最终空格比例：任何非空 OpeningMask 都可能通过出口
+	 * 继续强制邻格非空。默认 12000 是 24x16、Count [48,72] 首轮多 Seed 求解校准值；Count 仍是硬约束，
+	 * Seed Sweep 会继续测量最终格数和回溯分布，不能把该权重误当成固定地图密度。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 EmptyWeight = 12000;
+
+	/**
+	 * 只保留来向出口、终止当前分支的权重。默认 100 让前沿格的平均后继出口数略低于 1，
+	 * 避免旧值 15 造成路径持续膨胀并频繁撞上 Count 上限；它仍只是形态倾向，不是死路配额。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 DeadEndWeight = 100;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 StraightWeight = 100;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 CornerWeight = 80;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 TJunctionWeight = 25;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
+	int32 CrossWeight = 5;
+
+	/** 返回一个合法 4-bit mask 的权重；非法高位返回 0 以触发配置失败。 */
+	int32 GetWeightForMask(uint8 OpeningMask) const;
+
+	/** 返回全部 15 个非空 OpeningMask 的权重和；按形态旋转数量精确展开。 */
+	int64 GetTotalNonEmptyVariantWeight() const;
+
+	/** 六类权重必须为正，且 16 个 Variant 的总权重必须能被 int32 加权抽样安全表示。 */
+	bool IsConfigured(FString& OutError) const;
+};
+
+/** 一局难度只控制目标数量和非空形态比例，不改变共同格数与路线长度上限。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeDifficultyDefinition
 {
@@ -65,14 +135,6 @@ struct DEMO_API FZeroEscapeDifficultyDefinition
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty")
 	EZeroEscapeDifficulty Difficulty = EZeroEscapeDifficulty::Normal;
 
-	/** 最多保留的短侧支数量；这是上限，不要求每局必须达到。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty", meta = (ClampMin = "0", ClampMax = "16"))
-	int32 MaxOptionalSideBranches = 2;
-
-	/** 最多保留的前向重连数量；它增加路线选择，但不强制玩家回到早期区域。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty", meta = (ClampMin = "0", ClampMax = "16"))
-	int32 MaxOptionalForwardLinks = 1;
-
 	/** Collect 流程生成的候选目标总数 N。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty", meta = (ClampMin = "0", ClampMax = "12"))
 	int32 ObjectiveCandidateCount = 3;
@@ -80,6 +142,10 @@ struct DEMO_API FZeroEscapeDifficultyDefinition
 	/** CollectKOfN 流程所需目标数 K；CollectAll 会忽略该值并使用 K=N。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty", meta = (ClampMin = "0", ClampMax = "12"))
 	int32 RequiredObjectiveCount = 2;
+
+	/** 当前难度的非空形态偏好；不同难度必须保持 Empty 与非空总权重一致。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|WFC")
+	FZeroEscapeWfcShapeWeights WfcShapeWeights;
 };
 
 /** 可被 Request 选择的流程语义；具体目标类型留给玩法层解释。 */
@@ -98,37 +164,6 @@ struct DEMO_API FZeroEscapeFlowDefinition
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Flow")
 	EZeroEscapeCompletionRule CompletionRule = EZeroEscapeCompletionRule::EscapeOnly;
-};
-
-/** WFC 对 0..15 开口形态的权重策略；路口是可能结果，不是硬性配额。 */
-USTRUCT(BlueprintType)
-struct DEMO_API FZeroEscapeWfcShapeWeights
-{
-	GENERATED_BODY()
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 EmptyWeight = 150;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 DeadEndWeight = 15;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 StraightWeight = 100;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 CornerWeight = 80;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 TJunctionWeight = 25;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 CrossWeight = 5;
-
-	/** 返回一个合法 4-bit mask 的权重；非法高位返回 0 以触发配置失败。 */
-	int32 GetWeightForMask(uint8 OpeningMask) const;
-
-	/** 所有形态权重必须为正，保证加权选择有定义。 */
-	bool IsConfigured(FString& OutError) const;
 };
 
 /** 难度、流程和空间规则的唯一权威 DataAsset。 */
@@ -152,9 +187,6 @@ public:
 	/** StableFlowId 必须唯一，并至少包含 EscapeOnly。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Flow")
 	TArray<FZeroEscapeFlowDefinition> Flows;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC")
-	FZeroEscapeWfcShapeWeights WfcShapeWeights;
 
 	/** 只读校验所有单资产和跨字段不变量，不进行自动修正。 */
 	bool IsConfigured(FString& OutError) const;

@@ -1,12 +1,46 @@
-# PCG 全图 WFC 路线重构：拟实现代码 V1
+# PCG 全图 WFC 路线重构：拟实现代码 V3（实施校准版）
 
-> 状态：仅供用户与独立 AI 评审；不是已落盘源码，也未经过编译、Automation 或 PIE。
+> 状态：最新代码审计已通过且无阻断项；用户已明确授权并已完成源码、真实 Profile DataAsset、UE 5.8 构建、19 项 `Demo.PCG`、288 组 Seed Sweep 与 SelectedViewport PIE 技术烟测。本文已按真实实现回写；玩家主观观感、碰撞、导航和实际走通尚未验收。
 >
 > Owner：Codex / root
 >
 > 对应正式计划：`DOC/DailyPlan/2026-07-25-PCG-WFC路线重构实施方案.md`
 >
-> 代码基线：当前工作树。真正实施时必须保留 `ZeroEscapeGenerationCore.cpp` 的 `FailCore` 修复，以及素材迁移对旧测试文件写入的 `/Game/Assets/SciFiHydroLab` 路径。
+> 代码基线：`b8a8c6e30b5f5e7c73c382e64c62c0e4d1706e78`，已推送内部工蜂。实施必须保留 `ZeroEscapeGenerationCore.cpp` 的 `FailCore` 修复，以及素材迁移写入的 `/Game/Assets/SciFiHydroLab` 路径。
+>
+> V2 审计依据：`claude/reviews/2026-07-25b-pcg-wfc-refactor-code-proposal-review.md`
+
+## 0. V3 实施校准摘要
+
+实现阶段用完整自动化暴露了一个重要差异：V2 曾把“候选数量最少”放在带权 Shannon 熵之前，这不是原版 WFC 的最低熵观察规则。当前默认权重下，未触及 Optional 的带权熵约 0.476，单开口前沿约 1.833；MRV 优先会反向追着前沿生长，使 `EmptyWeight` 失效。实际代码已经改为：
+
+```cpp
+const bool bStrictlyBetter = MinimumEntropyCell == INDEX_NONE
+	|| Entropy < MinimumEntropy - UE_DOUBLE_SMALL_NUMBER;
+const bool bEquivalentBest = !bStrictlyBetter
+	&& FMath::Abs(Entropy - MinimumEntropy) <= UE_DOUBLE_SMALL_NUMBER;
+```
+
+完全同熵时继续使用 Seed 驱动的蓄水池抽样；候选顺序仍按权重无放回创建一次。修正后 36 组成功率从 14/36 提升到 32/36，证明观察顺序是主因。
+
+剩余长尾采用成熟 WFC 常用的 bounded deterministic retries：请求 Seed 和 Signature 不变，只用 `AttemptIndex` 派生独立 WFC 子流；`MaxWfcCandidateAttempts=100000` 与 `MaxWfcBacktrackCount=25000` 是整局总预算，被稳定分给最多 `MaxWfcSolveAttempts=10` 棵搜索树，绝不按重试倍增。核心代码形态为：
+
+```cpp
+for (int32 AttemptIndex = 0; AttemptIndex < Settings.MaxWfcSolveAttempts; ++AttemptIndex)
+{
+	FRandomStream WfcRandom = FGenerationCore::MakeRandomStream(
+		MasterSeed, Request.Signature.AlgorithmVersion,
+		ERandomDomain::WfcLayout, AttemptIndex);
+	WfcSettings.MaxCandidateAttempts = GetWfcAttemptBudget(
+		Settings.MaxWfcCandidateAttempts, AttemptIndex, Settings.MaxWfcSolveAttempts);
+	WfcSettings.MaxBacktrackCount = GetWfcAttemptBudget(
+		Settings.MaxWfcBacktrackCount, AttemptIndex, Settings.MaxWfcSolveAttempts);
+	// Solve 成功即原子提交；只对 BudgetExhausted 进入下一棵搜索树。
+	// NoValid 表示带回溯搜索已经穷尽完整树，是无解证明，不能再换顺序重试。
+}
+```
+
+Connected 也已从 V2 的 Cell BFS 增强为每格“中心 + N/E/S/W”五节点展开图，并使用迭代 Tarjan 强制连接 Relevant 所必需的中心/方向关节点。最终 288 组为 288/288：Solve Attempts P50/P95/Max=`1/3/7`，Candidate Attempts=`341/5954/17193`，Backtracks=`3/5005/15009`，Planning=`23.145/233.470/622.386 ms`，完整候选路线拒绝 Max=0。
 
 ## 1. 代码评审后补上的关键边界
 
@@ -44,6 +78,15 @@
 
 这样 Easy / Normal / Hard 只重新分配非空形态倾向，不主动改变 Empty 与 NonEmpty 的总体权重比例。最终非空格数仍由共享 Count 范围约束，并由 Seed Sweep 比较三个难度的分布。
 
+### 1.3 V2 对回溯与校验分层的修订
+
+本次审计不改变算法选型，只收紧四个实现细节：
+
+1. `Solve` 每次只调用一次 CPP 内部 `BuildAndValidateDenseConstraintView`；它同时完成稠密映射、坐标唯一、Mask、边界和镜像校验，不能先校验时构建一次、初始化 Domain 时再构建一次。
+2. Solver 不在完整候选导出后重复逐边扫描。局部边规则由传播保证并由 Automation 完整扫描；Count、MaxConsecutive、连通、路线和玩法不变量只在 Grid `ValidateFinalPlan` 做最终产品验收。
+3. 外部坐标、Mask、配置和调用契约使用运行时失败报告；`NarrowDomain` 的内部 CellIndex 使用 `check`。审计建议把规范 Variant 校验降为 Debug，但当前 `Solve` 明确接收任意 `TArray<FTileVariant>`，所以 16 次顺序、正权重和总权重校验继续作为入口运行时校验；这点不机械采纳，除非未来先收窄接口。
+4. 除“拒绝首个完整候选后可继续”外，必须独立覆盖：根固定点 Trail 清空后首决策矛盾，以及传播直接形成完整叶子后 Reject。它们分别防止恢复掉根 Ban、恢复过头或在无可退分支时死循环。
+
 ## 2. 文件增量与减量
 
 ### 修改
@@ -70,8 +113,9 @@
 
 - 删除 `CarveOrthogonalRoute`、`CarveRequiredSkeleton`、`BuildOptionalEnvelope`、`PruneDisconnectedOptional`。
 - 删除 `BackboneY`、`GateEdges`、`OptionalEnvelopeRadius`、`MaxOptionalSideBranches`、`MaxOptionalForwardLinks`、`ERandomDomain::OptionalLayout`。
-- 删除 `ValidateGuaranteedSolvableConstraints` 的构造性见证；函数改名为 `ValidateInitialConstraints`。
+- 删除对外的 `ValidateGuaranteedSolvableConstraints`；CPP 内部 `BuildAndValidateDenseConstraintView` 一次完成稠密视图和静态输入校验，不再重复建立坐标映射。
 - 删除 WFC 成功导出后的重复逐边热路径复核；等价回归放进 Solver Automation，Grid 的独立最终验证继续保留。
+- 保留规范 16 Variant 的运行时入口校验：当前私有 Solver API 仍允许测试或组合方传入任意数组，16 次循环成本可忽略，不能无证据地假定来源必为 `BuildCanonicalVariants`。
 - 将旧 `ZeroEscapeGenerationTests.cpp` 当前内容迁入两个 `Tests/*.cpp` 后删除，不保留转发壳。
 
 ## 3. 公开失败与指标
@@ -160,10 +204,10 @@ struct DEMO_API FZeroEscapeWfcShapeWeights
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 EmptyWeight = 150;
+	int32 EmptyWeight = 12000;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
-	int32 DeadEndWeight = 15;
+	int32 DeadEndWeight = 100;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
 	int32 StraightWeight = 100;
@@ -222,6 +266,10 @@ struct DEMO_API FZeroEscapeSharedRouteConstraints
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1"))
 	int32 MaxWfcBacktrackCount = 25000;
 
+	/** 同一请求最多建立的确定性搜索树数量；两个总预算平均分摊，不按次数倍增。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1", ClampMax = "16"))
+	int32 MaxWfcSolveAttempts = 10;
+
 	// GameplayAnchorHeightCm 保留。
 };
 ```
@@ -261,7 +309,11 @@ if (Route.MinWalkableCellCount <= 0
 	|| Route.MaxConsecutiveStraightTiles <= 0
 	|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y)
 	|| Route.MaxWfcCandidateAttempts <= 0
-	|| Route.MaxWfcBacktrackCount <= 0)
+	|| Route.MaxWfcBacktrackCount <= 0
+	|| Route.MaxWfcSolveAttempts <= 0
+	|| Route.MaxWfcSolveAttempts > 16
+	|| Route.MaxWfcCandidateAttempts < Route.MaxWfcSolveAttempts
+	|| Route.MaxWfcBacktrackCount < Route.MaxWfcSolveAttempts)
 {
 	OutError = TEXT("全图 WFC 的格数、连续贯通或搜索预算配置非法。");
 	return false;
@@ -317,7 +369,7 @@ for (const FZeroEscapeDifficultyDefinition& Definition : Difficulties)
 
 旧“双门房替代主干边、每目标固定多 2 格”的构造路线证明随固定主干一起删除。
 
-取得资产落盘授权后，现有 `DA_LevelGenerationProfile` 需要一次原子迁移：把当前顶层权重复制到 Easy/Normal/Hard 三个条目，写入新 Count/Max/预算字段，并把 `ProfileVersion` 从 1 递增到 2。首轮三个难度先使用相同权重，等新 Seed Sweep 稳定后再调形态比例；本次不修改 Presentation DataAsset。
+现有 `DA_LevelGenerationProfile` 需要一次原子迁移：把权重写入 Easy/Normal/Hard 三个条目，写入新 Count/Max/预算/尝试字段，并把 `ProfileVersion` 递增到 4。首轮三个难度使用相同权重；本次不修改 Presentation DataAsset。
 
 ## 5. Core 纯值接线
 
@@ -722,7 +774,7 @@ namespace ZeroEscape::LevelGeneration
 }
 ```
 
-这里故意没有实现通用接口、增量 Tracker、割点传播或 Loop 配额。
+这里故意没有实现通用接口、增量 Tracker 或 Loop 配额；实际实现已加入五节点展开图与迭代 Tarjan 关节点传播。
 
 ## 7. WFC 接口与完成态验收
 
@@ -790,12 +842,6 @@ namespace ZeroEscape::LevelGeneration
 			const FZeroEscapeWfcShapeWeights& Weights,
 			TStaticArray<FTileVariant, 16>& OutVariants);
 
-		/** 只验证输入合法性，不再承诺构造性“必然有解”。 */
-		static bool ValidateInitialConstraints(
-			FIntPoint GridSize,
-			const TArray<FGridCellConstraint>& Constraints,
-			FString& OutError);
-
 		static bool Solve(
 			FIntPoint GridSize,
 			const TArray<FGridCellConstraint>& Constraints,
@@ -809,7 +855,7 @@ namespace ZeroEscape::LevelGeneration
 }
 ```
 
-静态输入校验保留稠密 Grid、坐标唯一、4-bit Mask、Open/Closed 冲突、边界、必开边镜像；删除 `Required` 必须预开一条边和 Optional 全空的构造性见证。
+CPP 内部的 `BuildAndValidateDenseConstraintView` 保留稠密 Grid、坐标唯一、空指针、4-bit Mask、Open/Closed 冲突、边界和必开边镜像，并在一次入口调用内完成。删除 `Required` 必须预开一条边和 Optional 全空的构造性见证，不再暴露一个可被调用方重复执行的公开验证入口。
 
 `Solve` 必须在建立任何 Domain、执行 BFS 或消耗随机数前，按固定顺序完成一次入口校验：
 
@@ -818,12 +864,6 @@ OutOpeningMaskByCell.Reset();
 ResetWfcMetrics(OutReport.Metrics);
 
 FString ValidationError;
-if (!ValidateInitialConstraints(GridSize, Constraints, ValidationError)
-	|| !ValidateCanonicalVariants(Variants, ValidationError))
-{
-	return ReportInvariantFailure(ValidationError, OutReport);
-}
-
 if (!FWfcConstraints::ValidateSettings(
 		GridSize,
 		SolveSettings,
@@ -834,11 +874,16 @@ if (!FWfcConstraints::ValidateSettings(
 }
 
 TArray<const FGridCellConstraint*> ConstraintsByIndex;
-if (!BuildDenseConstraintView(
+if (!BuildAndValidateDenseConstraintView(
 		GridSize,
 		Constraints,
 		ConstraintsByIndex,
 		ValidationError))
+{
+	return ReportInvariantFailure(ValidationError, OutReport);
+}
+
+if (!ValidateCanonicalVariants(Variants, ValidationError))
 {
 	return ReportInvariantFailure(ValidationError, OutReport);
 }
@@ -853,7 +898,7 @@ if (ConstraintsByIndex[StartIndex]->Domain != EGridCellDomain::Required)
 }
 ```
 
-`ValidateSettings` 校验 Start 在界内、`0 < Min <= Max <= CellCount`、连续贯通上限和两个搜索上限为正；非法策划值报告 `InvalidConfiguration`，Start 不是 Required 等调用方契约错误报告 `SolverInvariantViolation`。
+`ValidateSettings` 校验 Start 在界内、`0 < Min <= Max <= CellCount`、连续贯通上限和两个搜索上限为正；非法策划值报告 `InvalidConfiguration`，Start 不是 Required 等调用方契约错误报告 `SolverInvariantViolation`。上述顺序没有建立 Domain、没有执行 BFS、没有消耗随机数，并且只构建、校验一次稠密视图。Variant 校验仍保留，因为当前接口接受任意数组；若未来 `Solve` 直接接收权重并在内部构造 Variant，再单独评审是否降为 Debug。
 
 ## 8. Trail、传播和 chronological backtracking
 
@@ -901,12 +946,8 @@ namespace
 		TArray<int32>& OutChangedCells,
 		FWfcBranchResult& OutResult)
 	{
-		if (!InOutDomains.IsValidIndex(CellIndex))
-		{
-			OutResult.Status = EWfcBranchStatus::InvariantFailure;
-			OutResult.Message = TEXT("WFC 尝试修改非法 Cell 下标。");
-			return false;
-		}
+		// CellIndex 只来自最小熵选择、合法邻格或稠密约束 Ban；属于内部不变量。
+		check(InOutDomains.IsValidIndex(CellIndex));
 
 		const uint16 Previous = InOutDomains[CellIndex];
 		const uint16 Next = Previous & AllowedVariants;
@@ -1224,12 +1265,14 @@ for (;;)
 }
 ```
 
-上述控制流保证新决策、祖先替代候选和根状态都从同一个 `StabilizeDomains` 入口继续；任何替代候选产生的 contradiction 都会在下一轮被处理，不会越过回溯状态机。
+上述控制流保证新决策、祖先替代候选和根状态都从同一个 `StabilizeDomains` 入口继续；任何替代候选产生的 contradiction 都会在下一轮被处理，不会越过回溯状态机。`Trail.Reset()` 只把根固定点变为不可回滚基线，不修改 `Domains`；叶子 Reject 只恢复最近决策帧的 `TrailStart`，若根传播已经直接形成完整叶子且 `Decisions` 为空，则稳定返回 `NoValidWfcSolution`。
 
 预算定义冻结为：
 
+- `WfcSolveAttemptCount`：每启动一棵确定性 WFC 搜索树加一；
 - `WfcCandidateAttemptCount`：每次把决策 Cell 收窄到一个候选 singleton 时加一；
 - `WfcBacktrackCount`：每次恢复一个决策帧时加一；
+- `WfcLocalAdjacency/Count/MaxConsecutive/Connected/GlobalBanContradictionCount`：按来源拆分可恢复矛盾；
 - 初始化、传播、BFS、完整候选验收不消耗 Candidate Attempt，但各自仍有 Grid 硬上限和耗时统计；
 - 指标统计失败分支实际成本，回溯时不回滚。
 
@@ -1252,6 +1295,7 @@ struct FGridLayoutSettings
 	int32 MaxRequiredRouteExtraTiles = 14;
 	int32 MaxWfcCandidateAttempts = 100000;
 	int32 MaxWfcBacktrackCount = 25000;
+	int32 MaxWfcSolveAttempts = 10;
 
 	double GameplayAnchorHeightCm = 100.0;
 };
@@ -1402,14 +1446,15 @@ if (MaxObservedRun > Settings.MaxConsecutiveStraightTiles)
 
 私有 `ExportCandidatePlan` 的 OpeningMask 参数会从 `const TArray<uint8>&` 收敛为 `TConstArrayView<uint8>`，这样每次完整候选验收无需为了适配旧签名复制数组；该改动不进入 Public API。
 
+以下保留“单棵搜索树如何调用完成态验收”的主体；实际外层由第 0 节的有限尝试循环包裹，并为每次写入分片后的预算、独立随机子流和临时 Report，最后累加搜索指标。
+
 ```cpp
 FZeroEscapeWfcSolveSettings WfcSettings;
 WfcSettings.StartCoordinate = State.StartCoordinate;
 WfcSettings.MinWalkableCellCount = Settings.MinWalkableCellCount;
 WfcSettings.MaxWalkableCellCount = Settings.MaxWalkableCellCount;
 WfcSettings.MaxConsecutiveStraightTiles = Settings.MaxConsecutiveStraightTiles;
-WfcSettings.MaxCandidateAttempts = Settings.MaxWfcCandidateAttempts;
-WfcSettings.MaxBacktrackCount = Settings.MaxWfcBacktrackCount;
+// MaxCandidateAttempts / MaxBacktrackCount 由外层 Attempt 循环写入当次预算分片。
 
 FZeroEscapeGeneratedLevelPlan AcceptedCandidate;
 const auto ValidateCollapsedCandidate =
@@ -1525,6 +1570,7 @@ LayoutSettings.MaxRequiredRouteLengthTiles = Route.MaxRequiredRouteLengthTiles;
 LayoutSettings.MaxRequiredRouteExtraTiles = Route.MaxRequiredRouteExtraTiles;
 LayoutSettings.MaxWfcCandidateAttempts = Route.MaxWfcCandidateAttempts;
 LayoutSettings.MaxWfcBacktrackCount = Route.MaxWfcBacktrackCount;
+LayoutSettings.MaxWfcSolveAttempts = Route.MaxWfcSolveAttempts;
 LayoutSettings.GameplayAnchorHeightCm = Route.GameplayAnchorHeightCm;
 
 if (!FGridLayoutSolver::Solve(
@@ -1539,13 +1585,16 @@ if (!FGridLayoutSolver::Solve(
 }
 ```
 
-`ZE_PCG_RESULT` 升级为 schema 3，至少记录：
+`ZE_PCG_RESULT` 升级为 schema 4，至少记录：
 
 ```cpp
 TEXT(
-	"ZE_PCG_RESULT schema=3 success=%d seed=%d difficulty=%s flow=%s "
-	"stage=%s failure=%s walkable=%d observations=%d attempts=%d "
-	"propagations=%d contradictions=%d backtracks=%d leaf_rejections=%d "
+	"ZE_PCG_RESULT schema=4 success=%d seed=%d difficulty=%s flow=%s "
+	"stage=%s failure=%s walkable=%d solve_attempts=%d observations=%d "
+	"candidate_attempts=%d propagations=%d contradictions=%d "
+	"contradiction_local=%d contradiction_count=%d contradiction_max_straight=%d "
+	"contradiction_connected=%d contradiction_global_ban=%d "
+	"backtracks=%d leaf_rejections=%d "
 	"instances=%d hism=%d progression_hash=%lld layout_hash=%lld "
 	"planning_ms=%.3f total_ms=%.3f message=\"%s\"")
 ```
@@ -1579,12 +1628,12 @@ bool FZeroEscapeWfcBacktrackingTest::RunTest(const FString& Parameters)
 	TArray<FTileVariant> Variants = MakeCanonicalVariantArray();
 	FRandomStream Random(/* 实施时用测试跑出的固定回溯 Seed */);
 
-	int32 AcceptedLeafCount = 0;
+	int32 VisitedLeafCount = 0;
 	const auto RejectFirstCompleteCandidate =
 		[&](const TConstArrayView<uint8>)
 		{
-			++AcceptedLeafCount;
-			return AcceptedLeafCount == 1
+			++VisitedLeafCount;
+			return VisitedLeafCount == 1
 				? FWfcCollapsedCandidateEvaluation::Reject(
 					TEXT("测试要求拒绝首个完整候选。"), 1, 0)
 				: FWfcCollapsedCandidateEvaluation::Accept();
@@ -1603,14 +1652,60 @@ bool FZeroEscapeWfcBacktrackingTest::RunTest(const FString& Parameters)
 		Report);
 
 	TestTrue(TEXT("拒绝首个完整候选后应继续求解"), bSolved);
+	TestTrue(TEXT("夹具必须至少创建一个真实决策帧"),
+		Report.Metrics.WfcObservationCount > 0);
 	TestTrue(TEXT("必须实际发生回溯"), Report.Metrics.WfcBacktrackCount > 0);
 	TestEqual(TEXT("只拒绝一个完整候选"),
 		Report.Metrics.WfcCollapsedCandidateRejectionCount, 1);
+	TestEqual(TEXT("必须访问被拒绝与被接受两个完整叶子"), VisitedLeafCount, 2);
 	return true;
 }
 ```
 
-注：固定 Seed 不在文档阶段伪造；实现时先由测试夹具搜索一次，随后把确实触发回溯的 Seed 固化，并删除搜索逻辑。
+该夹具使用 2×2 固定绕行 + 一条可选捷径：首个决策关闭捷径后，传播直接把其余格折叠为完整叶子；验收拒绝该叶子，回溯后打开捷径并接受。最终固定断言 `CandidateAttempts==2`，从结果证明叶子是在原决策传播后形成，没有凭空创建第二个决策帧。固定 Seed 不在文档阶段伪造；实现时只搜索一次“关闭优先”的 Seed，随后固化并删除搜索逻辑。
+
+审计要求的根 Trail 边界另用一个最小夹具，不与上面的成功回溯测试混在同一函数：
+
+```cpp
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FZeroEscapeRootTrailSurvivesExhaustionTest,
+	"Demo.PCG.WFC.Backtracking.RootTrailSurvivesFirstDecisionExhaustion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
+bool FZeroEscapeRootTrailSurvivesExhaustionTest::RunTest(const FString& Parameters)
+{
+	// 四个 Required 格形成两列；顶部共享边是首个决策。
+	// 第五个 Optional 格在根 Count(forced==max) 阶段被强制为 Empty，
+	// 这次 Ban 写入 Root Trail，随后 Trail.Reset() 只应丢历史、不能恢复 Domain。
+	const FRootTrailFixture Fixture = MakeRootTrailFixture();
+	int32 CompleteLeafCount = 0;
+	const auto RejectOnlyConnectedLeaf =
+		[&](const TConstArrayView<uint8> Masks)
+		{
+			++CompleteLeafCount;
+			TestEqual(TEXT("根 Count Ban 必须跨所有分支保留"),
+				Masks[Fixture.RootBannedOptionalIndex], uint8(0));
+			return FWfcCollapsedCandidateEvaluation::Reject(
+				TEXT("测试要求耗尽唯一连通完整叶子。"), 1, 0);
+		};
+
+	TArray<uint8> Output;
+	FZeroEscapeGenerationReport Report;
+	const bool bSolved = RunRootTrailFixture(
+		Fixture, RejectOnlyConnectedLeaf, Output, Report);
+
+	TestFalse(TEXT("全部首决策候选耗尽后应明确无解"), bSolved);
+	TestEqual(TEXT("失败分类必须是 NoValidWfcSolution"),
+		Report.Failure, EZeroEscapeGenerationFailure::NoValidWfcSolution);
+	TestEqual(TEXT("失败不得泄漏半成品"), Output.Num(), 0);
+	TestEqual(TEXT("只有打开桥的分支能到达完整验收"), CompleteLeafCount, 1);
+	TestTrue(TEXT("必须真实恢复首个决策帧"),
+		Report.Metrics.WfcBacktrackCount > 0);
+	return true;
+}
+```
+
+再保留一个三格或单格极小边界：若根固定点已经是唯一完整叶子、`Decisions` 从未创建且 validator 返回 Reject，正确结果是 `NoValidWfcSolution`、`WfcBacktrackCount==0`。它没有可替代分支，不应错误期待“无决策帧仍能找到第二个解”。
 
 仅“人为拒绝首个叶节点”还不足以证明局部传播和全局 Ban 都被 Trail 恢复。还要增加一个固定夹具：被拒绝分支必须实际触发 Count 或 MaxConsecutive Ban；随后把该分支的首个决策候选在输入中预先排除，做一次不需要回溯的干净求解。两次最终输出必须完全一致：
 
@@ -1658,12 +1753,12 @@ TestTrue(TEXT("回溯恢复后的输出必须等于排除失败分支后的干�
 
 Harness 不迁入上述纯算法测试，也不增加职责；它继续只服务 `L_PCG_RuntimeTest` 的生成、Staging 和玩家传送，等正式 GameFlow 接管后按计划退役。
 
-## 12. 当前仍需评审的判断
+## 12. 实施后的参数判断
 
 1. `48..72` 与 `MaxConsecutiveStraightTiles=4` 是首轮灰盒候选，不是最终产品参数。
-2. `MaxWfcCandidateAttempts=100000`、`MaxWfcBacktrackCount=25000` 只是首次 Seed Sweep 的宽安全上限；必须有 P50/P95/Max 后再冻结。
+2. `MaxWfcCandidateAttempts=100000`、`MaxWfcBacktrackCount=25000` 是全部有限尝试共享的整局硬上限；288 组实测 Max 为 17193/15009。`MaxWfcSolveAttempts=10`，实测 Max=7。
 3. `MaxConsecutiveStraightTiles` 统计的是“同时拥有轴两侧开口的内部贯通格”。一段视觉直线两端若是 Corner/DeadEnd，视觉长度可能比该值多最多两个格；PIE 若仍觉得过长，先调低参数，再决定是否要改为按共享开放边计数。
-4. Connected 首版是保守可能图 BFS，不实现割点强传播；正确但可能较晚发现矛盾。
+4. Connected 使用五节点展开可能图与迭代 Tarjan 关节点传播；仍未实现增量 Tracker。
 5. 完成态路线验收可能造成晚期回溯，因此单独记录 `WfcCollapsedCandidateRejectionCount`。只有数据证明它是瓶颈，才评审部分状态路线下界；本轮不提前加。
 6. 首轮三个难度可先复制同一套权重，先证明求解稳定；之后再在保持 Empty/非空总权重不变的前提下调 Corner/T/Cross 比例。
 

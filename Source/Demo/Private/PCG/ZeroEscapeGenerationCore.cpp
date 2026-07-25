@@ -81,7 +81,6 @@ namespace ZeroEscape::LevelGeneration
 		Candidate.SharedRouteConstraints = Source.SharedRouteConstraints;
 		Candidate.Difficulties = Source.Difficulties;
 		Candidate.Flows = Source.Flows;
-		Candidate.WfcShapeWeights = Source.WfcShapeWeights;
 
 		Candidate.Difficulties.Sort([](
 			const FZeroEscapeDifficultyDefinition& A,
@@ -132,8 +131,8 @@ namespace ZeroEscape::LevelGeneration
 		Candidate.StableFlowId = Flow->StableFlowId;
 		Candidate.FlowVersion = Flow->FlowVersion;
 		Candidate.CompletionRule = Flow->CompletionRule;
-		Candidate.MaxOptionalSideBranches = Difficulty->MaxOptionalSideBranches;
-		Candidate.MaxOptionalForwardLinks = Difficulty->MaxOptionalForwardLinks;
+		// 权重按值复制进本局解析结果；后续 WFC 不持有 DataAsset 指针，也不依赖数组编辑顺序。
+		Candidate.WfcShapeWeights = Difficulty->WfcShapeWeights;
 
 		switch (Flow->CompletionRule)
 		{
@@ -154,7 +153,7 @@ namespace ZeroEscape::LevelGeneration
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::InvalidKOfN,
-				TEXT("CompletionRule 未被 V3.2 支持。"));
+				TEXT("CompletionRule 未被 V4 支持。"));
 		}
 
 		if (Candidate.ObjectiveCandidateCount > GenerationLimits::MaxObjectiveCandidates)
