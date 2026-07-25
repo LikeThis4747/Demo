@@ -1,7 +1,7 @@
 # Latest Error
 
-当前无已知 C++ 编译、Blueprint 编译或 `Demo.PCG` 自动化错误。UE 5.8 完整构建成功，新测试 13/13，288 组 Seed Sweep 全通过；NewWindow PIE 的 Runtime Generation 与 Harness Teleport/Transfer 均成功。
+当前无已知 C++、Blueprint、自动化或 HydroLab HISM Usage 错误。
 
-当前确认的表现错误：HydroLab 的 `MI_HydroLab_Ceiling01`、`MI_HydroLab_Wall01`、`MI_HydroLab_Trim01`、`MI_HydroLab_Floor03` 缺少 `InstancedStaticMeshes` Usage，HISM 渲染会回退为默认材质。四个实例共同继承 `/Game/SciFiHydroLab/Materials/Parents/M_HydroLab`。
+2026-07-25 已在用户授权后，只为第三方共同根材质 `/Game/SciFiHydroLab/Materials/Parents/M_HydroLab` 启用并保存 `Used with Instanced Static Meshes`。全新正常渲染 NewWindow PIE 生成成功，Harness 传送成功，日志中不再出现 HydroLab、InstancedStaticMeshes、Usage Flag 或 Default Material 相关警告。
 
-最小修复是只修改并保存该第三方根材质的一项 `Used with Instanced Static Meshes`。因用户尚未授权修改 HydroLab 素材，本轮没有创建材质副本、映射或运行时绕过；等待许可后直接修复并重跑 PIE。
+一次性作者化脚本首次因 UE 5.8 Python 不暴露 `post_edit_change()` 而在保存前失败；确认资产未变后删除该非必要调用，第二次回读 `before=0 → after=1`、`saved=1`，脚本随后删除。当前仅剩用户视觉、碰撞和走通验收，不属于已确认错误。

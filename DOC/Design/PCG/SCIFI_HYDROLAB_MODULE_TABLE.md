@@ -1,6 +1,6 @@
 # SciFiHydroLab PCG 结构素材尺寸与 Trim 表
 
-> 状态：结构测量、Level0 代表组合与 V3.2 Runtime Presentation 绑定均已完成；自动化和 NewWindow PIE 已证明可实例化生成，第三方根材质的 HISM Usage 与玩家视觉/通行验收仍待关闭。
+> 状态：结构测量、Level0 代表组合、V3.2 Runtime Presentation 与 HydroLab 根材质 HISM Usage 均已完成；自动化和正常渲染 NewWindow PIE 已通过，当前只待玩家视觉/通行验收。
 
 ## 1. 测量口径
 
@@ -218,5 +218,6 @@ Trim 不进入 WFC Tile 状态，也不改变逻辑连通性。首版只建立�
 - `Demo.PCG` 新测试集 13/13 通过；其中 3 个难度 × 3 个 Flow × 32 个 Seed 共 288 组均满足连通、K-of-N、路线长度和确定性约束。
 - 真实 HydroLab 资产集成烟测通过；补齐 Pivot 旋转断言后的最终 13/13 报告位于 `Saved/Automation/PCG-V32-FinalAudit-20260725-0050`。
 - `/Game/Levels/L_PCG_RuntimeTest` 的 NewWindow PIE 成功生成 444 个实例、5 个 HISM 组；Seed 12345、Normal、EscapeOnly 的 `ZE_PCG_RESULT` 为 Success，Harness 成功将玩家传送到生成区。
-- PIE 同时发现四个 HydroLab 材质实例缺少 `InstancedStaticMeshes` Usage；它们共同继承 `/Game/SciFiHydroLab/Materials/Parents/M_HydroLab`。在取得修改第三方素材的许可前，不建立材质副本、映射或运行时绕过。
-- 上述证据不替代最终玩家验收；正常材质显示、接缝、碰撞、净空和 Start→Exit 实际走通仍需在修复 Usage 后确认。
+- 用户于 2026-07-25 授权后，已只在共同根材质 `/Game/SciFiHydroLab/Materials/Parents/M_HydroLab` 启用并保存 `Used with Instanced Static Meshes`；没有建立材质副本、映射或运行时绕过。
+- 全新正常渲染 NewWindow PIE 再次生成 444 个实例、5 个 HISM 组，日志中不再出现 HydroLab/HISM Usage 警告；Generator 与 Harness 仍成功。
+- 上述证据不替代最终玩家验收；正常材质观感、接缝、碰撞、净空和 Start→Exit 实际走通仍需用户在当前 PIE 窗口中确认。

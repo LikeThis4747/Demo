@@ -1210,23 +1210,23 @@ namespace ZeroEscape::LevelGeneration::Tests
 
 		TestBinding(
 			TEXT("Floor"), Presentation->Floor,
-			TEXT("/Game/SciFiHydroLab/Meshes/Floors/SM_HydroLab_LargeFloorB.SM_HydroLab_LargeFloorB"),
+			TEXT("/Game/Assets/SciFiHydroLab/Meshes/Floors/SM_HydroLab_LargeFloorB.SM_HydroLab_LargeFloorB"),
 			FVector(150.0, -150.0, 0.0));
 		TestBinding(
 			TEXT("Ceiling"), Presentation->Ceiling,
-			TEXT("/Game/SciFiHydroLab/Meshes/Ceiling/SM_HydroLab_CeilingC.SM_HydroLab_CeilingC"),
+			TEXT("/Game/Assets/SciFiHydroLab/Meshes/Ceiling/SM_HydroLab_CeilingC.SM_HydroLab_CeilingC"),
 			FVector(-150.0, -150.0, 0.0));
 		TestBinding(
 			TEXT("Wall"), Presentation->Wall,
-			TEXT("/Game/SciFiHydroLab/Meshes/Walls/SM_HydroLab_WallH.SM_HydroLab_WallH"),
+			TEXT("/Game/Assets/SciFiHydroLab/Meshes/Walls/SM_HydroLab_WallH.SM_HydroLab_WallH"),
 			FVector(0.0, -150.0, 0.0));
 		TestBinding(
 			TEXT("WallTopTrim"), Presentation->WallTopTrim,
-			TEXT("/Game/SciFiHydroLab/Meshes/Trims/SM_HydroLab_WallTrimG.SM_HydroLab_WallTrimG"),
+			TEXT("/Game/Assets/SciFiHydroLab/Meshes/Trims/SM_HydroLab_WallTrimG.SM_HydroLab_WallTrimG"),
 			FVector(18.75, -150.0, -26.72216510772705));
 		TestBinding(
 			TEXT("Pillar"), Presentation->Pillar,
-			TEXT("/Game/SciFiHydroLab/Meshes/Pillars/SM_HydroLab_PillarC.SM_HydroLab_PillarC"),
+			TEXT("/Game/Assets/SciFiHydroLab/Meshes/Pillars/SM_HydroLab_PillarC.SM_HydroLab_PillarC"),
 			FVector::ZeroVector);
 		return true;
 	}

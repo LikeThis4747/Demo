@@ -26,3 +26,11 @@ PCG 必须“实时、非工具”：最终打包游戏在每局开始时根据 
 
 ## ADR-007：项目关卡统一归档到 Levels
 可运行关卡与 PIE 测试关卡统一放在 `/Game/Levels`。功能目录如 `/Game/ZeroEscape/Generation` 只保存生成器、DataAsset、Presentation 和可复用包装资产，不在其中建立 Maps 子目录。当前 PCG 测试关卡为 `/Game/Levels/L_PCG_RuntimeTest`。
+
+<!-- written by shiqiqiwang at 2026-07-25 07:55 UTC -->
+
+
+<!-- written by Codex at 2026-07-25 UTC+8 -->
+
+## ADR-008：单项素材兼容设置可先做后报
+用户明确授权：对于已确认是当前功能必要、只修改一项且可回退的同类素材兼容设置（例如根材质的 HISM Usage），AI 可直接处理并在完成后通知，不必重复申请。该授权不扩大到改变外观、几何、碰撞语义或批量修改第三方素材；这些仍需先说明影响与方案。

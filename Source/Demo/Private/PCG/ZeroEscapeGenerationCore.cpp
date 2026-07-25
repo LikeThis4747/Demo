@@ -37,8 +37,13 @@ namespace ZeroEscape::LevelGeneration
 			}
 		}
 
-		/** 统一填写不可恢复的纯算法错误，避免上层覆盖首个检查点。 */
-		bool Fail(
+		/**
+		 * 统一填写不可恢复的纯算法错误，避免上层覆盖首个检查点。
+		 * 命名为 FailCore 而非 Fail：本项目多个 .cpp 在 ZeroEscape::LevelGeneration 下各用匿名命名空间
+		 * 定义过同名 Fail 助手，Unity(blob) 编译会把它们拼进同一编译单元并注入同一具名命名空间，
+		 * 若重名且前缀参数一致会触发 C2668 重载歧义。用文件专属名保证唯一，避免依赖 Unity 分组顺序。
+		 */
+		bool FailCore(
 			FZeroEscapeGenerationReport& Report,
 			const EZeroEscapeGenerationStage Stage,
 			const EZeroEscapeGenerationFailure Failure,
@@ -64,7 +69,7 @@ namespace ZeroEscape::LevelGeneration
 		FString Error;
 		if (!Source.IsConfigured(Error))
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Configuration,
 				EZeroEscapeGenerationFailure::InvalidConfiguration,
@@ -115,7 +120,7 @@ namespace ZeroEscape::LevelGeneration
 
 		if (Difficulty == nullptr || Flow == nullptr)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Configuration,
 				EZeroEscapeGenerationFailure::InvalidConfiguration,
@@ -145,7 +150,7 @@ namespace ZeroEscape::LevelGeneration
 			Candidate.RequiredObjectiveCount = Difficulty->RequiredObjectiveCount;
 			break;
 		default:
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::InvalidKOfN,
@@ -154,7 +159,7 @@ namespace ZeroEscape::LevelGeneration
 
 		if (Candidate.ObjectiveCandidateCount > GenerationLimits::MaxObjectiveCandidates)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::ObjectiveLimitExceeded,
@@ -170,7 +175,7 @@ namespace ZeroEscape::LevelGeneration
 				&& Candidate.RequiredObjectiveCount <= Candidate.ObjectiveCandidateCount;
 		if (!bValidKOfN)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::InvalidKOfN,
@@ -196,7 +201,7 @@ namespace ZeroEscape::LevelGeneration
 			|| Settings.StableFlowId != Request.FlowProfileId
 			|| Settings.Difficulty != Request.Difficulty)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Configuration,
 				EZeroEscapeGenerationFailure::InvalidConfiguration,
@@ -225,7 +230,7 @@ namespace ZeroEscape::LevelGeneration
 		const int32 SlotCapacity = BandCount * 2;
 		if (BandCount <= 0 || Settings.ObjectiveCandidateCount > SlotCapacity)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::CapacityInsufficient,
@@ -292,7 +297,7 @@ namespace ZeroEscape::LevelGeneration
 
 		if (ComputeCanonicalProgressionHash(Candidate) == 0)
 		{
-			return Fail(
+			return FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Progression,
 				EZeroEscapeGenerationFailure::SolverInvariantViolation,

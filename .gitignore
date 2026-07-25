@@ -4,12 +4,39 @@ DerivedDataCache/
 Intermediate/
 Saved/
 .vs/
+.idea/
 *.sln
+*.slnx
+*.sln.iml
+*.suo
+*.user
+*.userprefs
+*.VC.db
+*.VC.opendb
+*.opensdf
+*.opendb
+*.sdf
+*.xcodeproj
+*.xcworkspace
+
+# Disposable root-level exports and malformed shell output
+tmp/
+/$null)
 
 # Local Python environments/caches
 **/.venv/
 **/__pycache__/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+**/htmlcov/
 *.pyc
+
+# Local operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
 
 # AI workspace: task cards, handoffs and Markdown research are intentionally versioned.
 # Only disposable scratch, binary output and local analysis tools are ignored.
@@ -27,6 +54,7 @@ claude/artifacts/**
 # because authored World Partition levels need those packages for source-control rollback.
 Content/Assets/ThirdPerson/
 Content/LevelPrototyping/
+Content/Developers/
 Content/__ExternalActors__/Assets/ThirdPerson/
 Content/__ExternalObjects__/Assets/ThirdPerson/
 

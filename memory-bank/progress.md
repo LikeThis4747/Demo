@@ -14,11 +14,11 @@
 - [x] 删除旧 Graph/Socket/Portal/Catalog/A*/回溯 Solver 链与死配置
 - [x] 项目自有 HydroLab Presentation 与 Generator 装配
 - [x] UE 5.8 构建、`Demo.PCG` 13/13、288/288 Seed Sweep
-- [x] NewWindow PIE：27 Cells、444 Instances、5 HISM，Harness Teleport/Transfer 成功
-- [ ] 获用户许可后仅为第三方 `M_HydroLab` 启用 Instanced Static Mesh Usage，并复验零相关警告
+- [x] 第三方共同根材质 `M_HydroLab` 启用 Instanced Static Mesh Usage；无副本、映射或 Runtime 绕过
+- [x] 全新正常渲染 NewWindow PIE：27 Cells、444 Instances、5 HISM，Harness 传送成功，零相关 Usage 警告
 - [ ] 用户验收材质、接缝、碰撞、净空与 Start→Exit 实际走通
 - [ ] 通过 PCG 验收后接入追猎者，再做单局玩法闭环
 
 ## 当前边界
 
-构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。当前已知素材阻塞仅为 HydroLab 共同根材质的 HISM Usage；旧 `DA_LevelModuleCatalog` 验收前不删除。
+构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。当前没有已知源码或素材设置阻塞；旧 `DA_LevelModuleCatalog` 在用户验收前不删除。
