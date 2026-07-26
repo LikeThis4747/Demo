@@ -15,11 +15,11 @@
 - [x] HydroLab Presentation、V4 Profile、Generator/Harness 装配；根材质 HISM Usage 已处理
 - [x] UE 5.8 构建、`Demo.PCG` 19/19、288/288 Seed Sweep
 - [x] SelectedViewport 技术烟测：48 Cells、798 Instances、5 HISM，Harness 传送成功
-- [x] 只读 UE 审计：Generator/Harness Blueprint UpToDate、无自定义连线
+- [x] 只读 UE 审计：Generator/Harness Blueprint UpToDate
 - [ ] 玩家抽查至少 10 个 Seed，验收路线、接缝、碰撞、净空与 Start→Exit
-- [ ] 补齐真实导航证据；当前测试关卡未见 NavMesh Bounds/Recast actor
-- [ ] 玩家验收后接入追猎者，再做单局玩法闭环
+- [ ] 补齐真实导航证据；2026-07-27 只读 Outliner 仍未见 NavMesh Bounds/Recast actor
+- [ ] 玩家验收与导航通过后接入追猎者，再做单局玩法闭环
 
 ## 当前边界
 
-构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。当前无已确认代码阻断；Planning Max 约 622 ms 需目标设备体验。导航、玩家走通和视觉/碰撞验收通过前，不进入追猎者或室内灯扩展。
+构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。2026-07-27 无新项目变更、无已确认代码阻断；Planning Max 约 622 ms 需目标设备体验。导航、玩家走通和视觉/碰撞验收通过前，不进入追猎者或室内灯扩展。
