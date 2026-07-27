@@ -64,6 +64,12 @@ namespace
 		return LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(OutWorldTransform);
 	}
 
+	/** 判断两逻辑格是否重合或四方向相邻（曼哈顿距离 <= 1）。 */
+	bool IsWithinOneStep(const FIntPoint A, const FIntPoint B)
+	{
+		return FMath::Abs(A.X - B.X) + FMath::Abs(A.Y - B.Y) <= 1;
+	}
+
 	/** 把实例化失败写成统一报告并保留相关结构类别编号。 */
 	bool FailInstantiation(
 		FZeroEscapeGenerationReport& Report,
@@ -604,6 +610,57 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedRoomWorldTransforms(
 		OutTransforms.Add(WorldTransform);
 	}
 	return true;
+}
+
+bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedCellWorldTransforms(
+	EZeroEscapeGridRegionKind RegionKind,
+	bool bExcludeStartExitAdjacent,
+	TArray<FTransform>& OutTransforms) const
+{
+	OutTransforms.Reset();
+	if (State != EZeroEscapeRuntimeGenerationState::Ready
+		|| !IsValid(GeneratedRoot)
+		|| !IsValid(PresentationProfile))
+	{
+		return false;
+	}
+
+	const double FloorTopZCm = PresentationProfile->FloorTopZCm;
+	for (const FZeroEscapeCollapsedTile& Cell : LastPlan.Cells)
+	{
+		if (Cell.RegionKind != RegionKind)
+		{
+			continue;
+		}
+		if (bExcludeStartExitAdjacent
+			&& (IsWithinOneStep(Cell.GridCoordinate, LastPlan.StartCoordinate)
+				|| IsWithinOneStep(Cell.GridCoordinate, LastPlan.ExitCoordinate)))
+		{
+			continue;
+		}
+
+		// 逻辑格坐标为格中心；放置点使用地板顶面高度，Actor 自身 pivot 贴地。
+		const FVector CellCenterLocation(
+			static_cast<double>(Cell.GridCoordinate.X) * LastPlan.LogicalTileSizeCm,
+			static_cast<double>(Cell.GridCoordinate.Y) * LastPlan.LogicalTileSizeCm,
+			FloorTopZCm);
+		const FTransform CellLocalTransform(
+			FQuat::Identity, CellCenterLocation, FVector::OneVector);
+
+		FTransform WorldTransform;
+		if (!ConvertLocalToWorld(*GeneratedRoot, CellLocalTransform, WorldTransform))
+		{
+			OutTransforms.Reset();
+			return false;
+		}
+		OutTransforms.Add(WorldTransform);
+	}
+	return true;
+}
+
+int32 AZeroEscapeRuntimeLevelGenerator::GetGeneratedSeed() const
+{
+	return LastPlan.Signature.Seed;
 }
 
 void AZeroEscapeRuntimeLevelGenerator::EndPlay(const EEndPlayReason::Type EndPlayReason)
