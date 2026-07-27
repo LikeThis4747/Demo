@@ -10,6 +10,7 @@
 #include "Characters/ZeroEscapeCharacter.h"
 
 #include "Camera/CameraComponent.h"
+#include "Components/Attributes/HealthComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
 #include "Data/Input/ZeroEscapeInputConfig.h"
@@ -54,6 +55,7 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 
 	PhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PhysicsHandle"));
 	ElectromagneticGrab = CreateDefaultSubobject<UElectromagneticGrabComponent>(TEXT("ElectromagneticGrab"));
+	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
 }
 
 /** 重新占有时以幂等方式应用输入 DataAsset 声明的上下文。 */

@@ -17,6 +17,7 @@
 class UCameraComponent;
 class UElectromagneticGrabComponent;
 class UEnhancedInputLocalPlayerSubsystem;
+class UHealthComponent;
 class UPhysicsHandleComponent;
 class USpringArmComponent;
 class UZeroEscapeInputConfig;
@@ -88,6 +89,10 @@ private:
 	/** 磁力选取、持有、放下、投掷与安全恢复的唯一运行时状态 Owner。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "磁力", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UElectromagneticGrabComponent> ElectromagneticGrab;
+
+	/** 玩家生命组件；监听 OnTakeAnyDamage 结算受伤，供地刺等通过 ApplyDamage 的伤害源作用。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "属性", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHealthComponent> HealthComponent;
 
 	/**
 	 * 输入资源唯一来源；对应 UZeroEscapeInputConfig，由 PawnClientRestart 与 SetupPlayerInputComponent 读取。
