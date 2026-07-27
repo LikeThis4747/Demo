@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGenerationAssets.h
- * 职责：定义空间 Grid/WFC 参数与可替换结构表现绑定。
- * 边界：Generation Profile 不保存玩法目标；Presentation 只映射 Mesh，不参与拓扑决策。
+ * 职责：定义空间 Grid/WFC 参数与可替换的结构、顶灯表现绑定。
+ * 边界：Generation Profile 不保存玩法目标；Presentation 只选择表现资源，不参与拓扑决策。
  */
 
 #pragma once
@@ -14,6 +14,7 @@
 
 #include "ZeroEscapeGenerationAssets.generated.h"
 
+class AActor;
 class UStaticMesh;
 
 /** 所有难度共同遵守的地图规模、房间、路线和求解预算。 */
@@ -195,5 +196,27 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bindings")
 	FZeroEscapeStructureMeshBinding Pillar;
 
+	/**
+	 * 是否为本套表现生成室内顶灯。关闭后灯类与修正 Transform 不参与校验，
+	 * Generator 也不会创建灯 Actor，便于不改拓扑地临时回退照明表现。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+	bool bSpawnCeilingLights = true;
+
+	/**
+	 * 每个选中逻辑格生成的原始灯具 Actor 类。当前绑定 HydroLab LampA；
+	 * 灯的强度、颜色、半径和材质仍由该 Blueprint 自己拥有，PCG 不复制这些参数。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+	TSubclassOf<AActor> CeilingLightActorClass;
+
+	/**
+	 * 先相对“逻辑格中心 + CeilingPivotZCm”应用的素材 Pivot 修正。
+	 * 必须为有限 Unit Scale Transform；当前 LampA 使用零平移与 Roll=180° 朝向室内。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
+	FTransform CeilingLightCellTransform = FTransform::Identity;
+
+	/** 校验结构绑定，以及启用时的顶灯 Actor 类和 Pivot 修正。 */
 	bool IsConfigured(double LogicalTileSizeCm, FString& OutError) const;
 };

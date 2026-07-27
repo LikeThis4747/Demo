@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.cpp
- * 职责：同步解析空间配置、运行 Grid/WFC、校验结果并事务式提交五类结构 HISM。
+ * 职责：同步解析空间配置、运行 Grid/WFC、校验结果并事务式提交结构 HISM 与顶灯 Actor。
  * 边界：不在 Construction Script/Tick 中生成；Actor 只消费纯值 Solver 的原子结果。
  */
 
@@ -366,6 +366,113 @@ bool AZeroEscapeRuntimeLevelGenerator::InstantiateValidatedPlan(
 		++InOutReport.Metrics.HismComponentCount;
 	}
 
+	return SpawnCeilingLights(Plan, InOutReport);
+}
+
+bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
+	const FZeroEscapeGeneratedLevelPlan& Plan,
+	FZeroEscapeGenerationReport& InOutReport)
+{
+	if (!PresentationProfile->bSpawnCeilingLights)
+	{
+		return true;
+	}
+
+	UWorld* World = GetWorld();
+	UClass* LightActorClass = PresentationProfile->CeilingLightActorClass.Get();
+	if (!IsValid(World) || !IsValid(GeneratedRoot) || !IsValid(LightActorClass))
+	{
+		return FailInstantiation(
+			InOutReport,
+			INDEX_NONE,
+			TEXT("生成顶灯时 World、GeneratedRoot 或灯 Actor 类已失效。"));
+	}
+
+	/**
+	 * 四方向方格天然是二分图：任意相邻格的 (X+Y) 奇偶性必然相反。
+	 * 选择数量较少的一组可把灯数限制在约一半；平局选择 Start 所在组，
+	 * 若较少组不含 Start 则只额外补一盏，避免引入 BFS、随机数或路线特判。
+	 */
+	int32 ParityCellCounts[2] = {0, 0};
+	bool bFoundStartCell = false;
+	for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
+	{
+		const int32 CellParity = (Cell.GridCoordinate.X + Cell.GridCoordinate.Y) & 1;
+		++ParityCellCounts[CellParity];
+		bFoundStartCell |= Cell.GridCoordinate == Plan.StartCoordinate;
+	}
+
+	if (!bFoundStartCell)
+	{
+		return FailInstantiation(
+			InOutReport,
+			INDEX_NONE,
+			TEXT("生成顶灯时 Plan.Cells 不包含 StartCoordinate。"));
+	}
+
+	const int32 StartParity =
+		(Plan.StartCoordinate.X + Plan.StartCoordinate.Y) & 1;
+	int32 SelectedParity = StartParity;
+	if (ParityCellCounts[0] < ParityCellCounts[1])
+	{
+		SelectedParity = 0;
+	}
+	else if (ParityCellCounts[1] < ParityCellCounts[0])
+	{
+		SelectedParity = 1;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+
+	for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
+	{
+		const int32 CellParity = (Cell.GridCoordinate.X + Cell.GridCoordinate.Y) & 1;
+		const bool bIsStartCell = Cell.GridCoordinate == Plan.StartCoordinate;
+		if (CellParity != SelectedParity && !bIsStartCell)
+		{
+			continue;
+		}
+
+		// 逻辑格坐标表示 600 cm 格中心；灯使用与天花板结构相同的规范 Pivot 高度。
+		const FVector CellCenterLocation(
+			static_cast<double>(Cell.GridCoordinate.X) * Plan.LogicalTileSizeCm,
+			static_cast<double>(Cell.GridCoordinate.Y) * Plan.LogicalTileSizeCm,
+			PresentationProfile->CeilingPivotZCm);
+		const FTransform CanonicalCellTransform(
+			FQuat::Identity,
+			CellCenterLocation,
+			FVector::OneVector);
+		const FTransform LightLocalTransform =
+			PresentationProfile->CeilingLightCellTransform * CanonicalCellTransform;
+
+		FTransform LightWorldTransform;
+		if (!ConvertLocalToWorld(*GeneratedRoot, LightLocalTransform, LightWorldTransform))
+		{
+			return FailInstantiation(
+				InOutReport,
+				Cell.StableCellId,
+				TEXT("顶灯局部 Transform 无法转换为有限 Unit Scale 世界 Transform。"));
+		}
+
+		AActor* LightActor = World->SpawnActor<AActor>(
+			LightActorClass,
+			LightWorldTransform,
+			SpawnParameters);
+		if (!IsValid(LightActor))
+		{
+			return FailInstantiation(
+				InOutReport,
+				Cell.StableCellId,
+				TEXT("生成顶灯 Actor 失败。"));
+		}
+
+		// Spawn 后立即登记，后续任一灯失败时现有事务路径可销毁此前全部灯。
+		GeneratedLightActors.Add(LightActor);
+	}
+
 	return true;
 }
 
@@ -381,6 +488,15 @@ bool AZeroEscapeRuntimeLevelGenerator::ClearGeneratedScene()
 
 void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
 {
+	for (AActor* LightActor : GeneratedLightActors)
+	{
+		if (IsValid(LightActor))
+		{
+			LightActor->Destroy();
+		}
+	}
+	GeneratedLightActors.Reset();
+
 	for (UHierarchicalInstancedStaticMeshComponent* Component : GeneratedHismComponents)
 	{
 		if (IsValid(Component))

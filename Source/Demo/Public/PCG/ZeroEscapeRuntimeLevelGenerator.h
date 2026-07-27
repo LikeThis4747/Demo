@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.h
- * 职责：拥有一局实时 Grid/WFC 生成事务、已提交 HISM 场景和空间结果查询。
+ * 职责：拥有一局实时 Grid/WFC 生成事务、已提交结构/顶灯场景和空间结果查询。
  * 边界：算法留在 Private/PCG；蓝图只装配 Generation/Profile 两个 DataAsset、触发并读取结果。
  */
 
@@ -48,7 +48,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 
 /**
  * 实时非工具型整关 PCG 的世界边界 Actor。
- * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM；任一检查点失败都会回滚本次全部组件。
+ * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM 与顶灯 Actor；
+ * 任一检查点失败都会回滚本次全部表现对象。
  * 玩法对象、敌人、陷阱和奖励不会在这里生成；其他系统只读取 Ready 后的 Start/Exit/Rooms。
  */
 UCLASS(Blueprintable)
@@ -108,11 +109,19 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 内部无条件回滚入口；调用者负责合法状态转换。 */
+	/** 内部无条件回滚 HISM、顶灯和 Plan；调用者负责合法状态转换。 */
 	void ClearGeneratedSceneInternal();
 
-	/** 把已验证逻辑 Plan 展开并事务式提交为五类结构 HISM。 */
+	/** 把已验证逻辑 Plan 展开并事务式提交为五类结构 HISM 与可选顶灯。 */
 	bool InstantiateValidatedPlan(
+		const FZeroEscapeGeneratedLevelPlan& Plan,
+		FZeroEscapeGenerationReport& InOutReport);
+
+	/**
+	 * 按四方向方格的棋盘奇偶性选择约半数有效格并生成顶灯。
+	 * 每个成功 Spawn 的 Actor 会立即登记；任一失败由调用者走统一事务回滚。
+	 */
+	bool SpawnCeilingLights(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		FZeroEscapeGenerationReport& InOutReport);
 
@@ -138,7 +147,7 @@ private:
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapeLevelGenerationProfile> GenerationProfile;
 
-	/** 五类规范结构到当前素材的直接绑定。 */
+	/** 五类规范结构与可选顶灯到当前素材的直接表现绑定。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapePresentationProfile> PresentationProfile;
 
@@ -149,6 +158,10 @@ private:
 	/** 本次实例化事务已登记的全部 HISM；创建后立即入数组以保证可回滚。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> GeneratedHismComponents;
+
+	/** 本次实例化事务已登记的全部顶灯；由 Generator 写入并在 Clear/失败/EndPlay 清空。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<AActor>> GeneratedLightActors;
 
 	/** 同步重入锁；完成 Delegate 广播期间也保持为 true。 */
 	bool bGenerationInProgress = false;

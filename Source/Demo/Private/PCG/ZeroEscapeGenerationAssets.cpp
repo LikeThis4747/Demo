@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapeGenerationAssets.cpp
- * 职责：对 Grid/WFC 策划参数和结构表现绑定执行 fail-closed 校验。
+ * 职责：对 Grid/WFC 策划参数，以及结构与顶灯表现绑定执行 fail-closed 校验。
  * 边界：不加载替代资源、不猜测 Pivot、不修正 DataAsset，也不访问 World。
  */
 
@@ -10,6 +10,7 @@
 
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
+#include "GameFramework/Actor.h"
 
 namespace
 {
@@ -315,6 +316,25 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 		&& !ValidateBinding(Pillar, TEXT("Pillar"), OutError))
 	{
 		return false;
+	}
+
+	// 关闭顶灯时允许灯类为空，确保同一套结构表现可以无代码地回退到“不生成灯”。
+	if (bSpawnCeilingLights)
+	{
+		const UClass* LightActorClass = CeilingLightActorClass.Get();
+		if (!IsValid(LightActorClass)
+			|| LightActorClass->HasAnyClassFlags(CLASS_Abstract))
+		{
+			OutError = TEXT("Presentation.CeilingLightActorClass 必须是有效且非抽象的 Actor 类。");
+			return false;
+		}
+
+		if (!IsFiniteUnitScaleTransform(CeilingLightCellTransform))
+		{
+			OutError = TEXT(
+				"Presentation.CeilingLightCellTransform 必须是有限 Unit Scale Transform。");
+			return false;
+		}
 	}
 
 	return true;
