@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.h
- * 职责：拥有一局实时 Grid/WFC 生成事务、已提交 HISM 场景和对玩法开放的 Anchor 查询。
+ * 职责：拥有一局实时 Grid/WFC 生成事务、已提交 HISM 场景和空间结果查询。
  * 边界：算法留在 Private/PCG；蓝图只装配 Generation/Profile 两个 DataAsset、触发并读取结果。
  */
 
@@ -19,7 +19,7 @@ class USceneComponent;
 class UZeroEscapeLevelGenerationProfile;
 class UZeroEscapePresentationProfile;
 
-/** 运行时同步事务的公开生命周期；保留 WaitingForNavigation 供未来导航阶段使用。 */
+/** 当前同步生成事务实际使用的公开生命周期。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeRuntimeGenerationState : uint8
 {
@@ -27,9 +27,8 @@ enum class EZeroEscapeRuntimeGenerationState : uint8
 	Planning = 1,
 	Validating = 2,
 	Instantiating = 3,
-	WaitingForNavigation = 4,
-	Ready = 5,
-	Failed = 6
+	Ready = 4,
+	Failed = 5
 };
 
 /** 生成只允许在 BeginPlay 或明确函数调用发生，禁止 Construction Script 隐式改图。 */
@@ -50,7 +49,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 /**
  * 实时非工具型整关 PCG 的世界边界 Actor。
  * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM；任一检查点失败都会回滚本次全部组件。
- * 玩法对象、敌人、陷阱和奖励不会在这里生成，只通过 Ready 后的稳定 Anchor 供其他系统装配。
+ * 玩法对象、敌人、陷阱和奖励不会在这里生成；其他系统只读取 Ready 后的 Start/Exit/Rooms。
  */
 UCLASS(Blueprintable)
 class DEMO_API AZeroEscapeRuntimeLevelGenerator : public AActor
@@ -85,9 +84,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool GetGeneratedExitWorldTransform(FTransform& OutTransform) const;
 
-	/** Ready 时按 StableAnchorInstanceId 返回所有候选 Objective Anchor。 */
+	/** Ready 时按 RegionId 稳定顺序返回全部中立房间世界 Transform。 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
-	bool GetGeneratedObjectiveWorldTransforms(TArray<FTransform>& OutTransforms) const;
+	bool GetGeneratedRoomWorldTransforms(TArray<FTransform>& OutTransforms) const;
 
 	/** 一次同步请求结束时广播；广播期间仍保持防重入锁。 */
 	UPROPERTY(BlueprintAssignable, Category = "PCG")
@@ -105,7 +104,7 @@ protected:
 	/** 根据 TriggerMode 可选生成首局。 */
 	virtual void BeginPlay() override;
 
-	/** EndPlay 时无条件使 Plan、Anchor 与组件失效。 */
+	/** EndPlay 时无条件使 Plan、空间查询结果与组件失效。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
@@ -123,13 +122,7 @@ private:
 		const FZeroEscapeGenerationReport& Report,
 		const FZeroEscapeGenerationRequest& Request);
 
-	/** 按稳定 Id 和类型查询单个 Anchor 并转换到世界空间。 */
-	bool GetGeneratedAnchorWorldTransform(
-		int32 StableAnchorInstanceId,
-		EZeroEscapeGameplayAnchorType ExpectedType,
-		FTransform& OutTransform) const;
-
-	/** 所有结构 HISM 与逻辑 Anchor 的共同局部空间。 */
+	/** 所有结构 HISM 与空间结果的共同局部空间。 */
 	UPROPERTY(VisibleAnywhere, Category = "PCG")
 	TObjectPtr<USceneComponent> GeneratedRoot;
 
@@ -138,14 +131,14 @@ private:
 	EZeroEscapeGenerationTrigger TriggerMode = EZeroEscapeGenerationTrigger::ExplicitOnly;
 
 	/** Generate() 每次复制的稳定请求。 */
-	UPROPERTY(EditAnywhere, Category = "PCG")
+	UPROPERTY(EditAnywhere, Category = "PCG", meta = (ShowOnlyInnerProperties))
 	FZeroEscapeGenerationRequest DefaultRequest;
 
-	/** 难度、流程、格网、路线和 WFC 权重的唯一权威配置。 */
+	/** 格网、房间、路线预算和难度 WFC 权重的唯一权威配置。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapeLevelGenerationProfile> GenerationProfile;
 
-	/** 五类规范结构到当前素材的直接绑定；不包含 Module Catalog。 */
+	/** 五类规范结构到当前素材的直接绑定。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapePresentationProfile> PresentationProfile;
 

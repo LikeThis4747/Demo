@@ -4,7 +4,7 @@
  * @file ZeroEscapeWfcSolver.h
  *
  * 职责：声明单层四邻域 Grid-WFC 的纯值输入、固定 16 状态变体、有界回溯和完成态验收入口。
- * 边界：不读取 UObject、DataAsset、World 或 StaticMesh；不解释 K-of-N、房间路线或表现资源。
+ * 边界：不读取 UObject、DataAsset、World 或 StaticMesh；不解释房间内容或表现资源。
  *
  * Solver 只负责局部开闭边传播、具体全局约束、最小熵观察、chronological backtracking 与原子导出。
  * Grid 通过 FWfcCollapsedCandidateValidator 验收完整叶子；RejectBranch 继续回溯，FatalError 立即失败。
@@ -28,7 +28,7 @@ namespace ZeroEscape::LevelGeneration
 	/**
 	 * Cell 是否参与本次 WFC。
 	 *
-	 * Outside 固定为空；Required 必须选择非空 OpeningMask，但不要求调用方预刻一条外部开口；
+	 * Outside 固定为空；Required 必须选择非空 OpeningMask，具体开口由邻接约束共同求解；
 	 * Optional 可以为空，也可以选择满足一元和相邻约束的任意非空四向形态。
 	 */
 	enum class EGridCellDomain : uint8
@@ -42,7 +42,7 @@ namespace ZeroEscape::LevelGeneration
 	 * 单个逻辑 Cell 的一元约束。
 	 *
 	 * RequiredOpenMask 与 RequiredClosedMask 使用 N/E/S/W 四个稳定 bit。相邻 Cell 的开闭状态
-	 * 仍由 WFC 二元传播统一保证；这里不保存 Mesh Socket、宽度等级或世界坐标。
+	 * 仍由 WFC 二元传播统一保证；这里不保存任何表现资源或世界坐标。
 	 */
 	struct FGridCellConstraint
 	{
@@ -72,7 +72,7 @@ namespace ZeroEscape::LevelGeneration
 		/** 当前完整布局满足全部调用方规则，可以原子提交。 */
 		Accept = 0,
 
-		/** 当前布局结构合法但不满足路线/折返规则；作为当前分支矛盾继续回溯。 */
+		/** 当前布局结构合法但不满足最终路线规则；作为当前分支矛盾继续回溯。 */
 		RejectBranch = 1,
 
 		/** 调用方发现配置或代码不变量错误；不得用回溯掩盖。 */

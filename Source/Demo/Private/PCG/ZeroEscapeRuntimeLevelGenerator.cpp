@@ -2,9 +2,8 @@
 
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.cpp
- * 职责：同步执行 Profile 快照、流程意图、Grid/WFC、独立校验与五类结构 HISM 事务提交。
- * 边界：不在 Construction Script/Tick 中生成；Actor 不自行实现 Catalog、Socket、A-star、
- *       拓扑求解或备用布局，只消费纯值 Solver 的原子结果。
+ * 职责：同步解析空间配置、运行 Grid/WFC、校验结果并事务式提交五类结构 HISM。
+ * 边界：不在 Construction Script/Tick 中生成；Actor 只消费纯值 Solver 的原子结果。
  */
 
 #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
@@ -49,18 +48,20 @@ namespace
 		return Result;
 	}
 
-	/** 签名逐字段比较，禁止接受属于其他请求或其他表现版本的 Plan。 */
-	bool AreSignaturesEqual(
-		const FZeroEscapeGenerationSignature& A,
-		const FZeroEscapeGenerationSignature& B)
+	/** 把 Solver 输出的局部空间结果转换到 GeneratedRoot 世界空间。 */
+	bool ConvertLocalToWorld(
+		const USceneComponent& Root,
+		const FTransform& LocalTransform,
+		FTransform& OutWorldTransform)
 	{
-		return A.Seed == B.Seed
-			&& A.Difficulty == B.Difficulty
-			&& A.FlowProfileId == B.FlowProfileId
-			&& A.AlgorithmVersion == B.AlgorithmVersion
-			&& A.GenerationProfileVersion == B.GenerationProfileVersion
-			&& A.FlowVersion == B.FlowVersion
-			&& A.PresentationVersion == B.PresentationVersion;
+		OutWorldTransform = FTransform::Identity;
+		if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(LocalTransform))
+		{
+			return false;
+		}
+
+		OutWorldTransform = LocalTransform * Root.GetComponentTransform();
+		return LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(OutWorldTransform);
 	}
 
 	/** 把实例化失败写成统一报告并保留相关结构类别编号。 */
@@ -183,46 +184,13 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		return false;
 	}
 
-	FString ConfigurationError;
-	if (!ValidateZeroEscapeGenerationAssetSet(
-		*GenerationProfile,
-		*PresentationProfile,
-		ConfigurationError))
-	{
-		Report.Stage = EZeroEscapeGenerationStage::Configuration;
-		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
-		Report.Message = MoveTemp(ConfigurationError);
-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
-		FinishGeneration(false, Report, Request);
-		return false;
-	}
-
 	const double PlanningStartSeconds = FPlatformTime::Seconds();
-	LevelGen::FGenerationProfileSnapshot Snapshot;
-	LevelGen::FResolvedProgressionSettings ProgressionSettings;
-	LevelGen::FProgressionIntent Progression;
-	FZeroEscapeGenerationSignature Signature;
-	if (!LevelGen::FGenerationCore::BuildGenerationSnapshot(
+	LevelGen::FResolvedGenerationInput Input;
+	if (!LevelGen::FGenerationCore::ResolveGenerationInput(
 			*GenerationProfile,
-			Snapshot,
-			Report)
-		|| !LevelGen::FGenerationCore::ResolveProgressionSettings(
 			Request,
-			Snapshot,
-			ProgressionSettings,
-			Report)
-		|| !LevelGen::FGenerationCore::BuildGenerationSignature(
-			Request,
-			Snapshot,
-			ProgressionSettings,
 			PresentationProfile->PresentationVersion,
-			Signature,
-			Report)
-		|| !LevelGen::FGenerationCore::BuildProgressionIntent(
-			Request,
-			Snapshot,
-			ProgressionSettings,
-			Progression,
+			Input,
 			Report))
 	{
 		Report.Metrics.PlanningMilliseconds =
@@ -232,46 +200,27 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		return false;
 	}
 
-	LevelGen::FGridLayoutRequest LayoutRequest;
-	LayoutRequest.Signature = Signature;
-	LayoutRequest.Progression = Progression;
-
-	/**
-	 * Runtime 只把已经验证的 DataAsset 快照复制成纯值 Solver 设置。
-	 * Count、连续直线和搜索预算属于所有难度共享的单局边界；形态权重则取当前难度快照。
-	 */
-	LevelGen::FGridLayoutSettings LayoutSettings;
-	LayoutSettings.GridSize = Snapshot.SharedRouteConstraints.GridSize;
-	LayoutSettings.LogicalTileSizeCm = FMath::RoundToInt(
-		Snapshot.SharedRouteConstraints.LogicalTileSizeCm);
-	LayoutSettings.RoomSizeTiles = Snapshot.SharedRouteConstraints.RoomSizeTiles;
-	LayoutSettings.ObjectiveProgressBandCount =
-		Snapshot.SharedRouteConstraints.ObjectiveProgressBandCount;
-	LayoutSettings.MinWalkableCellCount =
-		Snapshot.SharedRouteConstraints.MinWalkableCellCount;
-	LayoutSettings.MaxWalkableCellCount =
-		Snapshot.SharedRouteConstraints.MaxWalkableCellCount;
-	LayoutSettings.MaxConsecutiveStraightTiles =
-		Snapshot.SharedRouteConstraints.MaxConsecutiveStraightTiles;
-	LayoutSettings.MaxWfcCandidateAttempts =
-		Snapshot.SharedRouteConstraints.MaxWfcCandidateAttempts;
-	LayoutSettings.MaxWfcBacktrackCount =
-		Snapshot.SharedRouteConstraints.MaxWfcBacktrackCount;
-	LayoutSettings.MaxWfcSolveAttempts =
-		Snapshot.SharedRouteConstraints.MaxWfcSolveAttempts;
-	LayoutSettings.MaxRequiredRouteLengthTiles =
-		Snapshot.SharedRouteConstraints.MaxRequiredRouteLengthTiles;
-	LayoutSettings.MaxRequiredRouteExtraTiles =
-		Snapshot.SharedRouteConstraints.MaxRequiredRouteExtraTiles;
-	LayoutSettings.GameplayAnchorHeightCm =
-		Snapshot.SharedRouteConstraints.GameplayAnchorHeightCm;
+	FString PresentationError;
+	if (!PresentationProfile->IsConfigured(
+		Input.Rules.LogicalTileSizeCm,
+		PresentationError))
+	{
+		Report.Stage = EZeroEscapeGenerationStage::Configuration;
+		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
+		Report.Message = MoveTemp(PresentationError);
+		Report.Metrics.PlanningMilliseconds =
+			(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
+		Report.Metrics.TotalMilliseconds =
+			(FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+		FinishGeneration(false, Report, Request);
+		return false;
+	}
 
 	FZeroEscapeGeneratedLevelPlan CandidatePlan;
 	if (!LevelGen::FGridLayoutSolver::Solve(
-		LayoutRequest,
-		LayoutSettings,
-		ProgressionSettings.WfcShapeWeights,
-		Request.Seed,
+		Input.Signature,
+		Input.Rules,
+		Input.WfcShapeWeights,
 		CandidatePlan,
 		Report))
 	{
@@ -287,9 +236,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	State = EZeroEscapeRuntimeGenerationState::Validating;
 	const int64 RecomputedLayoutHash =
 		LevelGen::FGenerationCore::ComputeCanonicalLayoutHash(CandidatePlan);
-	if (!AreSignaturesEqual(CandidatePlan.Signature, Signature)
-		|| CandidatePlan.CanonicalProgressionHash
-			!= LevelGen::FGenerationCore::ComputeCanonicalProgressionHash(Progression)
+	if (!(CandidatePlan.Signature == Input.Signature)
 		|| CandidatePlan.CanonicalLayoutHash == 0
 		|| CandidatePlan.CanonicalLayoutHash != RecomputedLayoutHash)
 	{
@@ -459,15 +406,15 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	UE_LOG(
 		LogZeroEscapePCG,
 		Display,
-		// schema=4 增加有限 WFC 尝试次数和五类矛盾来源，便于直接定位 Seed 长尾。
-		TEXT("ZE_PCG_RESULT schema=4 success=%d seed=%d difficulty=%s flow=%s stage=%s failure=%s cells=%d walkable=%d solve_attempts=%d observations=%d candidate_attempts=%d propagations=%d contradictions=%d contradiction_local=%d contradiction_count=%d contradiction_max_straight=%d contradiction_connected=%d contradiction_global_ban=%d backtracks=%d leaf_rejections=%d instances=%d hism=%d progression_hash=%lld layout_hash=%lld total_ms=%.3f message=\"%s\""),
+		// schema=5 记录空间输入、求解成本、房间数量和唯一 Layout Hash。
+		TEXT("ZE_PCG_RESULT schema=5 success=%d seed=%d difficulty=%s stage=%s failure=%s cells=%d rooms=%d walkable=%d solve_attempts=%d observations=%d candidate_attempts=%d propagations=%d contradictions=%d contradiction_local=%d contradiction_count=%d contradiction_max_straight=%d contradiction_connected=%d contradiction_global_ban=%d backtracks=%d leaf_rejections=%d instances=%d hism=%d layout_hash=%lld total_ms=%.3f message=\"%s\""),
 		bSuccess ? 1 : 0,
 		Request.Seed,
 		*GetStableEnumName(Request.Difficulty),
-		*Request.FlowProfileId.ToString(),
 		*GetStableEnumName(Report.Stage),
 		*GetStableEnumName(Report.Failure),
 		LastPlan.Cells.Num(),
+		LastPlan.Rooms.Num(),
 		Report.Metrics.WalkableCellCount,
 		Report.Metrics.WfcSolveAttemptCount,
 		Report.Metrics.WfcObservationCount,
@@ -483,7 +430,6 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 		Report.Metrics.WfcCollapsedCandidateRejectionCount,
 		Report.Metrics.InstancedMeshCount,
 		Report.Metrics.HismComponentCount,
-		static_cast<long long>(LastPlan.CanonicalProgressionHash),
 		static_cast<long long>(LastPlan.CanonicalLayoutHash),
 		Report.Metrics.TotalMilliseconds,
 		*MakeSingleLineLogValue(Report.Message));
@@ -494,51 +440,31 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	}
 }
 
-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedAnchorWorldTransform(
-	const int32 StableAnchorInstanceId,
-	const EZeroEscapeGameplayAnchorType ExpectedType,
-	FTransform& OutTransform) const
-{
-	OutTransform = FTransform::Identity;
-	if (State != EZeroEscapeRuntimeGenerationState::Ready || !IsValid(GeneratedRoot))
-	{
-		return false;
-	}
-
-	const FZeroEscapeGeneratedAnchor* Anchor = LastPlan.GameplayAnchors.FindByPredicate(
-		[StableAnchorInstanceId](const FZeroEscapeGeneratedAnchor& Candidate)
-		{
-			return Candidate.StableAnchorInstanceId == StableAnchorInstanceId;
-		});
-	if (Anchor == nullptr || Anchor->Type != ExpectedType
-		|| !LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(Anchor->LocalTransform))
-	{
-		return false;
-	}
-
-	OutTransform = Anchor->LocalTransform * GeneratedRoot->GetComponentTransform();
-	return LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(OutTransform);
-}
-
 bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedStartWorldTransform(
 	FTransform& OutTransform) const
 {
-	return GetGeneratedAnchorWorldTransform(
-		LastPlan.PlayerSpawnAnchorInstanceId,
-		EZeroEscapeGameplayAnchorType::PlayerSpawn,
-		OutTransform);
+	OutTransform = FTransform::Identity;
+	return State == EZeroEscapeRuntimeGenerationState::Ready
+		&& IsValid(GeneratedRoot)
+		&& ConvertLocalToWorld(
+			*GeneratedRoot,
+			LastPlan.PlayerStartLocalTransform,
+			OutTransform);
 }
 
 bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedExitWorldTransform(
 	FTransform& OutTransform) const
 {
-	return GetGeneratedAnchorWorldTransform(
-		LastPlan.ExitAnchorInstanceId,
-		EZeroEscapeGameplayAnchorType::Exit,
-		OutTransform);
+	OutTransform = FTransform::Identity;
+	return State == EZeroEscapeRuntimeGenerationState::Ready
+		&& IsValid(GeneratedRoot)
+		&& ConvertLocalToWorld(
+			*GeneratedRoot,
+			LastPlan.ExitLocalTransform,
+			OutTransform);
 }
 
-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedObjectiveWorldTransforms(
+bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedRoomWorldTransforms(
 	TArray<FTransform>& OutTransforms) const
 {
 	OutTransforms.Reset();
@@ -547,29 +473,13 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedObjectiveWorldTransforms(
 		return false;
 	}
 
-	TArray<const FZeroEscapeGeneratedAnchor*> Objectives;
-	for (const FZeroEscapeGeneratedAnchor& Anchor : LastPlan.GameplayAnchors)
-	{
-		if (Anchor.Type == EZeroEscapeGameplayAnchorType::Objective)
-		{
-			Objectives.Add(&Anchor);
-		}
-	}
-	Objectives.Sort([](
-		const FZeroEscapeGeneratedAnchor& A,
-		const FZeroEscapeGeneratedAnchor& B)
-	{
-		return A.StableAnchorInstanceId < B.StableAnchorInstanceId;
-	});
-
-	OutTransforms.Reserve(Objectives.Num());
-	for (const FZeroEscapeGeneratedAnchor* Anchor : Objectives)
+	OutTransforms.Reserve(LastPlan.Rooms.Num());
+	for (const FZeroEscapeGeneratedRoom& Room : LastPlan.Rooms)
 	{
 		FTransform WorldTransform;
-		if (Anchor == nullptr
-			|| !GetGeneratedAnchorWorldTransform(
-				Anchor->StableAnchorInstanceId,
-				EZeroEscapeGameplayAnchorType::Objective,
+		if (!ConvertLocalToWorld(
+				*GeneratedRoot,
+				Room.LocalTransform,
 				WorldTransform))
 		{
 			OutTransforms.Reset();

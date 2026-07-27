@@ -2,16 +2,19 @@
 
 /**
  * @file PursuerCharacter.cpp
- * 职责：装配追猎者角色，应用移动参数并播放攻击蒙太奇。
- * 边界：不做 AI 决策与物理受击；不加载除攻击蒙太奇外的资源；不替代 AI 控制器的状态管理。
+ * 职责：装配追猎者角色、官方 Physics Control 与局部受击状态组件，应用移动参数并播放攻击蒙太奇。
+ * 边界：不做 AI 决策或物理受击状态管理；不加载除攻击蒙太奇外的资源；不替代专用状态 Owner。
  */
 
 #include "Characters/PursuerCharacter.h"
 
 #include "AI/PursuerAIController.h"
 #include "Animation/AnimMontage.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/Physics/PhysicsControlHitResponseComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "PhysicsControlComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPursuer, Log, All);
 
@@ -19,6 +22,11 @@ DEFINE_LOG_CATEGORY_STATIC(LogPursuer, Log, All);
 APursuerCharacter::APursuerCharacter()
 {
 	PrimaryActorTick.bCanEverTick = false;
+
+	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
+	PhysicsControl->SetupAttachment(GetRootComponent());
+	PhysicsControlHitResponse = CreateDefaultSubobject<UPhysicsControlHitResponseComponent>(
+		TEXT("PhysicsControlHitResponse"));
 
 	AIControllerClass = APursuerAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -36,6 +44,10 @@ APursuerCharacter::APursuerCharacter()
 void APursuerCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
+
+	// Blueprint 组件模板应用完成后再建立碰撞职责：Capsule 管移动，Manny Physics Asset 接收物理道具命中。
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	PhysicsControlHitResponse->Configure(GetMesh(), PhysicsControl, PhysicsControlHitTuning);
 
 	FString ConfigurationError;
 	if (!IsValid(Config) || !Config->IsConfigured(ConfigurationError))

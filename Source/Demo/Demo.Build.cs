@@ -10,7 +10,7 @@ public class Demo : ModuleRules
 	
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "AIModule", "NavigationSystem", "GameplayTasks" });
 
-		PrivateDependencyModuleNames.AddRange(new string[] {  });
+		PrivateDependencyModuleNames.AddRange(new string[] { "PhysicsControl" });
 
 		// 使用 Slate UI 时取消下一行注释。
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

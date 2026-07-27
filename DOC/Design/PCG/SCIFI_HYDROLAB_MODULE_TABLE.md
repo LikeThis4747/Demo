@@ -4,7 +4,7 @@
 
 ## 1. 测量口径
 
-- 数据来源：UE Editor 中通过只读 `editor.inspect_static_meshes` 扫描 `/Game/SciFiHydroLab`。
+- 数据来源：UE Editor 中通过只读检查扫描当前素材路径 `/Game/Assets/SciFiHydroLab`。
 - 扫描结果：312 个 Static Mesh，312 个成功，0 个加载失败。
 - 尺寸单位：厘米；以下显示值按 0.01 cm 四舍五入。
 - Pivot：来自 Static Mesh 局部 Bounds 相对局部原点的位置，不依赖 Actor 名称或手工拖入关卡。
@@ -175,6 +175,31 @@ Trim 不进入 WFC Tile 状态，也不改变逻辑连通性。首版只建立�
 2. `WallH + WallTrimG` 用于直墙，`PillarC` 用于直角处覆盖端头。
 3. Floor/Ceiling Trim 暂不进入首版；`TrimB + TrimD` 只保留为未来平台边缘候选。
 4. Level0 验证使用 600 cm 双格宽 L 形走廊，不再使用 300 cm 单格宽直段作为第三人称验收样例。
+
+### 8.1 Demonstration 灯具摆放证据
+
+本节只记录供应商关卡中的实际摆法，用于校正当前灯光预览；不把灯具加入 WFC 结构状态。
+
+| 灯具 | 关卡证据 | 当前结论 |
+|---|---|---|
+| `BP_HydroLab_LampA` | Demonstration 中有 62 个实例；抽查的标准顶装实例为单位缩放，通常 `Pitch≈0°`、`Roll≈180°`，Yaw 随走廊方向变化；灯具 Pivot 与天花板表面基本同高。部分连续实例间距约 300 cm。 | 作为首版唯一顶灯候选。规范灯位放在天花板表面，使用 `Roll=180°` 使灯面朝向室内；具体密度由 Level0 实测后确定。 |
+| `BP_HydroLab_LampB` | Demonstration 中有 62 个实例；既有顶装，也有墙面、地面和斜面强调照明，旋转关系不唯一。 | 保留为未来局部强调灯，不进入当前最简实现。 |
+
+`BP_HydroLab_LampA/B` 都是“灯具 Static Mesh + RectLightComponent”的素材 Blueprint。当前 PCG 若采用 LampA，应直接生成原始 Blueprint，保留素材自己的灯光默认值；Presentation Profile 只保存可替换的 Actor 类、Pivot/旋转修正和灯距，不复制颜色、强度、半径或材质参数。
+
+### 8.2 其他布局的未来组合候选
+
+Demonstration 的 `Part_1` 到 `Part_5` 是供应商场景分区，不等同于已经验证的 PCG 模块。下面只把高频组合整理为未来表现层 Palette 线索；当前仍只实现已确认的最简房间与走廊。
+
+| 示例分区 | 观察到的主要组合 | 未来可能用途 |
+|---|---|---|
+| `Part_1` | `FloorA/B`、`WallB/C`、`CeilingC/CeilingPieceD`、`PillarA/C`、`WaterPipeB`、通风口与窗 | 管线较多的设备走廊或服务区表现 Palette |
+| `Part_2` | `WallB/H/K`、`CeilingPieceB/C/E`、`PillarG`、`TrimC`、`PipeD`、种植槽与控制台 | 紧凑种植房或设备房 Palette |
+| `Part_3` | `WallD + WallTrimH`、`WallI`、`PillarC/F`、`CeilingC/CeilingPieceD/E` | 有明显框架的房间—走廊过渡 Palette |
+| `Part_4` | `WindowFrame/WindowA/B`、`FloorB/F/LargeFloorB`、`WallI`、平台、楼梯与门框 | 窗区、平台或轻量高差的特殊房间候选 |
+| `Part_5` | `WallH/D`、`WallTrimB/C/G/H`、`CeilingC`、`WallPieceF`、`PillarC`、大型平台与管道 | 较大房间、平台区或管线区 Palette |
+
+未来真正加入某个组合前，仍需单独确认占地、Pivot、局部变换、碰撞与玩家净空。仅视觉不同但占地一致的组合应留在表现层；会改变通路、层高或可走区域的组合才需要扩展结构规则。
 
 ## 9. 风格区域约束（为未来扩展保留）
 

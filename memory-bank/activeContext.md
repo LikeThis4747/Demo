@@ -4,16 +4,17 @@
 
 ## 当前迭代焦点
 
-V4 全图 Grid-WFC 已完成源码、真实 Profile、构建、19/19 自动化、288/288 Seed Sweep 和 SelectedViewport 技术烟测。2026-07-27 无新项目变更；唯一关键路径仍是玩家多 Seed 的路线、接缝、碰撞、净空、导航与 Start→Exit 验收。
+2026-07-27 用户明确授权接入追猎者 Physics Control 局部受击，包括本机 UE5.8 API 兼容修正，但不修改 `DA_Pursuer` 参数。当前关键路径临时切换为 `TASK-20260727-001`：源码接入 → 构建 → `BP_Pursuer` 装配 → PIE 连续命中与恢复验证 → 用户视觉验收。
 
 ## 活跃任务
 
-- `TASK-20260723-002`：等待 V4 玩家验收；当前唯一关键路径。
-- `TASK-20260723-004`、追猎者卡、静态网格体检卡：暂停，不抢占关键路径；白天归档/修正重复 `TASK-20260724-001` ID。
+- `TASK-20260727-001`：追猎者 Physics Control 局部受击，已授权实现，当前唯一正在修改的任务。
+- `TASK-20260723-002`：V4 PCG 技术验证已完成，玩家多 Seed 验收暂缓，完成追猎者接入后恢复。
+- 其他旧 active 卡暂停；不并行修改重叠文件。
 
-## 当前证据与门槛
+## 当前边界与风险
 
-- 2026-07-27 本地 UE Editor MCP 只读审计：Editor/World/Asset Registry Ready，PIE Stopped；Generator/Harness Blueprint UpToDate，测试关卡装配完整。
-- 官方 UE5.8 MCP 三步入口未暴露，因此通用 DataAsset 属性/引用审计未执行。
-- 当前 Outliner 仅见 AbstractNavData，未见 `NavMeshBoundsVolume` 或 `RecastNavMesh`；导航仍未验收。
-- 室内灯保持独立增量；Runtime Harness/测试资产在正式 GameFlow 接管前保留。
+- 不修改 `DA_Pursuer`、Level0、Manny、Physics Asset、AnimBP、磁力系统或 AI/伤害逻辑。
+- 本机 UE5.8 Physics Control API 与交接源码存在返回值、字段和构造函数差异，必须按本机引擎头文件适配后重新构建。
+- 新增反射类可能需要完整编辑器重启；关闭编辑器前必须先确认无未保存资产。
+- 最终完成门槛包含真实物理命中、连续至少 10 次、恢复、Capsule/追击/攻击稳定及用户视觉验收。

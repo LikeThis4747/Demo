@@ -145,30 +145,28 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 	}
 	const int32 GridCellCount = GridSize.X * GridSize.Y;
 
-	// 当前 Landmark 槽位仍需在左右为 Start/Exit 留安全边界，并在上下容纳两条 2x2 房间 Lane。
-	// 该检查只验证语义占格容量，不再证明或预刻任何中央主干路线。
+	// 房间槽需要在左右为 Start/Exit 留出连接空间，并在中线两侧保留外部入口缓冲。
 	if (GridSize.X < 14 || GridSize.Y < 10)
 	{
-		OutError = TEXT("V4 的 Start/Exit 与 2x2 Objective 槽位要求 GridSize 至少为 14x10。");
+		OutError = TEXT("Start/Exit 与中立房间槽要求 GridSize 至少为 14x10。");
 		return false;
 	}
 
-	// 首版表现层只接受已经测量并验证的 600/300 双层网格，避免再次引入不透明适配层。
+	// 当前表现层只接受已经测量并验证的 600/300 双层网格。
 	if (!FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0)
 		|| Route.RoomSizeTiles != 2)
 	{
-		OutError = TEXT("V4 首版要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
+		OutError = TEXT("当前结构契约要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
 		return false;
 	}
 
-	if (Route.ObjectiveProgressBandCount <= 0
-		|| Route.ObjectiveProgressBandCount > ZeroEscape::GenerationLimits::MaxObjectiveProgressBands
+	if (Route.RoomCount < 0
+		|| Route.RoomCount > ZeroEscape::GenerationLimits::MaxRoomCount
 		|| Route.MaxRequiredRouteLengthTiles <= 0
-		|| Route.MaxRequiredRouteExtraTiles < 0
-		|| !FMath::IsFinite(Route.GameplayAnchorHeightCm)
-		|| Route.GameplayAnchorHeightCm < 0.0)
+		|| !FMath::IsFinite(Route.AnchorHeightCm)
+		|| Route.AnchorHeightCm < 0.0)
 	{
-		OutError = TEXT("SharedRouteConstraints 包含非法进度、路线或 Anchor 参数。");
+		OutError = TEXT("SharedRouteConstraints 包含非法房间、路线或 Anchor 参数。");
 		return false;
 	}
 
@@ -195,20 +193,17 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		return false;
 	}
 
-	// Objective 房沿 X 轴按进度带离散放置。每个 2x2 房之间至少留一格，左右还要保留
-	// Start/Exit 与安全边界；这些只是 Landmark 占格约束，不再暗含一条固定连接路线。
+	// 中立房间沿 X 轴均匀分布；相邻房间至少留一格，房间外部连接完全交给 WFC。
 	const int32 MinRoomX = 4;
-	// 同一进度带的上下房在 X 轴错开一格，避免房间投影重叠；该值必须与 Grid Solver
-	// 的 Landmark 槽位公式保持一致，但不再承担固定 Gate 或主干边证明。
 	const int32 MaxRoomX = GridSize.X - Route.RoomSizeTiles - 5;
 	const int32 RoomSpan = MaxRoomX - MinRoomX;
-	const int32 MinimumBandSpacing = Route.RoomSizeTiles + 1;
-	if (MaxRoomX < MinRoomX
-		|| (Route.ObjectiveProgressBandCount > 1
-			&& RoomSpan < (Route.ObjectiveProgressBandCount - 1)
-				* MinimumBandSpacing))
+	const int32 MinimumRoomSpacing = Route.RoomSizeTiles + 1;
+	if (Route.RoomCount > 0
+		&& (MaxRoomX < MinRoomX
+			|| (Route.RoomCount > 1
+				&& RoomSpan < (Route.RoomCount - 1) * MinimumRoomSpacing)))
 	{
-		OutError = TEXT("GridSize.X 无法容纳当前进度带数量、2x2 房间与安全间距。");
+		OutError = TEXT("GridSize.X 无法容纳 RoomCount、2x2 房间与安全间距。");
 		return false;
 	}
 
@@ -220,6 +215,18 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		|| UpperLaneMinY + Route.RoomSizeTiles > GridSize.Y - 1)
 	{
 		OutError = TEXT("GridSize.Y 无法在中线两侧容纳上下 2x2 房间 Lane 与外圈边界。");
+		return false;
+	}
+
+	const int64 FixedNonEmptyCellCount = 2LL
+		+ static_cast<int64>(Route.RoomCount)
+			* Route.RoomSizeTiles * Route.RoomSizeTiles;
+	if (FixedNonEmptyCellCount > Route.MaxWalkableCellCount)
+	{
+		OutError = FString::Printf(
+			TEXT("Start/Exit/Rooms 至少需要 %lld 个非空格，超过 MaxWalkable=%d。"),
+			static_cast<long long>(FixedNonEmptyCellCount),
+			Route.MaxWalkableCellCount);
 		return false;
 	}
 
@@ -236,39 +243,6 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 			return false;
 		}
 		SeenDifficulties[DifficultyIndex] = true;
-
-		if (Definition.ObjectiveCandidateCount < 0
-			|| Definition.ObjectiveCandidateCount > ZeroEscape::GenerationLimits::MaxObjectiveCandidates
-			|| Definition.RequiredObjectiveCount < 0
-			|| Definition.RequiredObjectiveCount > Definition.ObjectiveCandidateCount)
-		{
-			OutError = TEXT("DifficultyDefinition 的 K/N 参数非法。");
-			return false;
-		}
-
-		const int32 RoomSlotCapacity = Route.ObjectiveProgressBandCount * 2;
-		if (Definition.ObjectiveCandidateCount > RoomSlotCapacity)
-		{
-			OutError = TEXT("ObjectiveCandidateCount 超过进度带上下房间槽容量。");
-			return false;
-		}
-
-		/**
-		 * Start、Exit 各占一格；每个候选 Objective 房固定占 RoomSizeTiles² 个 Required 格。
-		 * 这里只验证 MaxWalkable 能容纳所有固定语义格，不假定这些格之间如何连接。
-		 */
-		const int64 FixedNonEmptyCellCount = 2LL
-			+ static_cast<int64>(Definition.ObjectiveCandidateCount)
-				* Route.RoomSizeTiles * Route.RoomSizeTiles;
-		if (FixedNonEmptyCellCount > Route.MaxWalkableCellCount)
-		{
-			OutError = FString::Printf(
-				TEXT("难度 %d 至少需要 %lld 个 Start/Exit/Objective 非空格，超过 MaxWalkable=%d。"),
-				DifficultyIndex,
-				static_cast<long long>(FixedNonEmptyCellCount),
-				Route.MaxWalkableCellCount);
-			return false;
-		}
 
 		FString WeightError;
 		if (!Definition.WfcShapeWeights.IsConfigured(WeightError))
@@ -303,40 +277,7 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		return false;
 	}
 
-	TSet<FName> StableFlowIds;
-	bool bHasEscapeOnly = false;
-	for (const FZeroEscapeFlowDefinition& Flow : Flows)
-	{
-		if (Flow.StableFlowId.IsNone() || Flow.FlowVersion <= 0
-			|| StableFlowIds.Contains(Flow.StableFlowId))
-		{
-			OutError = TEXT("Flows 包含空 Id、重复 Id 或非法版本。");
-			return false;
-		}
-
-		switch (Flow.CompletionRule)
-		{
-		case EZeroEscapeCompletionRule::EscapeOnly:
-		case EZeroEscapeCompletionRule::CollectAll:
-		case EZeroEscapeCompletionRule::CollectKOfN:
-			break;
-		default:
-			OutError = TEXT("Flows 包含未支持的 CompletionRule。");
-			return false;
-		}
-
-		StableFlowIds.Add(Flow.StableFlowId);
-		bHasEscapeOnly |= Flow.StableFlowId == TEXT("EscapeOnly")
-			&& Flow.CompletionRule == EZeroEscapeCompletionRule::EscapeOnly;
-	}
-
-	if (!bHasEscapeOnly)
-	{
-		OutError = TEXT("Flows 必须包含规则为 EscapeOnly 的 StableFlowId=EscapeOnly。");
-		return false;
-	}
-
-	// 路线长度由完整 WFC 候选的最终 BFS/K-of-N 验收决定；Profile 不再用固定主干公式证明可解。
+	// Profile 只声明共享上限；路线长度由完整 WFC 候选的最终 BFS 验收。
 	return true;
 }
 
@@ -377,14 +318,4 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 	}
 
 	return true;
-}
-
-bool ValidateZeroEscapeGenerationAssetSet(
-	const UZeroEscapeLevelGenerationProfile& Profile,
-	const UZeroEscapePresentationProfile& Presentation,
-	FString& OutError)
-{
-	OutError.Reset();
-	return Profile.IsConfigured(OutError)
-		&& Presentation.IsConfigured(Profile.SharedRouteConstraints.LogicalTileSizeCm, OutError);
 }

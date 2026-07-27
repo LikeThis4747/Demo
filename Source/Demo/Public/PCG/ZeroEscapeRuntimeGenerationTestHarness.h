@@ -3,7 +3,7 @@
 /**
  * @file ZeroEscapeRuntimeGenerationTestHarness.h
  * 职责：只在独立 PCG 测试关卡中协调安全出生、运行时生成结果与受控重生成。
- * 边界：不参与 Flow/WFC/Socket 求解，不进入最终 GameFlow，也不按 Actor 名或关卡名查找依赖。
+ * 边界：不参与空间求解或结构实例化，不进入最终游戏流程，也不按名称查找依赖。
  * 状态 Owner：Generator 拥有生成事务；Harness 只拥有玩家传送等待与测试入口的短生命周期状态。
  */
 

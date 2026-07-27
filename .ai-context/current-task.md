@@ -1,13 +1,10 @@
 # Current Task
 
-- ID：`TASK-20260723-002`
-- 目标：完成《零号逃亡》V4 实时 PCG 玩家验收，再进入追猎者与玩法闭环。
-- 实现：全图 16 OpeningMask WFC；最低带权 Shannon 熵；Domain Trail + 有界 chronological backtracking；Count、MaxConsecutive、Connected 五节点展开图/迭代 Tarjan。
-- 重试：`NoValidWfcSolution` 为完整树无解并立即停止；仅 `SolverBudgetExhausted` 使用确定性有限尝试，全部尝试共享总预算。
-- 配置：24x16、48..72 Walkable、MaxStraight=4、Candidate/Backtrack=100000/25000、SolveAttempts=10。
-- 验证：UE 5.8 构建成功；`Demo.PCG` 19/19；288/288 Seed Sweep；Planning P50/P95/Max=23.145/233.470/622.386 ms。
-- PIE：SelectedViewport，`ZE_PCG_RESULT schema=4 success=1`，48 Cells、798 Instances、5 HISM；Harness 传送成功。
-- 2026-07-27 只读审计：无新项目变更；本地 UE Editor MCP Ready、PIE Stopped；Generator/Harness Blueprint UpToDate。官方 UE5.8 MCP 入口未暴露，通用 DataAsset 属性/引用审计未执行。
-- 当前门槛：玩家抽查至少 10 个 Seed，验收路线、接缝、碰撞、净空、导航与 Start→Exit。
-- 导航风险：当前 Outliner 仅见 AbstractNavData，未见 `NavMeshBoundsVolume` 或 `RecastNavMesh`；追猎者接入前必须补齐真实导航可达证据。
-- 边界：只保留本任务为关键路径；室内灯、素材体检、追猎者和 GameFlow 均不抢占；Harness/测试资产保留。
+- ID：`TASK-20260727-001`
+- 目标：按用户授权，将 `physics-control-hit-spike-minimal-2026-07-27` 接入现有追猎者，并完成本机 UE5.8 兼容、构建、蓝图装配与 PIE 验证。
+- 范围：修改 `Demo.Build.cs`、`PursuerCharacter.h/.cpp`；新增 Physics Control 局部受击 Component、调参 DataAsset 类型与 `DA_PursuerPhysicsControlHit`；仅设置 `BP_Pursuer.PhysicsControlHitTuning`。
+- 明确排除：不修改 `DA_Pursuer` 参数、Level0、Manny、Physics Asset、AnimBP、磁力系统、伤害、倒地或 AI 逻辑。
+- UE5.8 兼容：三个 Physics Control Set API 返回 `void`；`FPhysicsControlData` 无 `bUseAccelerationDriveMode`；`FPhysicsControlModifierData` 使用 6 参数构造。
+- 验收：DemoEditor 构建；BP 编译保存；LeftArm/RightArm/Torso；至少 10 次连续命中；约 0.55 秒恢复；Capsule/追击/攻击稳定；无新增 Error。
+- 当前阶段：已授权实现，正在接入源码。
+- 其他任务：V4 PCG 玩家验收暂缓但未取消；完成本次接入后恢复其验收门槛。

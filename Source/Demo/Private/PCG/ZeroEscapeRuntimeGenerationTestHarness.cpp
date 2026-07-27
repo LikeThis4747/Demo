@@ -89,7 +89,7 @@ void AZeroEscapeRuntimeGenerationTestHarness::BeginPlay()
 		break;
 
 	default:
-		// Planning/Validating/Instantiating/WaitingForNavigation 已在进行，只等待绑定好的完成事件。
+		// Planning/Validating/Instantiating 已在进行，只等待绑定好的完成事件。
 		break;
 	}
 }
@@ -338,8 +338,7 @@ bool AZeroEscapeRuntimeGenerationTestHarness::PrepareForRegeneration()
 	const bool bStateDescribesBusyWork =
 		Generator->State == EZeroEscapeRuntimeGenerationState::Planning
 		|| Generator->State == EZeroEscapeRuntimeGenerationState::Validating
-		|| Generator->State == EZeroEscapeRuntimeGenerationState::Instantiating
-		|| Generator->State == EZeroEscapeRuntimeGenerationState::WaitingForNavigation;
+		|| Generator->State == EZeroEscapeRuntimeGenerationState::Instantiating;
 	// 不能只看公开 State：FinishGeneration 广播前已经提交 Ready/Failed，但广播期间重入锁仍为 true。
 	// 必须在移动玩家之前确认真正入口会接纳请求，否则旧地图仍在而玩家会被错误送回 Staging。
 	if (!Generator->CanAcceptGenerationRequest() || bStateDescribesBusyWork)

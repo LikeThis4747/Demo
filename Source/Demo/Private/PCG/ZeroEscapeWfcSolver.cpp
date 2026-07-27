@@ -246,7 +246,7 @@ namespace ZeroEscape::LevelGeneration
 					break;
 
 				case EGridCellDomain::Required:
-					// Required 只声明“必须非空”；外部连接由 WFC 决定，不再要求预刻开口。
+					// Required 只声明“必须非空”；具体开口由 WFC 邻接约束共同求解。
 					break;
 
 				case EGridCellDomain::Optional:
