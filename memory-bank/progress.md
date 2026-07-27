@@ -8,18 +8,29 @@
 
 ## M1 实时 PCG 场景
 
-- [x] V4 全图 16 OpeningMask Grid-WFC；最低带权熵、Domain Trail、有界 chronological backtracking
-- [x] Count、MaxConsecutive、Connected 五节点展开图与迭代 Tarjan 传播
-- [x] NoValid 完整树无解立即停止；仅预算失败进行确定性有限尝试并共享整局预算
+- [x] 全图 16 OpeningMask Grid-WFC；最低带权熵、Domain Trail、有界时间序回溯
+- [x] Count、MaxConsecutive、Connected/Tarjan 全局约束与确定性有限重试
 - [x] 600 cm 逻辑 Tile 展开为 300 cm Floor/Ceiling/Wall/Trim/Pillar，Runtime HISM 实例化
-- [x] HydroLab Presentation、V4 Profile、Generator/Harness 装配；根材质 HISM Usage 已处理
-- [x] UE 5.8 构建、`Demo.PCG` 19/19、288/288 Seed Sweep
-- [x] SelectedViewport 技术烟测：48 Cells、798 Instances、5 HISM，Harness 传送成功
-- [x] 只读 UE 审计：Generator/Harness Blueprint UpToDate
-- [ ] 玩家抽查至少 10 个 Seed，验收路线、接缝、碰撞、净空与 Start→Exit
-- [ ] 补齐真实导航证据；2026-07-27 只读 Outliner 仍未见 NavMesh Bounds/Recast actor
-- [ ] 玩家验收与导航通过后接入追猎者，再做单局玩法闭环
+- [x] HydroLab Presentation、Generation Profile、根材质 HISM Usage 与运行时顶灯
+- [x] 独立 Population 层；支持区域、Start/Exit 邻域规避、直走廊筛选、横向并排和 Z 偏移
+- [x] 最小 GameFlow：玩家在 Start、追猎者在身后至少 1200 cm、Exit 一次性成功
+- [x] 旧 RuntimeGenerationTestHarness C++ 与未引用 Blueprint Redirector 已清理
+- [x] 历史 UE 5.8 构建、Demo.PCG 19/19 与 288/288 Seed Sweep
+- [ ] 对当前 18 项 Demo.PCG 测试重新建立完整构建、自动化与 Seed Sweep 基线
+- [ ] 至少 10 Seed 玩家验收路线、接缝、碰撞、净空与 Start→Exit
+- [ ] 补齐动态导航证据并验收追猎者多 Seed 实际寻路
+
+## M2 玩法压力与追猎者
+
+- [x] 追猎者 C++ Timer 状态机、追击/攻击时机、DataAsset 与 BP 装配
+- [x] Physics Control 局部受击源码、调参 DataAsset 与 BP 引用；日志确认 ready 和多肢体命中
+- [x] 最小 locomotion AnimBP/BlendSpace 资产存在且 Blueprint 状态 UpToDate
+- [x] 地刺 Timeline/Overlap/ApplyDamage 与玩家 HealthComponent 已接入；日志确认 100→0
+- [ ] Physics Control 连续至少 10 次命中、目标区域与恢复压力验收
+- [ ] 生命归零后的失败/重开闭环
+- [ ] 追猎者对地刺的免疫、受伤或受阻语义
+- [ ] 正式攻击蒙太奇、失败/成功 UI 与玩家联合验收
 
 ## 当前边界
 
-构建、自动化、Seed Sweep、资产烟测和 Runtime 日志不等于玩家验收。2026-07-27 无新项目变更、无已确认代码阻断；Planning Max 约 622 ms 需目标设备体验。导航、玩家走通和视觉/碰撞验收通过前，不进入追猎者或室内灯扩展。
+WFC/Generator 拥有空间，Population 拥有批量玩法对象，GameFlow 拥有唯一玩家、追猎者、Exit 与局状态。当前最短可玩推进是把生命归零接成失败/同 Seed 重开，再完成多 Seed 导航与追猎验收；小地图、多敌人和通用任务系统暂不扩展。

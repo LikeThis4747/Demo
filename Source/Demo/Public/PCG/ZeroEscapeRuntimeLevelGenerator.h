@@ -89,11 +89,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool GetGeneratedRoomWorldTransforms(TArray<FTransform>& OutTransforms) const;
 
-	/** Ready 时按区域语义返回候选放置点世界 Transform（地板高度）；可排除 Start/Exit 及相邻格。 */
+	/** Ready 时按区域语义返回候选放置点世界 Transform（地板高度）；可排除 Start/Exit 及相邻格、只留直走廊格。 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool GetGeneratedCellWorldTransforms(
 		EZeroEscapeGridRegionKind RegionKind,
 		bool bExcludeStartExitAdjacent,
+		bool bStraightCorridorOnly,
 		TArray<FTransform>& OutTransforms) const;
 
 	/** Ready 时返回本局布局 Seed，供下游放置层复现确定性随机。 */

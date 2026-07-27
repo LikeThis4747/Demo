@@ -118,22 +118,23 @@ void AZeroEscapePrototypeRoundFlow::HandleGenerationFinished(
 	}
 }
 
-/** 使用稳定候选顺序选择最接近 1200 cm 下限的位置，不增加路径搜索或随机状态。 */
-bool AZeroEscapePrototypeRoundFlow::FindPlayerSpawnTransform(
-	const FTransform& PursuerStartTransform,
-	FTransform& OutPlayerTransform) const
+/** 使用稳定候选顺序选择最接近 1200 cm 下限的追猎者位置，不增加路径搜索或随机状态。 */
+bool AZeroEscapePrototypeRoundFlow::FindPursuerSpawnTransform(
+	const FTransform& PlayerStartTransform,
+	FTransform& OutPursuerTransform) const
 {
-	OutPlayerTransform = FTransform::Identity;
+	OutPursuerTransform = FTransform::Identity;
 	TArray<FTransform> Candidates;
 	if (!Generator->GetGeneratedCellWorldTransforms(
 			EZeroEscapeGridRegionKind::Corridor,
+			false,
 			false,
 			Candidates))
 	{
 		return false;
 	}
 
-	const FVector StartLocation = PursuerStartTransform.GetLocation();
+	const FVector StartLocation = PlayerStartTransform.GetLocation();
 	const double MinimumDistanceSquared = FMath::Square(PlayerStartSeparationCm);
 	double BestDistanceSquared = TNumericLimits<double>::Max();
 	int32 BestIndex = INDEX_NONE;
@@ -156,28 +157,35 @@ bool AZeroEscapePrototypeRoundFlow::FindPlayerSpawnTransform(
 		return false;
 	}
 
-	FVector PlayerLocation = Candidates[BestIndex].GetLocation();
-	// 候选位于地板表面；角色复用 Start 的胶囊中心高度，避免半身陷入地板。
-	PlayerLocation.Z = StartLocation.Z;
-	const FRotator AwayFromStartRotation = (PlayerLocation - StartLocation).Rotation();
-	OutPlayerTransform = FTransform(
-		FRotator(0.0, AwayFromStartRotation.Yaw, 0.0),
-		PlayerLocation);
+	FVector PursuerLocation = Candidates[BestIndex].GetLocation();
+	// 候选位于地板表面；追猎者复用玩家 Start 的胶囊中心高度，避免半身陷入地板。
+	PursuerLocation.Z = StartLocation.Z;
+	const FRotator FacingPlayerRotation = (StartLocation - PursuerLocation).Rotation();
+	OutPursuerTransform = FTransform(
+		FRotator(0.0, FacingPlayerRotation.Yaw, 0.0),
+		PursuerLocation);
 	return true;
 }
 
-/** 完成当前 Pawn 传送、追猎者 Spawn 与出口启用；不创建第二个玩家 Pawn。 */
+/** 把当前 Pawn 放在 Start、追猎者放在玩家身后，并启用出口；不创建第二个玩家 Pawn。 */
 bool AZeroEscapePrototypeRoundFlow::ActivateRound()
 {
-	FTransform PursuerStartTransform;
-	FTransform ExitTransform;
 	FTransform PlayerTransform;
-	if (!Generator->GetGeneratedStartWorldTransform(PursuerStartTransform)
+	FTransform ExitTransform;
+	FTransform PursuerTransform;
+	if (!Generator->GetGeneratedStartWorldTransform(PlayerTransform)
 		|| !Generator->GetGeneratedExitWorldTransform(ExitTransform)
-		|| !FindPlayerSpawnTransform(PursuerStartTransform, PlayerTransform))
+		|| !FindPursuerSpawnTransform(PlayerTransform, PursuerTransform))
 	{
 		return false;
 	}
+
+	// 玩家和追猎者面向同一方向：玩家背对追猎者向前逃，追猎者从后方面向玩家。
+	const FRotator ForwardRotation =
+		(PlayerTransform.GetLocation() - PursuerTransform.GetLocation()).Rotation();
+	const FQuat ForwardYaw = FRotator(0.0, ForwardRotation.Yaw, 0.0).Quaternion();
+	PlayerTransform.SetRotation(ForwardYaw);
+	PursuerTransform.SetRotation(ForwardYaw);
 
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
 	ActivePlayer = IsValid(PlayerController) ? PlayerController->GetPawn() : nullptr;
@@ -201,12 +209,6 @@ bool AZeroEscapePrototypeRoundFlow::ActivateRound()
 		return false;
 	}
 	PlayerController->SetControlRotation(PlayerRotation);
-
-	FTransform PursuerTransform = PursuerStartTransform;
-	const FRotator FacingPlayerRotation =
-		(PlayerTransform.GetLocation() - PursuerTransform.GetLocation()).Rotation();
-	PursuerTransform.SetRotation(
-		FRotator(0.0, FacingPlayerRotation.Yaw, 0.0).Quaternion());
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;

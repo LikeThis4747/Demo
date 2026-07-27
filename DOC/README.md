@@ -8,7 +8,7 @@
 | `DailyPlan/` | 用户确认后的当日实施方案；根目录只放正在推进的，完成后移入 `DailyPlan/archive/` |
 | `DailyReport/` | 按日期保存的阶段或日报 |
 | `Bugs/` | 尚未解决、暂停调查或等待验收的 Bug 记录与索引 |
-| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/` |
+| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/` |
 
 新增文档必须放入用途匹配的子目录；没有合适分类时创建名称明确的新目录，并在此表增加一行。`DOC/` 根目录只保留本目录文件。
 
@@ -24,4 +24,4 @@ DailyPlan 完成或被后续主线取代后，**移入 `DailyPlan/archive/` 子�
 
 ## 当前 PCG 实施计划
 
-- `DailyPlan/2026-07-27-PCG空间职责精简.md`：移除尚未确定的玩法层规则，把现有实现收敛为 WFC、回溯、空间约束和中立房间核心；光源与小地图不进入本轮。
+- `DailyPlan/2026-07-27-PCG玩法对象放置层最小实现.md`：当前仍有并行改动的 Population/地刺放置层；PCG 完整代码分析已归档到 `Outputs/PCG/archive/`，下一项功能确认前不新建实施计划。

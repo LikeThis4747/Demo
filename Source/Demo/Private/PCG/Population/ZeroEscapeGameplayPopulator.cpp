@@ -87,7 +87,8 @@ void AZeroEscapeGameplayPopulator::HandleGenerationFinished(
 
 		TArray<FTransform> Candidates;
 		if (!Generator->GetGeneratedCellWorldTransforms(
-				Rule.TargetRegionKind, Rule.bAvoidStartExitNeighbors, Candidates)
+				Rule.TargetRegionKind, Rule.bAvoidStartExitNeighbors,
+				Rule.bStraightCorridorOnly, Candidates)
 			|| Candidates.Num() == 0)
 		{
 			continue;
@@ -101,13 +102,27 @@ void AZeroEscapeGameplayPopulator::HandleGenerationFinished(
 
 		const int32 TargetCount = FMath::Min(
 			Rule.MaxCount, Candidates.Num() / FMath::Max(Rule.OneEveryNCells, 1));
+		const int32 LateralCount = FMath::Max(Rule.LateralCount, 1);
 		for (int32 Index = 0; Index < TargetCount; ++Index)
 		{
-			AActor* Spawned = World->SpawnActor<AActor>(
-				ActorClass, Candidates[Index], SpawnParameters);
-			if (IsValid(Spawned))
+			const FTransform& CellTransform = Candidates[Index];
+			// 生成器已把候选 Transform 的 Y 轴设为走廊横向；沿其居中并排 LateralCount 个。
+			const FVector LateralDirection = CellTransform.GetRotation().GetRightVector();
+			const FRotator SpawnRotation = CellTransform.GetRotation().Rotator();
+			for (int32 LateralIndex = 0; LateralIndex < LateralCount; ++LateralIndex)
 			{
-				SpawnedActors.Add(Spawned);
+				const float LateralOffset =
+					(static_cast<float>(LateralIndex) - (LateralCount - 1) * 0.5f) * Rule.LateralSpacing;
+				const FVector SpawnLocation = CellTransform.GetLocation()
+					+ LateralDirection * LateralOffset
+					+ FVector(0.0f, 0.0f, Rule.SpawnZOffsetCm);
+				// Location+Rotation 重载不传 Scale，保留蓝图 CDO 的根缩放。
+				AActor* Spawned = World->SpawnActor<AActor>(
+					ActorClass, SpawnLocation, SpawnRotation, SpawnParameters);
+				if (IsValid(Spawned))
+				{
+					SpawnedActors.Add(Spawned);
+				}
 			}
 		}
 

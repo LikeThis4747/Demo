@@ -58,10 +58,10 @@ private:
 	/** 查询三个位置、移动玩家、生成追猎者并启用出口；任一步失败都保持未激活。 */
 	bool ActivateRound();
 
-	/** 从走廊候选中选择二维距离至少达到配置值、且额外距离最小的玩家位置。 */
-	bool FindPlayerSpawnTransform(
-		const FTransform& PursuerStartTransform,
-		FTransform& OutPlayerTransform) const;
+	/** 从走廊候选中选择二维距离至少达到配置值、且额外距离最小的追猎者位置。 */
+	bool FindPursuerSpawnTransform(
+		const FTransform& PlayerStartTransform,
+		FTransform& OutPursuerTransform) const;
 
 	/** 销毁旧追猎者并禁用出口；不销毁或重生当前玩家。 */
 	void ResetRoundState();
@@ -86,7 +86,7 @@ private:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Round Flow", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<APursuerCharacter> PursuerClass;
 
-	/** 玩家与追猎者 Start 的最小二维距离；1200 cm 等于当前两个 600 cm 逻辑格。 */
+	/** 追猎者与玩家 Start 的最小二维距离；1200 cm 等于当前两个 600 cm 逻辑格。 */
 	UPROPERTY(EditInstanceOnly, Category = "Round Flow", meta = (ClampMin = "600.0", Units = "cm"))
 	double PlayerStartSeparationCm = 1200.0;
 

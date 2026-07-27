@@ -31,11 +31,27 @@ struct DEMO_API FZeroEscapePlacementRule
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "1"))
 	int32 OneEveryNCells = 4;
 
-	/** 本条规则单局最多放置数量上限。 */
+	/** 本条规则单局最多放置几处（每处含 LateralCount 个并排实例）。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "1"))
 	int32 MaxCount = 8;
+
+	/** 同一格沿走廊横向并排的实例数；默认 2，组成一道横挡走廊的刺墙。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "1"))
+	int32 LateralCount = 2;
+
+	/** 横向相邻实例中心间距（cm）；略大于缩放后单个宽度，两侧留缝防穿模。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "0.0"))
+	float LateralSpacing = 300.0f;
 
 	/** 避开 Start/Exit 及其相邻格，避免一出生就命中或堵住出口。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
 	bool bAvoidStartExitNeighbors = true;
+
+	/** 仅放在直走的走廊格（排除拐角/T型/十字/死胡同），避免横向并排挡不住路。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+	bool bStraightCorridorOnly = true;
+
+	/** 生成时在候选点世界 Z 上叠加的高度偏移（cm）；物理物体可抬高一点自然落下，贴地物填 0。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "0.0"))
+	float SpawnZOffsetCm = 0.0f;
 };

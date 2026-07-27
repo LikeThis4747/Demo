@@ -615,6 +615,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedRoomWorldTransforms(
 bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedCellWorldTransforms(
 	EZeroEscapeGridRegionKind RegionKind,
 	bool bExcludeStartExitAdjacent,
+	bool bStraightCorridorOnly,
 	TArray<FTransform>& OutTransforms) const
 {
 	OutTransforms.Reset();
@@ -639,13 +640,29 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedCellWorldTransforms(
 			continue;
 		}
 
+		// 直路走廊判定：开口严格为南北相对或东西相对；其余形态（拐角/T/十字/死胡同）按需排除。
+		const uint8 StraightNS = static_cast<uint8>(EZeroEscapeOpenEdge::North)
+			| static_cast<uint8>(EZeroEscapeOpenEdge::South);
+		const uint8 StraightEW = static_cast<uint8>(EZeroEscapeOpenEdge::East)
+			| static_cast<uint8>(EZeroEscapeOpenEdge::West);
+		const bool bIsStraightNS = (Cell.OpeningMask == StraightNS);
+		const bool bIsStraightEW = (Cell.OpeningMask == StraightEW);
+		if (bStraightCorridorOnly && !bIsStraightNS && !bIsStraightEW)
+		{
+			continue;
+		}
+
 		// 逻辑格坐标为格中心；放置点使用地板顶面高度，Actor 自身 pivot 贴地。
 		const FVector CellCenterLocation(
 			static_cast<double>(Cell.GridCoordinate.X) * LastPlan.LogicalTileSizeCm,
 			static_cast<double>(Cell.GridCoordinate.Y) * LastPlan.LogicalTileSizeCm,
 			FloorTopZCm);
+
+		// 直路南北走向→yaw=90 使 Transform 的 X 轴对齐走向；东西走向→yaw=0。横向恒为 Y 轴。
+		const FQuat CellRotation = FRotator(0.0f, bIsStraightNS ? 90.0f : 0.0f, 0.0f).Quaternion();
+
 		const FTransform CellLocalTransform(
-			FQuat::Identity, CellCenterLocation, FVector::OneVector);
+			CellRotation, CellCenterLocation, FVector::OneVector);
 
 		FTransform WorldTransform;
 		if (!ConvertLocalToWorld(*GeneratedRoot, CellLocalTransform, WorldTransform))
