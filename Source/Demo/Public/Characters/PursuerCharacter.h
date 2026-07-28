@@ -19,6 +19,9 @@ class UPhysicsControlComponent;
 class UPhysicsControlHitResponseComponent;
 class UPhysicsControlHitTuningData;
 
+/** 物理命中在角色本地空间的简化方向（由 PhysicsControlHitResponseComponent 广播）。 */
+enum class EPhysicsHitDirection : uint8;
+
 /** 单一追猎者角色：只负责组件装配、移动参数应用与攻击蒙太奇播放，决策交给 AI 控制器。 */
 UCLASS()
 class DEMO_API APursuerCharacter final : public ACharacter
@@ -34,6 +37,16 @@ public:
 
 	/** 播放攻击蒙太奇；Config 或蒙太奇缺失时记录错误并安全返回。 */
 	void PlayAttackMontage();
+
+	/** 是否正在播放受击反应；AI 在受击期间应停止追击与攻击。 */
+	bool IsReacting() const { return bIsReacting; }
+
+	/** 物理命中方向回调；按方向从 Config 选受击蒙太奇播放。 */
+	UFUNCTION()
+	void HandleHitReact(EPhysicsHitDirection HitDirection);
+
+	/** 受击蒙太奇结束（正常或被打断）时清除受击状态，允许 AI 恢复追击。 */
+	void OnHitReactMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
 protected:
 	/** 组件初始化后按 Config 应用移动速度；Config 无效时保留引擎默认并记录错误。 */
@@ -58,4 +71,7 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "追猎者", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPursuerConfig> Config;
+
+	/** 受击反应播放期间为 true；由 HandleHitReact 置位、受击蒙太奇结束回调清除，供 AI 查询以暂停行动。 */
+	bool bIsReacting = false;
 };

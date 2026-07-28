@@ -11,9 +11,11 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/Actor.h"
 #include "PhysicsControlComponent.h"
 #include "PhysicsControlData.h"
 #include "PhysicsControlLimbData.h"
+#include "Physics/DemoHitTags.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPhysicsControlHit, Log, All);
@@ -226,9 +228,11 @@ void UPhysicsControlHitResponseComponent::HandleMeshHit(
 	const FVector NormalImpulse,
 	const FHitResult& Hit)
 {
+	// 只认被标记为攻击性抛射物（玩家投掷/陷阱击飞）的物体，避免追猎者自身撞到普通物理物体误触发受击。
 	if (!IsValid(OtherComponent)
+		|| !IsValid(OtherActor)
 		|| OtherActor == GetOwner()
-		|| !OtherComponent->IsSimulatingPhysics()
+		|| !OtherActor->ActorHasTag(DemoHitTags::AttackProjectile())
 		|| Hit.MyBoneName.IsNone())
 	{
 		return;
@@ -322,6 +326,19 @@ void UPhysicsControlHitResponseComponent::ProcessPendingHit()
 		*Hit.BodyBone.ToString(),
 		*Hit.WorldImpulse.ToCompactString(),
 		bAppliedManualImpulse ? TEXT("manual") : TEXT("chaos"));
+
+	// 冲量在角色本地空间的投影给出命中方向，广播给 Owner 选受击动画。冲量是"推追猎者的方向"。
+	if (OnPhysicsHit.IsBound())
+	{
+		const FVector LocalImpulse =
+			ControlledMesh->GetComponentToWorld().InverseTransformVectorNoScale(Hit.WorldImpulse);
+		EPhysicsHitDirection HitDirection = EPhysicsHitDirection::Front;
+		if (FMath::Abs(LocalImpulse.Y) > FMath::Abs(LocalImpulse.X))
+		{
+			HitDirection = LocalImpulse.Y > 0.0f ? EPhysicsHitDirection::Right : EPhysicsHitDirection::Left;
+		}
+		OnPhysicsHit.Broadcast(HitDirection);
+	}
 }
 
 /** 将指定区域的 Physics Body 切到 Simulated，设置全物理混合并启用 ParentSpace Controls。 */

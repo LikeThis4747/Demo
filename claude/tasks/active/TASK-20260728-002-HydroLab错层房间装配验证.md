@@ -1,0 +1,123 @@
+# TASK-20260728-002 — HydroLab 错层房间装配验证
+
+- Owner：Codex / 当前会话
+- Status：active
+- Stage：V3 积木、兼容链和完整组合已保存并通过重载/静态/短时 PIE 检查，等待用户视觉、玩家实走与 AI/NavMesh 验收
+- Created：2026-07-28
+- Updated：2026-07-28
+
+## 目标与验收
+
+- 目标：只读参考 SciFiHydroLab 的 Demonstration 与 Overview，在 Level0 中搭建一套低重复、可行走、包含楼梯和错层平台的完整房间组合原型，用真实装配结果反推后续 WFC 约束。
+- 验收：场景具有入口、主空间、楼梯、上层或半层平台、侧向空间和有意开放边界；素材保持原比例；关键拼缝、碰撞、楼梯净空和基本行走可验证；Level0 可保存并重新加载。
+- 非目标：不修改第三方 HydroLab 资产，不修改 PCG/WFC 代码，不接入 SFCorridors，不构建大量重复走廊，不把本轮原型直接宣称为正式生成模块。
+
+## 修改范围
+
+- 允许修改：`D:\UE5projects\Demo\Content\Levels\Level0.umap`
+- AI 工作记录：`D:\UE5projects\Demo\claude\tasks\active\TASK-20260728-002-HydroLab错层房间装配验证.md`
+- 当日计划：`D:\UE5projects\Demo\DOC\DailyPlan\2026-07-28-HydroLab错层房间装配验证.md`
+- 会话结束时按规范更新：`.ai-context/current-task.md`、`memory-bank/activeContext.md`、`memory-bank/daily.md`；形成稳定结论后再更新 `memory-bank/progress.md` 或 `memory-bank/decisions.md`。
+- 共享/潜在冲突：Level0 可能已有用户或其他任务的未保存修改；切图和保存前必须核对 Dirty 状态，不覆盖无关 Actor。
+- 并行拆分/依赖：不并行修改 Level0；Demonstration/Overview 仅只读分析，Level0 是唯一资产写入目标。
+- 用户已授权范围：允许按已讨论流程搭建并保存 Level0。
+
+## 计划与检查点
+
+- [x] 只读检查 Demonstration，提取楼梯、平台、WallPieceB、PillarD、FenceA/B/C2/D 的真实组合方式。
+- [x] 只读检查 Overview/Asset Registry 与关键静态网格尺寸、Pivot 和材质表现。
+- [x] 加载 Level0，确认原有关卡内容和可用隔离区域。
+- [x] 在独立 Outliner 文件夹中搭建错层 HydroLab 主房间与服务回路连接段。
+- [x] 保存 Level0；编辑器崩溃重启后从磁盘重新载入并核对 Actor 与 Transform。
+- [x] 验证四角封口、出入口、地面回路、楼梯高度序列、平台接缝、护栏通口和短时 PIE 启动。
+- [x] 汇总可转化为 WFC 的多格占用、垂直 Socket、落脚区、收边和护栏约束。
+- [x] 在隔离样板区依次摆出封闭、直通、转角、Portal600→Door450、楼梯上升、上层护栏门和层高过渡 7 类单元。
+- [x] 核对样板的原比例、600cm 边界、接缝、通行净空、落差防护和允许/禁止邻接。
+- [x] 仅保存 Level0，并向用户交付当前约束与候选扩展约束的清晰分层。
+- [x] 将 600cm 求解 Cell 与可独立成立的 1x1/2x1/2x2 Module 明确分层，冻结积木内部验收门槛与 Socket 合同。
+- [x] 复核 StairsA/B/C 的真实上升高度；StairsC 仅作 +135cm 室内错层，二楼/夹层必须使用经验证的独立配方和标高。
+- [x] 撤掉首版 7 个孤立盒状样板；摆出独立 B00 与真实相接的 B00→B01 兼容对，作为第一轮视觉复核检查点。
+- [x] 搭建带 StairsC 的室内错层积木、A+B 与 A+B+C 兼容链，以及由 7 类积木组成的完整可玩组合段。
+- [ ] 用户在 Level0 中完成整体审美、玩家实际行走与 AI/NavMesh 验收。
+
+## 验证
+
+- 命令/场景：UE5.8 官方 MCP SceneTools、EditorAppToolset 与本地 UE Editor MCP；Level0 编辑视口与 PIE。
+- 结果：
+  - 主宏块位于 `X=3000..4200, Y=3700..4900`，以 600cm 逻辑格计算为 2x2 占用；地面 `Z=5`，错层平台 `Z=140`，天花底部 `Z=528`。
+  - 对照 Demonstration 后，4 个 WallPieceB 暴露端均由 PillarD 收边；四角在 `Z=50/150/300/500` 的内外斜向射线全部命中实体，未留贯穿外墙的空洞。
+  - 16 块 CeilingB 与 525cm 高墙采用约 2cm 受控咬合封光；相邻天花只有浮点级 AABB 微重叠，未发现广面共面 z-fighting 证据。
+  - South/East 两个 600cm 边界 Socket 在多条横向射线与 `Z=60/120/200` 高度保持畅通；端柱最大只侵入 South 约 29.5cm、East 约 1cm。
+  - 地面绕行路线以角色中心高度 `Z=101` 检查 5 段均无命中；South/East 楼梯表面采样分别形成 `5→68.375→108.875→140` 与反向下降序列。
+  - 首轮复查发现 `HL_Macro_Rail_W_Long` 在 `x≈3296.7` 封死楼梯顶平台通往西侧猫道；已按原素材尺寸改为 FenceA + 150cm 通口 + FenceC2 + FenceD 三段栏。通口 `Y≈4050..4200` 的三条射线均畅通，两侧地面均为 `Z=140`；南北防坠栏与北端转角均能命中，完整上层 L 形路线复查为畅通。
+  - 短时 Simulate PIE 成功进入 `Level0` Running 状态并正常停止；Error/Fatal 为 0。仅出现一次 `Failed to find valid viewport when switching between PIE and SIE`，属于本次无焦点 Simulate 视口告警，不作为行走或导航结论。
+  - 官方 AssetTools 仅保存 `/Game/Levels/Level0` 返回成功；保存后 `Level0.umap` 为 841,979 bytes，时间 2026-07-28 18:13:05。`Content/Assets/SciFiHydroLab/**` 无修改。
+  - 新增隔离样板区 `PCG_AssemblyStudy/HydroLab_WFCUnitGallery`，位于 `X=600..3900, Y=6000..7800`；最终 7 个子文件夹、88 个单位缩放 Actor，与旧场景最北边界保留约 10m 间隔。
+  - 样板分别为 `00_Closed_Low305`、`01_Straight_WE_Low305`、`02_Corner_EN_Low305`、`03_Portal600_to_Door450`、`04_Stair_E0_to_W135`、`05_UpperPlatform_Gate274`、`06_Transition_WLow_ETall`。为便于检查内部，所有单元只保留北半顶板作为统一剖切展示；完整封顶效果仍由主场景样板承担。
+  - 真实 DataAsset 为 `GridSize=24x16`、`LogicalTileSizeCm=600`、`RoomSizeTiles=2`；300cm 是视觉拆件粒度，1200cm 目前只是 2x2 Required 房间占格，不是可原子 Collapse 的语义宏 Tile。
+  - 450cm 原生 DoorFrame 未缩放；它与四块 75x150cm WallO 组成完整 600cm 墙湾。对侧以 WallTrimK 做原比例 `Portal600_H260`，明确区分“600 门洞”和“450 门框”。未放功能门扇，因为原版上滑门需要至少 565cm 扫掠净高。
+  - 射线确认普通开边、Portal600 主体、Door450 中心、楼梯中心、上层护栏门和层高过渡底部均畅通；封闭墙、Door450 两侧补边、门楣、楼梯/平台护栏和 305→530 Bulkhead 均正确阻挡。
+  - StairsC 中心表面采样形成约 `Z=-0.5→43.125→63.375→103.875→113.985→135` 的单调序列，并连续落到 Z=135 平台。平台门净宽约 274.5cm；平台下方和楼板下方仍必须作为不可通行占用处理。
+  - 最终 88 个样板 Actor 均为单位缩放，未发现缺失、Transform 偏差或完全重复 Transform；墙/地/顶仅在设计边界接触，没有双份共面构件。第二次视口机位调整被 MCP 崩溃保护安全拦截，编辑器随后 Ping 与 Ready 均正常，因此停止继续自动视口捕获。
+  - 官方 AssetTools 再次仅保存 `/Game/Levels/Level0` 返回成功；保存后 `Level0.umap` 为 984,406 bytes，时间 2026-07-28 19:47:47。`Content/Assets/SciFiHydroLab/**` 仍无修改。
+- 用户操作：最终在 Level0 中检查整体视觉、用玩家实际走完 Ground/Deck 两条路线，并观察 AI 是否覆盖两段楼梯与 150cm 转向口。
+- 用户验收：待验收。
+
+## 可转化为 WFC 的约束交接
+
+- 该房间应作为原子 2x2 宏块，不可拆成 4 个独立 OpeningMask 单元后任意重排。
+- 外部 Socket：South-600/Ground、East-600/Ground；内部 Portal：Ground ↔ Deck140（South StairsC）与 Deck140 ↔ Ground（East StairsC）。
+- 宏块必须携带 `Footprint`、`ElevationProfile`、`SocketWidth`、`SocketHeight`、`ClearZone`、`LandingZone`、`GuardEdge` 与 `EdgeOwner`，不能只表达 NSEW 四位开口。
+- WallPieceB 暴露端必须由且仅由一侧模块拥有 PillarD EndCap；墙顶/天花使用受控容差咬合，禁止随机同面叠放。
+- 楼梯顶连接必须同时满足连续落脚面、胶囊净宽和护栏门洞；本轮 150cm 通口说明“有邻接”仍不足以代表可通行。
+- 当前门框使用 `ScaleY≈1.3333` 才形成 600cm Socket；若未来实例配方仍强制单位缩放，需要新增原生 600cm 门框配方或显式允许受控缩放。
+
+## 阻塞、风险与下一步
+
+- 阻塞：当前无工具阻塞；正式完成仍等待用户视觉/实玩验收。
+- 风险：楼梯高度 140cm 不整除 300/600cm 网格；点射线和短时 PIE 不能替代玩家胶囊连续 Sweep、Recast 覆盖与 AI 实际寻路。PillarD 灯条局部偏亮，留给最终灯光打磨。17:43 左右编辑器曾在视口捕获附近崩溃，但同时有其他资产编辑活动，无法确定单一根因；恢复后停止高频捕获并改用几何/碰撞检查。
+- 下一步：由用户先在 Level0 审美检查并实走两条路线；通过后再把上述宏块语义约束映射到 WFC 数据结构与 Solver，不在本任务中修改 PCG/WFC 代码。
+
+## 2026-07-28 用户视觉复核后的纠正
+
+- 首版 `HydroLab_WFCUnitGallery` 的射线与单位缩放检查虽然通过，但视觉结果是孤立空盒、悬空半顶板和缺乏上下文的楼梯/平台；不能作为可玩 Module 验收。
+- 根因是错误地把 600cm WFC Cell 直接等同于独立美术房间，并用孤立展示替代了“单块内部自洽 + Socket 成对兼容 + 多块组成场景”的验证链。
+- StairsC 上升约 135cm，只能作为房间内部错层工具，不再称为二楼楼梯；若素材无法在冻结的 FloorToFloor 高度上精确闭合，则明确判定二楼模块不成立，不通过缩放或悬空落台强拼。
+- 重构阶段继续只允许修改 Level0；不修改 PCG/WFC 代码和第三方 HydroLab 资产。首版 Gallery 的 88 个 Actor 均由本任务创建，用户已允许删除 AI 自建测试对象。
+
+## 2026-07-28 积木化重构第一检查点
+
+- 冻结四层含义：`Piece` 是 HydroLab 原始网格；`Cell` 是 600cm 求解地址；`Module/Brick` 是可原子选择、内部自洽的 1x1/1x2/2x2 配方；`Composition` 才是多个积木按 Socket 约束形成的可玩场景。`OpeningMask=0` 只表示 Empty/Outside，不再伪装成封闭可玩房间。
+- 积木硬门槛：单位缩放与明确占格、除 Socket 外壳体闭合、内部可达图连续、行走面/胶囊净空、楼梯落脚区与防坠边、占用体积、接口唯一收边所有者、无空洞/共面重复、旋转后仍合法、同一视觉家族，以及最低限度的房间内容。
+- Socket 合同至少携带：所在边及偏移、净宽、`FloorZ`、净高、通行类别、顶高类别、门洞/开边处理、Owner/Receiver/Resolver、落脚深度、净空、左右手性与 StyleFamily；仅有 NSEW OpeningMask 不足以判断可拼接和可通行。
+- 已删除 `PCG_AssemblyStudy/HydroLab_WFCUnitGallery` 下本任务创建的 88 个失败样板 Actor；确认 `HL_WFCU_*` 为 0。未删除或移动其他文件夹内容。
+- 新展示根目录为 `PCG_AssemblyStudy/HydroLab_WFCBrickStudy`：
+  - `A_Standalone/B00_Connector_NS_1x1`：600x600cm，低顶约 305cm，南北 Ground Socket，两侧墙封闭，完整地板/天花与一盏 HydroLab 灯；13 Actor。
+  - `B_Pair/B00_Connector_NS_1x1`：B00 的第二个实例；13 Actor。
+  - `B_Pair/B01_Threshold_LowToTall_1x2`：600x1200cm，南端低顶约 305cm、北端高顶约 530cm，标高始终为 Ground Z0；接口处只封 305→530cm 的上部 Bulkhead，底部通行净空保持连续；32 Actor。
+- B00→B01 当前约束：`Ground/Open600/Low305` 可接 B01 南侧同类 Receiver；B01 北侧输出 `Ground/Open600/Tall530`，只能继续接 Tall530 兼容积木。不同顶高不能直接相接，必须由 B01 这样的 HeightTransition Resolver 承担封口。
+- 58 个新 Actor 均为单位缩放，完全重复 Transform 为 0。几何射线确认：独立 B00 南北通路畅通、侧墙命中；B00→B01 全路径与拼缝畅通；Bulkhead 下方畅通且其 305→530cm 高区正确阻挡；低/高侧墙命中，B01 北 Socket 畅通。地面采样 Z=0，低顶表面约 Z=308.75，高顶表面约 Z=544.53。
+- 楼梯按真实可行走净升高而非包围盒重算：StairsA 原生约 +45cm；StairsB 在 Demonstration 中原生约 +187.5cm；StairsC 原生 +135cm。旧 Level0 用 StairsB 强接 +225cm 时，首尾存在约 22.5/33.75cm 缝，最多只能视为角色步高可能跨越的实验，不是自洽积木，也没有 AI/Nav 证据。
+- 因此本阶段不成立“二楼楼梯”：StairsC 仅进入后续 B02 作为 +135cm 室内错层；双 StairsC 的理论净升高为 +270cm，仍不等于现有 300cm 层高；当前素材没有经验证的原生 +300cm 配方。若以后做真正二楼，必须先冻结 FloorToFloor，再找到精确闭合、带落脚与护栏且通过玩家/AI 导航的独立积木。
+- UE5.8 官方 AssetTools 仅保存 `/Game/Levels/Level0` 成功；保存后 `Level0.umap` 为 937,093 bytes，时间 2026-07-28 20:18:25。`Content/Assets/SciFiHydroLab/**` 无修改；PCG/WFC 代码无修改。
+
+## 2026-07-28 V3 最小积木与完整组合交付检查点
+
+- 先回到真实 `Demonstration` 复核素材使用频率和装配方式：`WallPieceB` 全关卡仅 2 个，属于门侧窄条特殊件，判定为不可规格化结构件并彻底淘汰；高墙改用示例中重复出现的 `WallH @ Z0 + WallPieceF @ Z300` 配方。示例中找到 20 组同 XY、上下相差 300cm 的真实配对，形成约 750cm 高墙；V3 中 `WallPieceB` 使用量为 0。
+- 新根目录为 `PCG_AssemblyStudy/HydroLab_WFCBrickStudyV3`，磁盘重载后共 538 Actor，全部保持单位缩放。按实际网格语义检查，完全相同 Mesh 语义与 Transform 的重复组为 0；106 个普通 `WallPieceF` 上墙段全部能在同 XY、低 300cm 位置找到 `WallH` 下墙段。
+- `A_Standalone` 摆出 7 个内部自洽的最小单元，共 216 Actor：`G00_LowStraight_NS_1x1`、`G01_TallStraight_NS_1x1`、`G02_TallCorner_NE_1x1`、`G03_TallT_NES_1x1`、`G04_TallDeadEnd_S_1x1`、`G05_TallChamber_SE_2x2`、`G06_TallSplitLevel_S_2x2`。所有单元均具有完整地面/天花、除 Socket 外闭合的外壳和同一 HydroLab 视觉家族。
+- `B_Compatibility` 共 87 Actor：`B01_Low300_to_Tall750_AB` 展示 Low300 直通块经 `RiseResolver` 接 Tall750 直通块；共享边只由两块 `WallPieceF` 封住 300→750cm 的上部高度差，0→300cm 通路保持开放。`B02_Tall_LRoute_ABC` 展示 TallStraight → TallCorner → TallDeadEnd 三块连续相接，三个 Socket 均为 `Ground/Open600/Tall750`。
+- `G06` 和完整组合的 `F07` 使用原生 `StairsC`，净上升冻结为 +135cm，只承担房间内部 Ground0→Deck135 错层；平台下方由 `WallK` 封为不可通行占用，暴露落差边由 FenceB/C2/D 连续防护。它不是 300cm 二楼楼梯；当前 HydroLab 素材未找到经示例验证且能原生精确闭合 +300cm 的楼梯配方。
+- `C_PlayableComposition` 磁盘重载后稳定保留 235 Actor，并分为 9 个 Outliner 子组：LowEntry → RiseResolver → TallStraight → TallCorner → TallStraight → TallT；T 形东支以 DeadEnd 收束，北支进入 2x2 TallChamber，再从房间东侧进入带 StairsC 和 Deck135 的 2x2 SplitLevel。完整场景使用 7 类积木，结构件 225 个、示例验证的 `BP_HydroLab_LampA` 10 盏。
+- 首次重载暴露完整组合的 10 盏灯与 Outliner 分组未稳定保存：结构件 225 个仍在。已补回灯具、重新归组，并使用 MCP 已实现但 schema 未公开的 `only_maps=true` 路径只保存当前 `/Game/Levels/Level0`。第二次切换到 Demonstration 再返回 Level0 后，V3 仍为 538、完整组合仍为 235、灯具仍为 10、9 个子组均存在；`Level0.umap` 为 1,711,552 bytes，时间 2026-07-28 22:24:02。
+- 最终短时 Simulate PIE 成功进入 `Level0` Running 并正常停止。最新运行警告为无焦点 SIE/PIE 视口告警，以及 `Unable to find RecastNavMesh instance`；因此只能证明关卡可加载运行，不能证明玩家胶囊连续通行或 AI 可达。MCP 的 `open_asset_editor` 在地图切换时仍记录崩溃保护错误，但两次均实际完成地图切换，编辑器保持存活，Actor 数量和重载结果正常。
+- 当前编辑器视口已定位到完整组合区域。仍待用户完成：整体审美复核、从入口连续走到房间/错层平台、楼梯边缘是否会卡落、所有外墙接缝近距离检查，以及补建 Recast 后的 AI 实际寻路验收。
+
+### V3 邻接合同
+
+- 基础平面地址仍为 600cm；1x1 与 2x2 是原子 Module 占格，不允许把 2x2 Chamber/SplitLevel 拆成四个独立 OpeningMask 后重排。
+- 平面 Socket 必须同时匹配 `DirectionOpposite + Offset + Width600 + FloorZ0 + CeilingClass + StyleFamily`；开口中心重合并不等于可通行。
+- `Low300 ↔ Tall750` 禁止直接相接，必须插入 `RiseResolver`；Resolver 只拥有高度差上部封口，禁止在 0→300cm 通行区再生成下墙或门楣。
+- `Tall750 ↔ Tall750` 可按开放边相接；共享边上的墙、地、顶由唯一 `EdgeOwner` 生成，禁止双方各放一份造成共面 z-fighting。
+- `SplitLevel` 的外部 Socket 仍是 `Ground0/Open600/Tall750`；`Deck135` 只存在于积木内部。只要存在 Deck135，就必须同时生成 `StairsC + LandingZone + UnderDeckBlock + GuardEdge`，任一项缺失都使该变体非法。
+- DeadEnd 只能接收一个入口并封闭其余三边；Corner/T/Straight 的旋转变体必须旋转 OpeningMask、Socket 偏移和护栏/楼梯手性，不能只旋转可见网格。

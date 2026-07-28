@@ -1,10 +1,10 @@
 # TASK-20260727-001 — 追猎者 Physics Control 局部受击
 
 - Owner：Codex 当前会话
-- Status：active
-- Stage：已授权实现
+- Status：completed（已归档）
+- Stage：实现、构建、资产装配与用户 PIE 验收完成
 - Created：2026-07-27
-- Updated：2026-07-27
+- Updated：2026-07-28
 
 ## 目标与验收
 
@@ -33,19 +33,25 @@
 
 - [x] 只读核对交接包、当前源码、插件启用状态与 `BP_Pursuer` 基线。
 - [x] 识别 UE5.8 API 差异：三个 Set API 返回 `void`、移除 `bUseAccelerationDriveMode`、Modifier 构造函数为 6 参数。
-- [ ] 接入六个源码文件并复制调参 DataAsset。
-- [ ] 构建 `DemoEditor Win64 Development`。
-- [ ] 在 `BP_Pursuer` 设置 `PhysicsControlHitTuning`，编译并保存。
-- [ ] PIE 验证 ready 日志、三类区域、连续命中、恢复、Capsule 与追击/攻击连续性。
-- [ ] 在 Level0 新增并保存 3 个小型磁力测试物体，不修改磁力蓝图或既有 Actor。
-- [ ] 更新验证记录并交给用户视觉验收。
+- [x] 接入六个源码文件并复制调参 DataAsset。
+- [x] 使用匹配的 `D:\UE5_8` 构建 `DemoEditor Win64 Development`。
+- [x] 在 `BP_Pursuer` 设置并回读 `PhysicsControlHitTuning`，编译保存；未修改 `DA_Pursuer` 参数。
+- [x] PIE 记录 ready、Torso/LeftArm/RightArm 真实命中与持续攻击时序；用户完成视觉验收。
+- [x] 在 Level0 新增并保存 3 个缩放 0.3 的既有 `BP_MagneticProp` 测试物体。
+- [x] 完成变更审计与代码行数汇报。
 
 ## 验证
 
 - 命令/场景：`DemoEditor Win64 Development`；当前追猎者测试关卡 PIE；真实模拟物理道具命中 Manny。
-- 结果：实施中。
+- 结果：接入、构建、资产装配、真实三区域命中和用户 PIE 验收均完成。
 - 用户操作（时机、步骤、预期结果）：自动验证通过后由用户最终确认局部受击幅度、方向和恢复手感。
-- 用户验收：待验收
+- 用户验收：通过（2026-07-27）。自动化连续 10-hit 压力数据未单独采集，不把用户验收改写成自动化证据。
+
+## 2026-07-28 收敛结论
+
+- 本卡原有“实施中”状态已过期；真实结果为功能完成并获用户 PIE 验收。
+- 保留的证据边界：Torso/LeftArm/RightArm 与恢复/攻击连续性有日志和用户验收；没有独立的自动化连续 10-hit 压力报告。
+- 当前可玩主线不需要继续修改 Physics Control；除非出现新回归，不应重新激活本卡。
 
 ## 阻塞、风险与下一步
 

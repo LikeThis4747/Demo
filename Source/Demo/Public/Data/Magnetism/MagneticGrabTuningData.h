@@ -151,6 +151,13 @@ public:
 	float ThrowSpeed = 2500.0f;
 
 	/**
+	 * 对应 C++ 属性 ThrownWeaponActiveDuration，由 ThrowHeldObject 决定投掷物保持"攻击性"标记的时长，单位 s。
+	 * 初始值：2.5；编辑范围：0.1~10。此时长内撞到追猎者算受击，超时后物体回归普通物体不再触发受击。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|投掷", meta = (ClampMin = "0.1", ClampMax = "10.0", UIMin = "0.5", UIMax = "5.0", Units = "s"))
+	float ThrownWeaponActiveDuration = 2.5f;
+
+	/**
 	 * 对应 C++ 属性 AimTraceDistance，由 CalculateAimPoint 决定准星射线最大距离，单位 cm。
 	 * 初始值：10000；编辑范围：1000~50000。调高支持远距离瞄准，调低会让无命中投掷更早收敛。
 	 */

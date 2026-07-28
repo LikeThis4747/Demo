@@ -22,6 +22,18 @@ class UPhysicsControlComponent;
 class UPrimitiveComponent;
 class USkeletalMeshComponent;
 
+/** 物理命中在角色本地空间的简化方向；供 Owner 选择受击动画（背后命中归入 Front）。 */
+UENUM(BlueprintType)
+enum class EPhysicsHitDirection : uint8
+{
+	Front,
+	Left,
+	Right
+};
+
+/** 物理命中方向委托；ProcessPendingHit 处理后广播，Owner 决定是否播受击动画，组件不依赖动画资产。 */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnPhysicsHit, EPhysicsHitDirection, HitDirection);
+
 /** 无自定义 Tick 的事件驱动局部受击组件。 */
 UCLASS(ClassGroup = (Physics), meta = (BlueprintSpawnableComponent))
 class DEMO_API UPhysicsControlHitResponseComponent final : public UActorComponent
@@ -31,6 +43,10 @@ class DEMO_API UPhysicsControlHitResponseComponent final : public UActorComponen
 public:
 	/** 创建默认关闭 Tick 的局部受击组件。 */
 	UPhysicsControlHitResponseComponent();
+
+	/** 物理命中方向广播；由 Owner 监听播放受击动画，本组件只负责物理反应。 */
+	UPROPERTY(BlueprintAssignable, Category = "物理受击")
+	FOnPhysicsHit OnPhysicsHit;
 
 	/**
 	 * 由 Owner 显式注入受控 Mesh、官方 Physics Control 组件和唯一调参资产。

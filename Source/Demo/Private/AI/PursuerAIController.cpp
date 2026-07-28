@@ -63,6 +63,13 @@ void APursuerAIController::Think()
 		return;
 	}
 
+	// 受击停顿：受击反应播放期间停止移动、不追不攻击，等受击结束后下一次思考自然恢复。
+	if (Pursuer->IsReacting())
+	{
+		StopMovement();
+		return;
+	}
+
 	// GetPlayerPawn 本就返回非 const APawn*；此处保持非 const，供下方 SetFocus/MoveToActor 直接使用，避免多余 const_cast。
 	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
 	if (!IsValid(PlayerPawn))
@@ -90,7 +97,7 @@ void APursuerAIController::Think()
 		return;
 	}
 
-	// 攻击距离内：停止移动、面向玩家；不在冷却则发起一次攻击并进入冷却。
+	// 攻击距离内：停下、面向玩家；不在冷却则发起一次攻击并进入冷却。
 	if (Distance <= Config->AttackRange)
 	{
 		StopMovement();
@@ -107,11 +114,12 @@ void APursuerAIController::Think()
 		return;
 	}
 
-	// 攻击距离外且不在冷却：解除面向锁定并继续寻路追击（到达半径即攻击距离）。
+	// 攻击距离外且不在冷却：解除面向锁定并追击到比攻击距离更近处（ApproachRadius < AttackRange），
+	// 使追猎者一旦进入攻击距离即主动停下攻击，消除停在 AttackRange 边界的攻击抖动。
 	if (!bIsOnAttackCooldown)
 	{
 		ClearFocus(EAIFocusPriority::Gameplay);
-		MoveToActor(PlayerPawn, Config->AttackRange);
+		MoveToActor(PlayerPawn, Config->AttackApproachRadius);
 	}
 }
 

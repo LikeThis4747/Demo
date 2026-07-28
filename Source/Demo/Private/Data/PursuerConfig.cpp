@@ -22,6 +22,12 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 		return false;
 	}
 
+	if (AttackApproachRadius >= AttackRange)
+	{
+		OutError = TEXT("AttackApproachRadius 必须小于 AttackRange。");
+		return false;
+	}
+
 	// [临时-A] 项目暂无攻击动画，第一步先让 AttackMontage 可选以验证追击闭环；有了攻击动画后恢复以下必填校验。
 	// if (AttackMontage.IsNull())
 	// {

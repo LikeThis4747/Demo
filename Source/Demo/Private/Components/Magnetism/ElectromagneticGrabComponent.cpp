@@ -15,9 +15,12 @@
 #include "Data/Magnetism/MagneticGrabTuningData.h"
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
+#include "GameFramework/Actor.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
+#include "Physics/DemoHitTags.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeMagneticGrab, Log, All);
 
@@ -149,6 +152,27 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 	{
 		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
 		ComponentToThrow->AddImpulse(DesiredVelocity - ExistingVelocity, NAME_None, true);
+
+		// 标记为攻击性抛射物：追猎者受击只认带此 Tag 的物体；有效期后移除，物体回归普通物体不再触发受击。
+		if (AActor* ProjectileActor = ComponentToThrow->GetOwner())
+		{
+			ProjectileActor->Tags.AddUnique(DemoHitTags::AttackProjectile());
+			if (UWorld* World = GetWorld())
+			{
+				const TWeakObjectPtr<AActor> WeakProjectile(ProjectileActor);
+				FTimerHandle ClearTagHandle;
+				World->GetTimerManager().SetTimer(
+					ClearTagHandle,
+					[WeakProjectile]()
+					{
+						if (AActor* Actor = WeakProjectile.Get())
+						{
+							Actor->Tags.Remove(DemoHitTags::AttackProjectile());
+						}
+					},
+					TuningData->ThrownWeaponActiveDuration, /*bLoop=*/false);
+			}
+		}
 	}
 }
 

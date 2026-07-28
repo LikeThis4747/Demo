@@ -56,6 +56,8 @@
 
 > 重要：官方 `BlueprintTools` 同样有逐节点 `add_node`/`connect_pins`/`set_node_pin_default`，**蓝图连线并非 ue-editor-mcp 独有**；ue-editor-mcp 的优势在「专门节点 + 图重构 + 排版 + 工程化审计」这一层。
 
+> **2026-07-28 实测补充（AnimGraph / 动画蓝图节点）**：往 **AnimGraph** 加动画节点（如蒙太奇槽 `AnimGraphNode_Slot`、BlendSpace 播放器等）**只能用官方 MCP**。本地 ue-editor-mcp 的 `graph.apply_patch` 的 `add_node` 仅支持 Event/FunctionCall/Cast 等通用蓝图类型，`node.add_function_call` 只能建函数调用节点，均无动画图节点类；官方 `BlueprintTools` 提供了完整路径：`get_graph(blueprint, "AnimGraph")` → `find_node_types(graph, "slot", [])`（中文界面下 Slot 的 type_id 为 `Animation|Montage|Slot'DefaultSlot'`）→ `create_node(graph, type_id, pos)` → `connect_pins`（按 `EGPD_Output/EGPD_Input` + `index_id` 定位引脚，Slot 输入名 `Source`、输出名 `Pose`、Root 输入名 `Result`）→ `compile_blueprint`。本次用此路径给 `ABP_Pursuer_Locomotion` 插入 DefaultSlot（BlendSpace→Slot→Root）成功。**对象路径须带资产后缀**：`/Game/.../X.X`，仅 `/Game/.../X` 会报 "not a valid object path"。
+
 ---
 
 ## 3. 决策规则（按序匹配，选定 MCP）

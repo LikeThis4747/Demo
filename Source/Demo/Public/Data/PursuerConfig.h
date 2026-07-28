@@ -76,6 +76,26 @@ public:
 	TSoftObjectPtr<UAnimMontage> AttackMontage;
 
 	/**
+	 * 攻击时寻路贴近的目标距离，单位 cm；必须 < AttackRange。
+	 * 作用：追击到比攻击判定更近处，一旦进入攻击距离即主动停下攻击，避免停在 AttackRange 边界导致的攻击抖动。
+	 * 初始值：100；范围：50~AttackRange。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (ClampMin = "50.0", Units = "cm"))
+	float AttackApproachRadius = 100.0f;
+
+	/**
+	 * 受击反应蒙太奇（按命中方向）；允许为空，缺失时只做物理反应不播受击动画。背后命中复用正面。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|受击")
+	TSoftObjectPtr<UAnimMontage> HitReactFromFront;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|受击")
+	TSoftObjectPtr<UAnimMontage> HitReactFromLeft;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|受击")
+	TSoftObjectPtr<UAnimMontage> HitReactFromRight;
+
+	/**
 	 * AI 状态机 Timer 的思考周期，单位 s；替代常驻 Tick。调小反应更灵敏但更耗，调大更省但迟钝。
 	 * 初始值：0.2；范围：0.05~1.0。
 	 */
