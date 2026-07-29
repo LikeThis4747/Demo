@@ -24,4 +24,5 @@ DailyPlan 完成或被后续主线取代后，**移入 `DailyPlan/archive/` 子�
 
 ## 当前 PCG 实施计划
 
+- `DailyPlan/2026-07-29-Level0-PCG组合导航补齐.md`：已扩展 Level0 NavMeshBounds 并补齐 StairsC→Deck135 导航拼缝；五段静态路径通过，等待玩家连续实走与实际 AI 验收。
 - `DailyPlan/2026-07-27-PCG玩法对象放置层最小实现.md`：当前仍有并行改动的 Population/地刺放置层；PCG 完整代码分析已归档到 `Outputs/PCG/archive/`，下一项功能确认前不新建实施计划。

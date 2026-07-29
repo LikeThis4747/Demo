@@ -386,10 +386,13 @@ void UElectromagneticGrabComponent::GrabCandidate(
 	HeldMagneticObject = MagneticObject;
 	PreviousAngularDamping = CandidateComponent->GetAngularDamping();
 	PreviousPawnCollisionResponse = CandidateComponent->GetCollisionResponseToChannel(ECC_Pawn);
+	PreviousCameraCollisionResponse = CandidateComponent->GetCollisionResponseToChannel(ECC_Camera);
 	ObstructedElapsedSeconds = 0.0f;
 
 	CandidateComponent->SetAngularDamping(TuningData->HeldAngularDamping);
 	CandidateComponent->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	// 持有物对 Camera 通道 Ignore：避免持有时物体挤入玩家第三人称弹簧臂触发相机回缩糊脸；释放时恢复。
+	CandidateComponent->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 
 	const FVector PullStart = CandidateComponent->GetCenterOfMass();
 	PhysicsHandle->GrabComponentAtLocation(CandidateComponent, NAME_None, PullStart);
@@ -513,6 +516,7 @@ void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRe
 	{
 		ComponentToRelease->SetAngularDamping(PreviousAngularDamping);
 		ComponentToRelease->SetCollisionResponseToChannel(ECC_Pawn, PreviousPawnCollisionResponse);
+		ComponentToRelease->SetCollisionResponseToChannel(ECC_Camera, PreviousCameraCollisionResponse);
 	}
 
 	HeldComponent.Reset();

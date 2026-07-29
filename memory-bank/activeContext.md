@@ -1,21 +1,21 @@
 # Active Context — Demo
 
-> 当前任务详情以 `.ai-context/current-task.md` 为唯一来源；此处只保留迭代焦点与任务索引。
+> 当前任务详情以 .ai-context/current-task.md 为唯一来源；此处只保留迭代焦点与任务索引。
 
 ## 当前迭代焦点
 
-最短可玩闭环仍是：PCG 生成 → 地刺/磁力投掷 → 追猎者追击/受击 → Exit 成功，并补上生命归零后的失败/同 Seed 重开。Level0 的 HydroLab V3 积木组合已形成静态原型，但必须先完成玩家连续实走与 Recast/AI 验收，才能作为 WFC 语义模块依据。
+最短可玩闭环仍是：PCG 生成 → 地刺/磁力投掷 → 追猎者追击/受击 → Exit 成功，并补生命归零后的失败/同 Seed 重开。Level0 的 V5 大小房网络已保存重载并通过静态结构检查，下一步必须先完成玩家、Recast 与真实追猎者验收，再映射到 Runtime WFC。
 
 ## 当前索引
 
-- Active 卡共 2 张：`TASK-20260728-001-SFCorridors物件筛选与退场.md`、`TASK-20260728-002-HydroLab错层房间装配验证.md`。
-- HydroLab 卡等待用户整体视觉、玩家实走与 AI/NavMesh 验收；SFCorridors 卡仍停留在候选确认和依赖审计前。
-- 追猎者近战/方向受击改动已落盘，但没有独立 active 卡记录当前构建与 PIE 验收边界。
+- Active 卡 2 张：SFCorridors 只读筛选与 HydroLab 错层房间装配验证；SFCorridors 不删除，任何退场仍需依赖闭包、精确清单和用户授权。
+- V5 当前为 259 Actor / 15 个叶文件夹，包含 Low300→Tall750 过渡、两间 2x2 大房、分流汇合侧环路、目标支路和 7 件 Portal450 共享边配方。
+- 同一 Seed 15339 的日志有 6 次生成和 4 次 PlayerReachedExit，只是单 Seed 重复运行证据，不替代至少 10 Seed、V5 或真实 AI 验收。
+- 追猎者近战/方向受击与磁力 Camera 通道改动已落盘，但当前构建、18 项 Demo.PCG、PIE、连续命中和重复投掷仍未验收。
 
 ## 当前边界与风险
 
-- Level0 日志明确缺少 RecastNavMesh；短时 Simulate 和静态射线不能证明玩家胶囊连续通行或 AI 可达。
-- 追猎者新代码与动画资产本轮只做静态/UpToDate 检查，未执行 C++ 构建、PIE、连续命中或重复投掷验收。
-- AttackProjectile Tag 通过独立 Timer 到期移除；同一物体在旧 Timer 到期前再次投掷可能被旧 Timer 提前清 Tag，需白天复现后再决定修复。
-- 295 个 SFCorridors LFS 资产不删除；任何退场都需完整依赖闭包、精确清单和用户明确授权。
-- 当前 18 项 Demo.PCG、多 Seed 玩家/导航和生命归零失败闭环仍待推进。
+- V5 静态 Outliner、射线和地板支撑不能替代玩家胶囊连续行走、Recast 覆盖、真实追猎者移动或 Runtime PCG 动态导航。
+- 本地 UE Editor MCP 在线；官方 UE5.8 MCP 未暴露且编辑器源码控制未启用，DataAsset、BlendSpace 与地图二进制的属性级差异/引用审计未执行。
+- r.VirtualTextures=True 是新的全局渲染配置，需白天确认用途及纹理、着色器和显存影响。
+- DOC/PPT 新增约 85 MB PPTX，当前未由 Git LFS 跟踪；夜间按快照规则备份，不在本轮改变仓库策略。

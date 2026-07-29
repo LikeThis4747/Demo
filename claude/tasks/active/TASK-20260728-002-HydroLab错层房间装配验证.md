@@ -2,9 +2,9 @@
 
 - Owner：Codex / 当前会话
 - Status：active
-- Stage：V3 积木、兼容链和完整组合已保存并通过重载/静态/短时 PIE 检查，等待用户视觉、玩家实走与 AI/NavMesh 验收
+- Stage：2026-07-29 已冻结 V4 楼梯房和导航结论；Level0 已保存并重载验证 V5 单层房间网络，等待用户审美/实走验收，楼梯房暂只保留 G0/F2 接口合同
 - Created：2026-07-28
-- Updated：2026-07-28
+- Updated：2026-07-29
 
 ## 目标与验收
 
@@ -17,6 +17,7 @@
 - 允许修改：`D:\UE5projects\Demo\Content\Levels\Level0.umap`
 - AI 工作记录：`D:\UE5projects\Demo\claude\tasks\active\TASK-20260728-002-HydroLab错层房间装配验证.md`
 - 当日计划：`D:\UE5projects\Demo\DOC\DailyPlan\2026-07-28-HydroLab错层房间装配验证.md`
+- 导航补齐计划：`D:\UE5projects\Demo\DOC\DailyPlan\2026-07-29-Level0-PCG组合导航补齐.md`
 - 会话结束时按规范更新：`.ai-context/current-task.md`、`memory-bank/activeContext.md`、`memory-bank/daily.md`；形成稳定结论后再更新 `memory-bank/progress.md` 或 `memory-bank/decisions.md`。
 - 共享/潜在冲突：Level0 可能已有用户或其他任务的未保存修改；切图和保存前必须核对 Dirty 状态，不覆盖无关 Actor。
 - 并行拆分/依赖：不并行修改 Level0；Demonstration/Overview 仅只读分析，Level0 是唯一资产写入目标。
@@ -39,6 +40,10 @@
 - [x] 撤掉首版 7 个孤立盒状样板；摆出独立 B00 与真实相接的 B00→B01 兼容对，作为第一轮视觉复核检查点。
 - [x] 搭建带 StairsC 的室内错层积木、A+B 与 A+B+C 兼容链，以及由 7 类积木组成的完整可玩组合段。
 - [ ] 用户在 Level0 中完成整体审美、玩家实际行走与 AI/NavMesh 验收。
+- [x] 将现有 NavMeshBounds 扩展到同时覆盖原测试区与 V3 完整组合，并验证入口到 Deck135 的五段导航路径。
+- [x] 冻结 V4 楼梯房，在独立区域搭建不依赖楼梯的大小房单层回路样例。
+- [x] 验证小房直连、大房单口接入、Low300→Tall750 过渡、分流/汇合与目标房的连续通行。
+- [x] 检查新样例的墙缝、天花缝、穿模、共面重复和接口前 300cm 净空，只保存并回读 Level0。
 
 ## 验证
 
@@ -121,3 +126,39 @@
 - `Tall750 ↔ Tall750` 可按开放边相接；共享边上的墙、地、顶由唯一 `EdgeOwner` 生成，禁止双方各放一份造成共面 z-fighting。
 - `SplitLevel` 的外部 Socket 仍是 `Ground0/Open600/Tall750`；`Deck135` 只存在于积木内部。只要存在 Deck135，就必须同时生成 `StairsC + LandingZone + UnderDeckBlock + GuardEdge`，任一项缺失都使该变体非法。
 - DeadEnd 只能接收一个入口并封闭其余三边；Corner/T/Straight 的旋转变体必须旋转 OpeningMask、Socket 偏移和护栏/楼梯手性，不能只旋转可见网格。
+
+## 2026-07-29 自动导航补齐检查点
+
+- 并发复核：工作区起始为 clean；本轮仅观察到一个 `UnrealEditor.exe`，`claude/tasks/active/` 除本卡外没有新的摆放任务或近期写入。Codex 全局任务列表接口连续超时，因此结论仅为“未发现可见并发摆放”，不能写成绝对排除。
+- 磁盘只读审计确认 V3 仍为 538 Actor / 22 文件夹、完整组合仍为 235 Actor / 9 文件夹，7 个最小单元与 A+B、A+B+C 分组数量均保持不变；没有修改任何 HydroLab 第三方资产或 PCG/WFC 代码。
+- 原 `NavMeshBoundsVolume_1` 的 Y 覆盖仅约 `-3920..6080`，完整组合位于 `Y≈12000..15007`。已将该 Volume 改为位置 `(2400,5540,0)`、缩放 `(1,2,1)`，磁盘重载后边界为 Origin `(2400,5540,0)` / Extent `(5000,10000,300)`，同时保留原测试区覆盖。
+- 保持 `RecastNavMesh-Default.RuntimeGeneration=Static`。使用 UE5.8 `ResavePackages -BuildNavigationData` 重建；仅对该命令行临时关闭异步加载等待锁，不写项目配置。重载后 Recast 边界为 Origin `(2470,5434,120)` / Extent `(5434,10374,120)`。
+- 首次路径复核证明主路线前四段完整，但 StairsC 与 Deck135 虽各自有连续导航面，拼缝处为两个导航岛。没有挪动或缩放结构网格；只新增双向 `ZE_WFC3_F07_StairDeck_NavLink`，位于 `PCG_AssemblyStudy/NavigationValidation`，连接楼梯顶 `(3490,14820,≈120)` 与 Deck `(3700,14850,140)`。
+- 最终磁盘重载：总 Actor 1012，V3 仍为 538，完整组合仍为 235。入口→主空间→T 分支→2x2 房间→StairsC→Deck135 五段均为 `valid=true, partial=false`；Deck135 内部路径同样 `valid=true, partial=false`。
+- 编辑器切到 `L_PCG_RuntimeTest` 再重载 `Level0` 后，导航连接、V3 538 Actor 与新 Volume Transform 均可见。短时 SelectedViewport PIE 正常进入 `Level0` Running；运行阶段 Warning/Error/Fatal 为 0，停止后仅出现既有 CrowdManager 析构期 `Unable to find RecastNavMesh instance` 警告。
+- 尚未替代的用户验收：整体视觉近看、玩家胶囊从入口连续走到 Deck135、楼梯边缘手感，以及场景中真实 AI Actor 执行整段移动。任务保持 Active，不标记完成。
+
+## 2026-07-29 V4 二层楼梯房与大小占地对比检查点
+
+- 冻结楼层语义：`G0=Z0` 与 `F2=Z450` 由可行走面决定；`Low300/Tall750` 只描述该走行面上方净空，不再把“高天花板”本身称为二楼。楼梯房是 `G0 + Tall750 + 内部 F2` 的多格超模块，接在 `Z450` 的 Low300 房间属于二层房间。
+- 回到 Demonstration 复核两处原生 `StairsB`。示例没有按楼梯包围盒首尾硬拼，而是让开放踏步端部轻微插入相邻平台；据此淘汰此前按 322.5cm 包围长度排列的接法。
+- `EnclosedComposition` 保留 1200x1200 大楼梯房：`E00=87`、G0 房 `E01=45`、F2 房 `E02=72`，合计 204 Actor。`CompactComparison` 新增 1200x900 紧凑楼梯房 `C00=71`，并直连 600x900 的 G0 小房 `C01=19` 与 F2 小房 `C02=36`，合计 126 Actor。
+- 大版与紧凑版均把转角平台、第二跑楼梯及随平台护栏向接口方向收紧 50cm；第一跑最高踏步到平台原约 45cm 空段被消除，第二跑顶部直接进入 `Z450` 平台。开放踏步自身仍会让单点竖向射线穿过约 5--12.5cm 的踏步缝，这与素材结构一致，不再存在平台之间的大空洞。
+- 两版 G0 接缝两侧均为 `Z0`，F2 接缝两侧均为 `Z450`；300cm 接口在三个横向位置、三个角色高度上保持无遮挡，接口外墙、平台西/南/北护栏与 F2 非接口边界均正确命中碰撞。楼梯/平台代表点向上 180cm 射线无遮挡；330 个 V4 Actor 的完全重复 Transform 组为 0。
+- 只保存 `Content/Levels/Level0.umap`。磁盘重载后关键修正仍为 `E00 Flight2 X=15477.5 / Landing X=15177.5`、`C00 Flight2 X=18777.5 / Landing X=18477.5`，六个模块计数保持不变，临时保存哨兵 Actor 不存在。没有修改 HydroLab 第三方资产或 PCG/WFC 代码。
+- 重要 WFC 边界：当前求解逻辑地址仍是 600cm，因此 1200x900 楼梯壳体与 600x900 小房目前只是几何/素材装配验证，不能直接宣称为正式原子积木。落地时优先把紧凑楼梯壳体放进 1200x1200 的 2x2 逻辑包络，并将未用 300cm 条带标成 `ReservedVoid/ConnectorApron`；若要把 900cm 真正变成可占格尺寸，则需引入 300cm 子格/占用掩码并重写既有模块约束，成本更高。
+- 静态碰撞射线不能替代 Recast 与真实追猎者转身测试。当前仅能确认 300cm Socket 相对玩家 42cm 胶囊半径有充足几何余量；紧凑版是否作为默认楼梯房，仍以玩家实走、NavMesh 连续覆盖和追猎者上下两跑不掉落/不卡转角为验收门槛。
+
+## 2026-07-29 V5 大小房网络与接口解析器检查点
+
+- 按用户要求暂停导航与追猎者验证，并暂时封存 V4 楼梯房；本轮没有挪动楼梯房、NavMesh 或追猎者资产。新场景根目录为 `PCG_AssemblyStudy/HydroLab_RoomNetworkV5`，使用同一 `FloorZ=0` 的单层网络验证房间尺度、顶高和门洞约束。
+- V5 由 10 个结构模块实例构成：Low300 入口、Tall750 直通、T 形分流、横向直通、转角、两间原子 2x2 Tall750 大房、汇合 T、目标前直通与目标小房；拓扑形成一条主路径、一条可回到汇合点的侧环路和一个收束目标支路，而不是重复直廊。
+- 保存并重载后稳定为 259 Actor / 15 个叶文件夹；`Portal450` 子组恰好 7 Actor、7 个标签唯一。此前官方 MCP 在“文件夹不存在”回报后实际已部分执行，曾短暂生成双份 Portal；已只在该 AI 新建子组内按标签去重，最终没有保留双份门框。
+- `Low300→Tall750` 仍必须经过共享边 `RiseResolver`：`Z=0..300` 通路开放，`Z=300..750` 由两块示例验证的 `WallPieceF` 封住；低顶与高顶不可直接相邻。重载后低侧墙、高侧墙、低顶、高顶、Resolver 上封口碰撞和下部通路全部按预期命中/畅通。
+- Tall750 小房与 2x2 Tall750 大房使用 `Open600` 直接连接，但 2x2 大房只能在声明的 600cm 边段和偏移上接入，不能把 1200cm 整边视为任意开口。目标前小房到目标大房的共享边在中心及左右安全余量、`Z=100/250` 均畅通，开口外两侧阻挡，边界前后与边界正中地板表面均连续为 `Z=0`。
+- 回到 `/Game/Assets/SciFiHydroLab/Levels/Demonstration` 复核后，确认 `SM_HydroLab_DoorFrame` 在示例中作为结构化门洞使用。V5 新增原比例 `Portal450` 共享边解析器：1 个 450cm DoorFrame、南北各 2 个 75x150 PillarF1、上方 2 个 300cm WallPieceF，共 7 件填满 600cm 宽、750cm 高的共享墙湾；只有 Resolver 拥有该共享边，避免双方重复墙体与 z-fighting。
+- Portal 重载后多高度中心线 `Z=50/100/190/250`、横向安全余量 `Y=9450/9750` 均畅通；门洞外 `Y=9350/9850` 与上部门楣正确阻挡。门前、门槛、门后均有地板支撑，门槛表面只比相邻地板高约 3.75cm，低于当前 35cm 步高参数，但真实玩家/AI 胶囊仍留到后续实测。
+- 整体 15 项路线/封闭/顶高检查、小房→大房 9 项接口检查、Portal 12 项门洞与地板检查，在保存并重新加载 Level0 后全部再次通过。墙体碰撞早先的三项“未命中”由检测线没有穿过薄墙面造成；改用双向、斜向和整室贯穿线后 WallH 均稳定命中，不需要叠加隐形碰撞或修改第三方网格。
+- 引擎内部截图已留存：`claude/artifacts/room-network-v5-overview-clean.png`、`room-network-v5-entry.png`、`room-network-v5-small-to-large.png`、`room-network-v5-portal.png`。当前视口停在 Portal450，由用户可直接近看；可在入口附近使用 Play From Here 实走，未移动 Level0 原有 `PlayerStart_0`。
+- 楼梯房暂不接入 V5。保留的接口合同为：G0 侧只能接 `FloorZ0/Open600/Tall750`（若来源是 Low300，先经过 RiseResolver）；F2 侧只能接 `FloorZ450/Open600/Low300` 的上层房；两端必须有至少 300cm ConnectorApron，且 2x2 大房只能在声明的 Socket 偏移接入。楼梯宏块允许比 1x1 大，但必须整体原子占格，不能让小房随意贴到楼梯外壳任意位置。
+- 本轮只保存 `/Game/Levels/Level0`，没有修改 `Content/Assets/SciFiHydroLab/**`、PCG/WFC 代码、SFCorridors、植物、水处理槽或梯子。任务仍为 Active：用户审美/玩家实走以及明日导航与追猎者验收尚未完成。

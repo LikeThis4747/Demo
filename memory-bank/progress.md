@@ -16,10 +16,10 @@
 - [x] 最小 GameFlow：玩家在 Start、追猎者在身后至少 1200 cm、Exit 一次性成功
 - [x] 旧 RuntimeGenerationTestHarness C++ 与未引用 Blueprint Redirector 已清理
 - [x] 历史 UE 5.8 构建、Demo.PCG 19/19 与 288/288 Seed Sweep
-- [ ] Level0 已有 HydroLab V3 积木/兼容链/完整组合静态原型；尚未转入 Runtime WFC，待玩家连续实走与 Recast/AI 验收
+- [ ] Level0 HydroLab 静态原型：V3 已有 7 类积木、兼容链和五段 Recast；V5 已保存重载 259 Actor 的大小房单层网络，含 RiseResolver、2x2 大房、分流汇合环路与 Portal450。尚未转入 Runtime WFC，待用户实走、Recast 与真实 AI 验收
 - [ ] 对当前 18 项 Demo.PCG 测试重新建立完整构建、自动化与 Seed Sweep 基线
-- [ ] 至少 10 Seed 玩家验收路线、接缝、碰撞、净空与 Start→Exit
-- [ ] 补齐动态导航证据并验收追猎者多 Seed 实际寻路
+- [ ] 至少 10 Seed 玩家验收路线、接缝、碰撞、净空与 Start→Exit；2026-07-29 日志只有同一 Seed 15339 的 6 次生成/4 次 Exit 成功，不计为多 Seed 放行
+- [ ] 补齐 Runtime 动态导航证据并验收追猎者多 Seed 实际寻路
 
 ## M2 玩法压力与追猎者
 
@@ -35,4 +35,4 @@
 
 ## 当前边界
 
-WFC/Generator 拥有空间，Population 拥有批量玩法对象，GameFlow 拥有唯一玩家、追猎者、Exit 与局状态。当前最短可玩推进是先让 Level0 具备 Recast 并实走 V3 组合，再把生命归零接成失败/同 Seed 重开；追猎者新攻击/受击链须单独构建和 PIE 验收，小地图、多敌人和通用任务系统暂不扩展。
+WFC/Generator 拥有空间，Population 拥有批量玩法对象，GameFlow 拥有唯一玩家、追猎者、Exit 与局状态。Level0 当前同时保留 V3 导航样例与 V5 大小房约束样例；V5 已证明静态几何、共享边所有权和三类接口可成立，但玩家、Recast、真实 AI 与 Runtime WFC 尚未验收。楼梯房暂时封存，明日再验证 G0/F2 接口与追猎者。追猎者新攻击/受击链仍须单独构建和 PIE 验收，小地图、多敌人和通用任务系统暂不扩展。

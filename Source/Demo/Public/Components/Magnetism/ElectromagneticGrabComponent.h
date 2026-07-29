@@ -128,6 +128,9 @@ private:
 	/** 抓取前对 Pawn 通道的碰撞响应快照；释放时恢复，防止永久改变道具碰撞。 */
 	ECollisionResponse PreviousPawnCollisionResponse = ECR_Block;
 
+	/** 抓取前对 Camera 通道的碰撞响应快照；持有期间置为 Ignore 以免持有物挤触玩家相机弹簧臂回缩，释放时恢复。 */
+	ECollisionResponse PreviousCameraCollisionResponse = ECR_Block;
+
 	/** 当前玩法锚点阶段；GrabCandidate 进入 Pulling，曲线结束进入 Holding，释放时归零。 */
 	EGrabPhase GrabPhase = EGrabPhase::None;
 
