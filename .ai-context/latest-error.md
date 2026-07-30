@@ -2,6 +2,6 @@
 
 当前无已知 Git 备份错误。
 
-2026-07-30 已在精确核验 origin = git@git.woa.com:shiqiqiwang/Demo.git 后完成普通推送；主快照 fd04bdfff78034d0d5b5af0092db9309e11727a5 已到达 origin/main，7 个 LFS 对象约 4.0 MB 上传成功。
+2026-07-31 已在精确核验 origin = git@git.woa.com:shiqiqiwang/Demo.git 后完成普通推送；主快照 204851b（Nightly snapshot 2026-07-31）已到达 origin/main，1 个 LFS 对象约 4.1 MB 上传成功。
 
-当前验证边界：本轮未执行 C++ 构建、18 项 Demo.PCG 自动化、V5 玩家/Recast/真实追猎者验收。官方 UE5.8 MCP 未暴露且编辑器源码控制未启用，DataAsset、BlendSpace 与地图二进制的属性级差异/引用审计未执行。
+当前验证边界：新增主菜单/正式开局 C++ 尚未构建、UHT、自动化或 PIE；蓝图审计未执行，因为本地 UE Editor MCP pong=false 且官方 UE5.8 MCP 未暴露。V5 与三层楼梯塔的玩家、Recast、真实追猎者验收仍未执行。
