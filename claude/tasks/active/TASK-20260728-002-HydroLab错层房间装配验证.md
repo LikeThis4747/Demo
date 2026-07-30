@@ -162,3 +162,51 @@
 - 引擎内部截图已留存：`claude/artifacts/room-network-v5-overview-clean.png`、`room-network-v5-entry.png`、`room-network-v5-small-to-large.png`、`room-network-v5-portal.png`。当前视口停在 Portal450，由用户可直接近看；可在入口附近使用 Play From Here 实走，未移动 Level0 原有 `PlayerStart_0`。
 - 楼梯房暂不接入 V5。保留的接口合同为：G0 侧只能接 `FloorZ0/Open600/Tall750`（若来源是 Low300，先经过 RiseResolver）；F2 侧只能接 `FloorZ450/Open600/Low300` 的上层房；两端必须有至少 300cm ConnectorApron，且 2x2 大房只能在声明的 Socket 偏移接入。楼梯宏块允许比 1x1 大，但必须整体原子占格，不能让小房随意贴到楼梯外壳任意位置。
 - 本轮只保存 `/Game/Levels/Level0`，没有修改 `Content/Assets/SciFiHydroLab/**`、PCG/WFC 代码、SFCorridors、植物、水处理槽或梯子。任务仍为 Active：用户审美/玩家实走以及明日导航与追猎者验收尚未完成。
+## 2026-07-30 三层连续楼梯塔试搭
+
+- Owner：Codex（本会话）。
+- 用户授权：允许在 `Level0` 中实际搭建并保存三层楼梯塔原型；本轮不修改 PCG/WFC 代码与第三方 HydroLab 资产。
+- 写入范围：仅 `Content/Levels/Level0.umap` 与本任务卡；新增场景根目录为 `PCG_AssemblyStudy/HydroLab_ThreeLevelStairTowerV1`，不移动、不删除既有 V4/V5 Actor。
+- 冻结标高：一楼 `Z=0`、二楼 `Z=450`、三楼 `Z=900`；转向平台 `Z=225/675`；唯一屋顶 `Z=1200`，禁止在 `Z=750` 生成会截断第二组楼梯的中间天花板。
+- 结构方案：复用已核对的 `StairsB + FloorB + LargeFloorB + Fence* + WallH/CeilingC` 原比例装配；两组楼梯共用二楼平台，不复制共面的楼板、护栏或外墙。
+- 计划接口：一楼、二楼、三楼分别保留可识别的房间连接口与落脚平台；接口外侧补测试连接平台，避免门洞直接通向悬空边。
+- 验证边界：检查楼梯/平台接缝、头部空间、外壳漏洞、碰撞、重复 Transform 与 z-fighting 风险；允许短 PIE/引擎内截图。追猎者 Recast/AI 上楼与玩家完整实走仍是后续验收，不因静态装配通过而宣称完成。
+- [x] 在隔离区域完成四跑楼梯与三层平台。
+- [x] 完成统一材质家族的外壳、屋顶、护栏和三层连接口。
+- [x] 完成静态几何检查、仅保存 Level0，并记录可按 F 定位的 Actor 名称与引擎内截图。
+
+### 本轮实际结果
+
+- 用户补充要求二楼两个出口、三楼一个出口后，原型冻结为：一楼南向 600cm 入口；二楼东向 600cm 出口 + 北向 450cm 原生 DoorFrame 出口；三楼东向 600cm 出口。二楼北口补齐连续地板、门框、外侧落脚平台和两侧防坠护栏，不是只在墙上挖洞。
+- 楼梯内部与各层外墙开口分开验证：四跑 `StairsB` 只负责 `Z0→225→450→675→900` 连通；每层可独立选择开口方向与宽度，外墙、门框、连接平台和护栏再按结果装配。二楼作为分流层省略会挡住第二组 `Flight1` 的 `Guard_Upper_S`；三楼终点层恢复该护栏。
+- 最终根目录 `PCG_AssemblyStudy/HydroLab_ThreeLevelStairTowerV1`，共 141 Actor / 7 个叶文件夹，全部单位缩放；一楼/二楼/三楼地板标高为 `0/450/900`，唯一屋顶为 `Z=1200`，没有 `Z=750` 中间天花板。
+- 静态检查：141 个 Actor 无完全重复 Transform；塔体 Actor 位置范围 `X=21600..23100, Y=5700..7503.72, Z=0..1200`，该范围内没有其他非本塔 Actor；22/22 条碰撞射线通过，覆盖三层地板、屋顶、三处开放通路、非开口墙湾、二三楼之间的封墙带与二楼北门。
+- 引擎内部截图：`claude/artifacts/three-level-stair-tower-v1-exterior.png`、`three-level-stair-tower-v1-north-exit.png`、`three-level-stair-tower-v1-ground-entry.png`、`three-level-stair-tower-v1-f2-two-exits.png`。可按 F 定位：`HL_T3_G0_F2_Stair_Flight1`（一楼起步）、`HL_T3_F2_North_DoorFrame450`（二楼北出口）、`HL_T3_F2_F3_Stair_Flight2`（通往三楼）、`HL_T3_F3_ConnectorApron_E_00`（三楼东出口）。
+- 官方 AssetTools 仅保存 `/Game/Levels/Level0` 成功；保存后 `Level0.umap` 为 4,007,347 bytes，时间 2026-07-30 20:27:43。`Content/Assets/SciFiHydroLab/**`、PCG/WFC 代码和既有 V4/V5 Actor 均未修改。
+- 验证边界：当前证明的是原比例素材静态装配、开口与楼面碰撞成立；玩家连续走完四跑、Recast 覆盖和追猎者上楼仍未执行，任务继续保持 Active。
+
+### 2026-07-30 三层楼梯塔接口纠错
+
+- 用户验收指出三项确定问题：塔外连接地板被错误装成带栏杆的悬空走台；二楼北口 450cm 与东口 600cm 不一致；多段栏杆越出真实地板或落在后续房间区域。
+- 当前实时复核为 142 Actor；额外的 `HL_T3_F3_Guard_N_Cap_0` 是相对原端头偏移 10cm 的重复悬空栏杆。纠错只处理 `HydroLab_ThreeLevelStairTowerV1` 内的 AI 创建 Actor，并新增与三处 600cm 开口直接相邻的验证房间；不改 V4/V5、PCG/WFC 代码或第三方资产。
+- 冻结逻辑边界仍为 `X=21600..22800, Y=6000..7200`。统一接口为：G0 南口 `X=22200..22800`；F2 东口 `Y=6600..7200`、北口 `X=22200..22800`；F3 东口 `Y=6600..7200`。所有接口均为 600cm，并落在完整的 600cm 网格边段。
+- 塔体地板只铺到自身边界；边界外地板归相邻验证房间。共享边无墙、无栏杆；只有可走地板外侧确实临空时才允许生成栏杆。北口删除 450cm DoorFrame 并补 150cm 内部地板及对应上下墙带。
+- 本检查点的验收为：三个相邻房间与塔楼面连续、四个 600cm 接口无遮挡；栏杆不越界、不落在房间地板内部；共享边无重复墙/地板；保存后重新检查 Actor 数、完全重复 Transform、碰撞与引擎内截图。玩家、Recast 与追猎者通行仍不在本检查点内。
+
+### 2026-07-30 三层楼梯塔通道与灯光终检
+
+- 用户截图证明此前新增的整块平台侵入了楼梯上行包围范围，属于确定的结构错误。纠正时没有缩放素材：两组上半跑 `Flight2`、对应三块转向平台和平台栏杆统一向西移动 50cm，使第一跑、转向平台、第二跑和楼层平台按真实网格边界首尾闭合。
+- 接缝终检（允许浮点误差约 `1.53e-5cm`）：第一跑高端与转向平台最大 X 同为 `22027.5`；转向平台最大 X 与第二跑最小 X 同为 `22027.5`；第二跑最大 X 与楼层平台最小 X 同为 `22350`。新增地板没有再覆盖楼梯踏步或头部通道。
+- 二、三层到达平台统一改用原比例 `150x300x4cm` 的 `FloorB` 窄地板，并各补一块 `West150`；平台表面 18 个采样点全部在预期高度命中，没有缺口。平台和转向段栏杆使用 `FenceC2 + 2x FenceA` 原比例组合补齐，取消超长栏杆，不以非单位缩放掩盖尺寸问题。
+- 新增三个关卡实例灯，不修改第三方蓝图：`HL_T3_Light_Under_F2`、`HL_T3_Light_Under_F3`、`HL_T3_Light_Under_Roof`，均使用 `/Game/Assets/SciFiHydroLab/Blueprints/BP_HydroLab_LampA`，最终 `Intensity=2500`、`AttenuationRadius=500`，分别照亮一层、二层和三层楼梯/平台区域。
+- 最终根目录为 211 Actor / 13 个文件夹；211 个 Actor 全部单位缩放、无同类同 Transform 重复。18 条楼梯/平台上方竖向检测均无遮挡，四个 600cm 外部接口仍保持畅通。该结论是静态几何检查，不替代玩家胶囊 Sweep、Recast 或追猎者真实移动。
+- 引擎内部终检截图：`claude/artifacts/three-level-stair-tower-v8-final-2500.png`。官方 AssetTools 仅保存 `/Game/Levels/Level0` 成功；保存后 `Level0.umap` 为 4,124,110 bytes，时间 2026-07-30 22:31:00。未修改 PCG/WFC 代码或 `Content/Assets/SciFiHydroLab/**`。
+
+### 2026-07-30 三层 WFC 场景规划（待白天落盘）
+
+- 规划采用 `8x9x3` 个逻辑地址、每格 `600x600cm`，楼层走行面为 `Z=0/450/900`。普通路线仍以 1x1 为最小求解单元；A/B 为两座一二层 2x2 原子楼梯，C/D 为两座二三层 2x2 原子楼梯，T 为一座贯通三层的 2x2 原子楼梯塔。T 是额外垂直环路，不计入每组双层楼梯的“至少两座”。
+- 每层均规划至少一处直路、转角、三岔、十字、内部死胡同和一间由两个相邻高顶格组成的 1x2 高顶房；每层路线保持单一连通分量。高顶占用向上层传播：一层高顶格在二层对应地址标为不可生成，二层高顶格在三层对应地址标为不可生成，三层高顶只向屋顶以上延伸。
+- 垂直保留共 12/216 个“格子-楼层”，约占 5.6%：其中 8 个用于上层 C/D 楼梯在一层的结构支撑占用，4 个用于下层高顶房穿越相邻上层。它们只处理真实几何占用，不是大面积空白房间，不能被普通房间、陷阱或资源填充。
+- 结构与 Population 保持职责分离：本规划只决定房间开口、墙、地板、天花板、高度过渡、楼梯占用和临空栏杆；地刺、资源、交互物和普通房间灯光在后续独立 Population 阶段根据结构提供的可用区域生成。楼梯塔实例灯属于宏模块内部固定装配。
+- 逐格规划图已输出为 `three-floor-wfc-grid.html`。图中的路线笔画就是该格真实 NSEW 开口；未开放的边由表现层装墙。共享边只允许一方拥有墙/门框/高度过渡件，防止漏洞和 z-fighting。
+- 完整三层场景未在本夜间无人值守阶段写入 Level0。依据 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md` 第 130--139 行，夜间自动任务禁止修改 Content；下一次白天交互应按“单座双层楼梯样板复核 → A/B/C/D 旋转实例 → 三层地板与开口 → 墙/顶/高度过渡 → 邻接派生栏杆 → 灯光 → 静态复核 → PIE/Recast/玩家/追猎者验收”的顺序落盘。任务继续保持 Active。
