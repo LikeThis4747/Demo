@@ -35,6 +35,14 @@ void AZeroEscapeGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// 从主菜单 OpenLevel 进来时，PlayerController 仍停留在主菜单设置的 UI-Only 输入模式，
+	// 会拦截所有游戏输入导致玩家无法操控；正式关卡必须显式切回 GameOnly 并隐藏鼠标。
+	if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
+	{
+		PlayerController->SetInputMode(FInputModeGameOnly());
+		PlayerController->SetShowMouseCursor(false);
+	}
+
 	AZeroEscapeRuntimeLevelGenerator* Generator = FindLevelGenerator();
 	if (Generator == nullptr)
 	{

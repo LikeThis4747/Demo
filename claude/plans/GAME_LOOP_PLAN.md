@@ -68,6 +68,29 @@
 
 ## 6. 进度
 
-- [ ] 阶段一：主菜单进游戏
-- [ ] 阶段二：重开/流转/暂停
-- [ ] 阶段三：伤害/胜负结算
+### 阶段一：主菜单进游戏（进行中）
+- [x] C++ 第1步：`UZeroEscapeGameInstance`（存 Seed/难度）— 已落盘编译通过
+- [x] C++ 第2步：`AZeroEscapeGameMode`（读参数生成PCG+摆人）— 已落盘编译通过
+- [x] C++ 第3步：`AMainMenuGameMode` + `UMainMenuWidget` — 已落盘编译通过
+  - 注：修过 Unity build 日志类别重名冲突（Widget 用 LogZeroEscapeMainMenuWidget，GameMode 用 LogZeroEscapeMainMenu）
+  - 注：Build.cs 加了 UMG 模块依赖
+- [x] 蓝图第4步a：4个蓝图已建（BP_ZeroEscapeGameInstance / BP_MainMenuGameMode / BP_ZeroEscapeGameMode / WBP_MainMenu），父类均已用 set_parent_class 修正为自定义 C++ 类
+- [x] 蓝图第4步b：4蓝图父类全部正确（用户手动改+MCP官方get_parent核实）；Class Defaults 3字段已设并核实（PursuerClass/MainMenuWidgetClass/GameLevelName=L_Game）
+- [x] 关卡第4步c：L_MainMenu（空图）+ L_Game（Generator/Populator/PlayerStart/NavMesh 已搬，无环境光）已建并核实
+- [x] 配置第4步d：GameDefaultMap=L_MainMenu；EditorStartupMap=Level0；GlobalDefaultGameMode=BP_ZeroEscapeGameMode；GameInstanceClass=BP_ZeroEscapeGameInstance；L_Game WorldSettings=BP_ZeroEscapeGameMode（已核实）；L_MainMenu WorldSettings=BP_MainMenuGameMode（MCP官方设置）
+- [x] WBP_MainMenu 搭建：C++ 改 BindWidget 模式（NativeConstruct 绑全部事件，零蓝图连线）；官方UMG工具搭28控件树（标题/Seed行/三按钮/设置面板含难度三键+返回），全部编译通过
+  - 注：Build.cs 加了 Slate/SlateCore（OnTextCommitted 委托签名用 ETextCommit）
+  - 注：C++ 难度高亮/设置面板显隐/随机Seed回填 全在 MainMenuWidget.cpp
+- [ ] PIE 验证：主菜单选参数 → 进游戏 → PCG生成 → 人物就位 ← 下一步
+
+### 阶段二：重开/流转/暂停（未开始）
+### 阶段三：伤害/胜负结算（未开始）
+
+### 关键资产路径备忘（MCP 已核实）
+- Generator 蓝图：`/Game/ZeroEscape/Generation/BP_ZeroEscapeRuntimeLevelGenerator`
+- 生成配置 DA：`/Game/ZeroEscape/Generation/Data/DA_LevelGenerationProfile`
+- 表现配置 DA：`/Game/ZeroEscape/Generation/Presentation/DA_Presentation_SciFiHydroLab`
+- 布点器蓝图：`/Game/ZeroEscape/Generation/Population/BP_GameplayPopulator`（配 `DA_Population_Default`）
+- 追猎者蓝图：`/Game/ZeroEscape/Enemies/BP_Pursuer`
+- Generator TriggerMode 默认 ExplicitOnly（不会自动跑，靠 GameMode 触发，无双重生成风险）
+- L_PCG_RuntimeTest 实际 Actor：Generator + RoundFlow(不搬) + PlayerStart + NavMeshBoundsVolume + SkyLight_1 + GameplayPopulator + 2个地板占位(不搬)

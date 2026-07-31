@@ -5,7 +5,7 @@
 - UE 5.8（由 5.7.4 升级），预计工期三周的单机 Demo，C++ 优先；默认不使用 GAS、不设计联机。
 - 工程根：`D:\UE5projects\Demo`；主模块：`Source/Demo`；UE 资产根：`Content`（`/Game`）。
 - 蓝图只负责资源装配、UI、关卡配置和 AnimBP 连线；数据使用 DataAsset/DataTable。
-- 编辑器操作有**两个 MCP 可同时使用**：本地 `ue-editor-mcp`（socket 55558，擅长蓝图微操/重构、PIE、日志断言、审计）与 UE5.8 官方 `ue58-official-mcp`（HTTP 8000 `/mcp`，擅长语义搜索、自动化测试、物理资产、各类资产 CRUD、属性/类发现、Python 编排）。**选型与协同规则必须遵循 `MCP/capability-notes/dual-mcp-usage-guide.md`**。官方 MCP 随编辑器自动启动（`bAutoStartServer=True`），走 `list_toolsets`→`describe_toolset`→`call_tool` 三步；两者端口不冲突。
+- 编辑器操作有**两个 MCP 可同时使用**：本地 `ue-editor-mcp`（socket 55558，擅长蓝图微操/重构、PIE、日志断言、审计）与 UE5.8 官方 `ue58-official-mcp`（HTTP 8000 `/mcp`，擅长语义搜索、自动化测试、物理资产、各类资产 CRUD、属性/类发现、Python 编排）。**总原则：优先用官方 MCP，`ue-editor-mcp` 做补充；官方 MCP 连接不上时必须第一时间向用户汇报，由用户决定重连还是临时用本地兜底。** 凡读/写蓝图 C++ 字段、读关卡 WorldSettings、读蓝图真实父类、读 Actor UPROPERTY，一律走官方 MCP（本地 `ue-editor-mcp` 的 `set_property` 设不了 C++ 父类继承字段、`get_actor_properties` 只返回 Transform）。**选型与协同规则必须遵循 `MCP/capability-notes/dual-mcp-usage-guide.md`**。官方 MCP 随编辑器自动启动（`bAutoStartServer=True`），走 `list_toolsets`→`describe_toolset`→`call_tool` 三步；两者端口不冲突。
 
 ## 每次开始
 

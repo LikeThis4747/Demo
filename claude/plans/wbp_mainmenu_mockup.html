@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>WBP_MainMenu 设计示意图</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#131a22; --panel2:#1a2430;
+    --line:#2a3644; --txt:#e8eef5; --dim:#8a99a8;
+    --accent:#3ec1d3; --accent2:#2a9fb0;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;font-family:'Segoe UI',system-ui,sans-serif}
+  body{background:var(--bg);color:var(--txt);min-height:100vh;display:flex;
+       align-items:center;justify-content:center;gap:48px;padding:40px;flex-wrap:wrap}
+  .screen{width:760px;height:480px;background:linear-gradient(160deg,#0d1218,#0a0e13);
+          border:1px solid var(--line);border-radius:12px;padding:48px;
+          display:flex;flex-direction:column;align-items:center;justify-content:center;
+          position:relative;box-shadow:0 24px 60px rgba(0,0,0,.5)}
+  .title{font-size:44px;font-weight:700;letter-spacing:.35em;color:var(--txt);
+         margin-bottom:6px;text-shadow:0 0 24px rgba(62,193,211,.35)}
+  .title-bar{width:120px;height:2px;background:var(--accent);margin-bottom:56px}
+  .row{display:flex;align-items:center;gap:12px;margin-bottom:20px}
+  .label{width:56px;color:var(--dim);font-size:15px;letter-spacing:.1em}
+  .seed{width:200px;background:var(--panel2);border:1px solid var(--line);
+        color:var(--txt);padding:10px 14px;border-radius:6px;font-size:15px}
+  .btn{background:var(--panel2);border:1px solid var(--line);color:var(--txt);
+       padding:10px 22px;border-radius:6px;font-size:15px;cursor:pointer;
+       letter-spacing:.08em;transition:.15s;min-width:200px;text-align:center}
+  .btn:hover{background:var(--accent);color:#04222a;border-color:var(--accent)}
+  .btn.primary{background:var(--accent);color:#04222a;border-color:var(--accent);font-weight:600}
+  .btn.primary:hover{background:var(--accent2)}
+  .btn.small{min-width:0;padding:10px 18px}
+  .stack{display:flex;flex-direction:column;gap:14px;margin-top:8px}
+  .hint{margin-top:40px;color:var(--dim);font-size:13px;letter-spacing:.05em}
+  /* 设置面板 */
+  .settings{width:760px;height:480px;background:linear-gradient(160deg,#0d1218,#0a0e13);
+            border:1px solid var(--line);border-radius:12px;padding:36px 44px;
+            box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex;flex-direction:column}
+  .set-head{display:flex;justify-content:space-between;align-items:center;
+            border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:28px}
+  .set-title{font-size:22px;letter-spacing:.15em;color:var(--txt)}
+  .set-close{color:var(--dim);font-size:20px;cursor:pointer;padding:2px 8px}
+  .set-close:hover{color:var(--txt)}
+  .set-label{color:var(--dim);font-size:15px;letter-spacing:.1em;margin-bottom:14px}
+  .diff-row{display:flex;gap:14px;margin-bottom:26px}
+  .diff-btn{flex:1;padding:12px 0;border-radius:6px;border:1px solid var(--line);
+            background:var(--panel2);color:var(--txt);font-size:15px;cursor:pointer;transition:.15s}
+  .diff-btn:hover{border-color:var(--accent)}
+  .diff-btn.on{background:var(--accent);color:#04222a;border-color:var(--accent);font-weight:600}
+  .set-empty{flex:1;border:1px dashed var(--line);border-radius:8px;
+             display:flex;align-items:center;justify-content:center;
+             color:var(--dim);font-size:13px;letter-spacing:.05em;margin-bottom:24px}
+  .set-foot{display:flex;justify-content:center}
+  .caption{position:absolute;bottom:14px;right:20px;color:#41505e;font-size:12px;letter-spacing:.05em}
+</style>
+</head>
+<body>
+
+  <!-- 主菜单 -->
+  <div class="screen">
+    <div class="title">ZERO ESCAPE</div>
+    <div class="title-bar"></div>
+    <div class="row">
+      <div class="label">Seed</div>
+      <div class="seed">12345</div>
+      <button class="btn small">随机</button>
+    </div>
+    <div class="stack">
+      <button class="btn">设 置</button>
+      <button class="btn primary">开始游戏</button>
+      <button class="btn">退出游戏</button>
+    </div>
+    <div class="hint">选择 Seed 与难度后进入程序生成的关卡</div>
+    <div class="caption">WBP_MainMenu — 主菜单</div>
+  </div>
+
+  <!-- 设置面板 -->
+  <div class="settings">
+    <div class="set-head">
+      <div class="set-title">设 置</div>
+      <div class="set-close">✕</div>
+    </div>
+    <div class="set-label">难度</div>
+    <div class="diff-row">
+      <button class="diff-btn">Easy</button>
+      <button class="diff-btn on">Normal</button>
+      <button class="diff-btn">Hard</button>
+    </div>
+    <div class="set-empty">此处留空，未来扩展更多设置项</div>
+    <div class="set-foot">
+      <button class="btn" style="min-width:220px">返 回</button>
+    </div>
+    <div class="caption">点“设置”后弹出的面板</div>
+  </div>
+
+</body>
+</html>

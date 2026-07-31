@@ -32,6 +32,10 @@
         "PYTHONPATH": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"
       },
       "command": "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python/.venv/Scripts/python.exe"
+    },
+    "ue58-official-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:8000/mcp"
     }
   }
 }

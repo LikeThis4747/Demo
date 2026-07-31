@@ -22,3 +22,9 @@ args = ["-m", "ue_editor_mcp.server_unified"]
 
 [mcp_servers.ue-editor-mcp.env]
 PYTHONPATH = "D:/UE5projects/Demo/Plugins/UEEditorMCP/Python"
+
+[mcp_servers.ue58-official-mcp]
+enabled = true
+url = "http://127.0.0.1:8000/mcp"
+startup_timeout_sec = 30
+tool_timeout_sec = 120

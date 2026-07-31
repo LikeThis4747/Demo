@@ -4,9 +4,10 @@
 
 ## 2026-07-31
 
+- 为 Codex 与 CodeBuddy 补齐项目级 UE5.8 官方 MCP 配置；TOML/JSON 解析、Codex 枚举、HTTP 200 握手、3 个元工具和 23 个 toolset 均通过。当前任务工具表不会热刷新，仍待两个客户端首次重载及 UE 重启后的同任务复测。
 - 夜间静态审计确认工作区有 8 个新增 GameFlow/UI C++ 文件与 UMG 依赖，覆盖 GameInstance Seed/难度传参、主菜单逻辑和正式 GameMode 的生成/初始摆放；当前没有 2026-07-31 当日提交。
 - 新源码时间为 2026-07-30，Demo 模块二进制仍为 2026-07-29；本轮未构建、未跑 UHT/自动化/PIE，因此阶段一不能记为可玩。
-- 蓝图审计未执行：本地 UE Editor MCP pong=false，保存日志显示连接数达到上限；官方 UE5.8 MCP 未暴露。未推测 GameInstance、关卡、Widget、GameMode、DefaultPawn 或资产引用结果。
+- 蓝图审计未执行：本地 UE Editor MCP pong=false，保存日志显示连接数达到上限；当时官方 UE5.8 MCP 未暴露。未推测 GameInstance、关卡、Widget、GameMode、DefaultPawn 或资产引用结果。
 - Level0 三层楼梯塔任务卡记录最终 211 Actor / 13 文件夹与四个 600cm 接口；本轮未实时复核，玩家、Recast 与真实追猎者连续上下楼仍未执行。
 - 静态风险：正式 GameMode 若未用玩家蓝图覆盖原生 DefaultPawnClass，会缺少 InputConfig/磁力资源装配；开局流程后半段失败可能留下玩家已移动的半初始化状态。
 - 明日关键路径：先构建新 C++，再装配并 PIE 跑通主菜单选参→PCG 生成→玩家/追猎者就位；随后验收 V5/楼梯塔、18 项 Demo.PCG 与至少 10 Seed。

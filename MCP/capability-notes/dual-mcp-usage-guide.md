@@ -62,15 +62,20 @@
 
 ## 3. 决策规则（按序匹配，选定 MCP）
 
+> **总原则（2026-07-31 用户确立）：优先用官方 MCP，ue-editor-mcp 做补充。**
+> 任何 MCP 任务，**先尝试官方 MCP**；只有官方 MCP 确实没有该能力、或明确不擅长（见下方第 7、8 条）时，才用 ue-editor-mcp。
+> **官方 MCP 连接不上时，必须第一时间向用户汇报**（不要默默退回 ue-editor-mcp 闷头干，也不要让用户反复催"为什么不用官方MCP"）。汇报后由用户决定重连还是临时用本地 MCP 兜底。
+> **2026-07-31 实测教训**：官方 MCP 的资产/属性读取（ObjectTools.get_properties / BlueprintTools.get_parent / BlueprintTools.get_default_object / SceneTools.find_actors）比本地 ue-editor-mcp 可靠得多——本地 `blueprint.create` 会复用幽灵蓝图、`set_parent_class` 假成功、`set_property` 设不了 C++ 父类继承字段、`get_actor_properties` 只返回 Transform。凡是「读/写蓝图 C++ 字段、读关卡 WorldSettings、读蓝图真实父类、读 Actor UPROPERTY」这类，一律走官方 MCP。
+
 1. **语义搜资产/源码** → 官方 `SemanticSearchToolset` / `AgentSkillToolset.search_*`
 2. **跑/查自动化测试**（如 `Demo.PCG` 回归）→ 官方 `AutomationTestToolset`
 3. **物理资产（PhysicsAsset）** → 官方 `PhysicsAssetToolset`
-4. **通用对象属性 get/set/list、类/子类发现** → 官方 `ObjectTools`
+4. **通用对象属性 get/set/list、类/子类发现、读蓝图真实父类、读蓝图 C++ 父类继承字段、读关卡 WorldSettings** → 官方 `ObjectTools` / `BlueprintTools.get_parent` / `BlueprintTools.get_default_object` + `ObjectTools.get_properties`
 5. **DataTable/CurveTable/StringTable/Texture/Mesh/MaterialInstance 等资产 CRUD** → 官方对应 toolset
 6. **批量、需自定义逻辑串联多工具** → 官方 `ProgrammaticToolset`
-7. **蓝图图表微操**（专门节点/collapse 重构/自动排版/批量选中）→ **ue-editor-mcp**
-8. **PIE 精细控制 / 日志断言 / depot diff / 资产历史** → **ue-editor-mcp**
-9. **蓝图基础 CRUD、UMG、材质、Actor/场景** → 两者皆可，**优先当前已连通、上下文已在用的那个**
+7. **蓝图图表微操**（专门节点/collapse 重构/自动排版/批量选中）→ ue-editor-mcp（官方靠通用 add_node，不如本地细分便捷）
+8. **PIE 精细控制 / 日志断言 / depot diff / 资产历史** → ue-editor-mcp
+9. **蓝图基础 CRUD、UMG、材质、Actor/场景** → 两者皆可，**优先官方 MCP**；官方无对应能力或不稳定时退 ue-editor-mcp
 10. 拿不准官方有没有某能力 → 先 `list_toolsets` + `describe_toolset` 查，别臆断"不支持"
 
 ---
