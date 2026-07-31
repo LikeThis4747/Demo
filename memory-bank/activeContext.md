@@ -4,20 +4,17 @@
 
 ## 当前迭代焦点
 
-最短可玩闭环当前先收敛阶段一：主菜单选择 Seed/难度 → GameInstance 跨关卡传参 → 正式关卡 PCG 生成 → 玩家与追猎者就位。只有当前构建、UE 资产装配与 PIE 同时通过后，才继续失败/成功结算与重开。
+最短可玩闭环已从“源码骨架”推进到已有白天构建、真实资产装配与单 Seed 开局日志证据；下一门槛是玩家完成菜单→游戏→Exit/死亡→结算或重开的整局验收。
 
 ## 当前索引
 
-- 阶段一新增 8 个 GameFlow/UI C++ 文件并增加 UMG 模块依赖；工作区另有粗粒度 GAME_LOOP_PLAN 讨论稿。
-- Active 卡新增 UE5.8 官方 MCP 持久化连接验证；原有 HydroLab 装配验证与 SFCorridors 只读筛选仍保留。SFCorridors 不删除，任何退场仍需依赖闭包、精确清单和用户授权。
-- HydroLab V5 静态原型为 259 Actor / 15 叶文件夹；三层楼梯塔任务卡记录最终 211 Actor / 13 文件夹。二者都仍需玩家、Recast 与真实追猎者运行验收。
-- 历史同一 Seed 15339 的 6 次生成/4 次 Exit 只算重复运行证据，不替代当前阶段一、至少 10 Seed 或真实 AI 验收。
+- GameFlow/UI：主菜单、GameInstance、正式 GameMode 与 WBP 已落盘；四个相关蓝图 UpToDate，L_Game 的 DefaultPawn、Generator 与 Populator 关键字段已通过官方 MCP 读取。
+- PCG/Population：Seed 12345 的现有日志显示一次生成、4 个地刺、8 个磁性物体；不替代 18 项 Demo.PCG、至少 10 Seed、Recast 或真实追猎者验收。
+- HydroLab：V5 静态原型与三层楼梯塔保留，继续等待玩家、Recast 与真实追猎者验收，不抢占最小一局关键路径。
+- SFCorridors：仅保留只读筛选任务，资产退场仍需依赖闭包、精确清单和用户授权。
 
 ## 当前边界与风险
 
-- 新 C++ 尚无当前构建/UHT/PIE 证据；现有 Demo 模块二进制早于源码。
-- UE5.8 官方 MCP 已写入项目级 Codex 与 CodeBuddy 配置，TOML/JSON、Codex 枚举、HTTP 200 握手、3 个元工具和 23 个 toolset 均验证通过；当前 Codex 任务工具表不热刷新，仍待两个客户端首次重载和 UE 重启后的同任务复测。本地 UE Editor MCP 本轮未复测。
-- 正式 GameMode 必须在 UE 中确认使用已装配 InputConfig 与磁力资源的玩家蓝图；不能把原生 AZeroEscapeCharacter 当作可玩装配。
-- 开局流程当前先移动玩家、后校验/生成追猎者，需在白天复现失败路径，避免半初始化局面。
-- 当前渲染配置为软件 Lumen GI + SSR（r.DynamicGlobalIlluminationMethod=1、r.ReflectionMethod=2），r.VirtualTextures=False 为未提交白天改动；低配无 Lumen 室内补光仍待同机验证。
-- .gitignore 新增 DOC/PPT/，需白天确认是否有意停止新 PPT 文件进入后续快照。
+- PlayerStartSeparationCm=1200 cm，但最新成功日志实际 separation_cm=1138；需核对碰撞调整和实际出生公平性。
+- 尚无当前整局胜负/重开验收，也未重建 18 项测试、至少 10 Seed 与导航回归基线。
+- 软件 Lumen GI + SSR 配置保持 r.DynamicGlobalIlluminationMethod=1、r.ReflectionMethod=2；r.VirtualTextures=False 已进入白天提交，低配无 Lumen 室内补光仍待同机验证。

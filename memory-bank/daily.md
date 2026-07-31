@@ -2,31 +2,30 @@
 
 > 按日期倒序；只保留完成、验证、决定与遗留，过程细节见任务卡、日报和审计归档。
 
+## 2026-08-01
+
+- 夜间只读审计确认自上一轮后有白天提交 15fba6c（main menu）及已保存但未提交的 L_Game 修正；相关 GameFlow/UI DLL 晚于源码并被编辑器加载，本轮未新跑构建、自动化或 PIE。
+- 官方与本地 UE MCP 均在线。L_Game 当前使用 BP_ZeroEscapeGameMode，DefaultPawn 为 BP_ZeroEscapeCharacter，Generator=ExplicitOnly，Populator 已绑定 Generator 与 DA_Population_Default；四个相关蓝图 UpToDate，WBP 的 BindWidget 控件齐全。
+- 现有白天日志确认主菜单 Seed 12345 只生成一次，随后放置 4 个地刺、8 个磁性物体并生成玩家/追猎者；这证明修正后的开局链路，不代表整局、18 项测试、至少 10 Seed 或导航验收。
+- 新风险：配置出生下限为 1200 cm，最新成功日志实际玩家—追猎者距离为 1138 cm；明日先复核碰撞调整与开局公平性，再完成菜单→Exit/死亡→结算/重开的玩家验收。
+- 内容建议：用现有磁力物、陷阱、追猎者与 Exit 做最小“磁性保险丝撤离”目标，在不先扩建框架的前提下增加一局目标压力。
+- Git 快照结果见当日夜报；仅在 origin 精确匹配内部工蜂后允许普通推送。
+
 ## 2026-07-31
 
-- 为 Codex 与 CodeBuddy 补齐项目级 UE5.8 官方 MCP 配置；TOML/JSON 解析、Codex 枚举、HTTP 200 握手、3 个元工具和 23 个 toolset 均通过。当前任务工具表不会热刷新，仍待两个客户端首次重载及 UE 重启后的同任务复测。
-- 夜间静态审计确认工作区有 8 个新增 GameFlow/UI C++ 文件与 UMG 依赖，覆盖 GameInstance Seed/难度传参、主菜单逻辑和正式 GameMode 的生成/初始摆放；当前没有 2026-07-31 当日提交。
-- 新源码时间为 2026-07-30，Demo 模块二进制仍为 2026-07-29；本轮未构建、未跑 UHT/自动化/PIE，因此阶段一不能记为可玩。
-- 蓝图审计未执行：本地 UE Editor MCP pong=false，保存日志显示连接数达到上限；当时官方 UE5.8 MCP 未暴露。未推测 GameInstance、关卡、Widget、GameMode、DefaultPawn 或资产引用结果。
-- Level0 三层楼梯塔任务卡记录最终 211 Actor / 13 文件夹与四个 600cm 接口；本轮未实时复核，玩家、Recast 与真实追猎者连续上下楼仍未执行。
-- 静态风险：正式 GameMode 若未用玩家蓝图覆盖原生 DefaultPawnClass，会缺少 InputConfig/磁力资源装配；开局流程后半段失败可能留下玩家已移动的半初始化状态。
-- 明日关键路径：先构建新 C++，再装配并 PIE 跑通主菜单选参→PCG 生成→玩家/追猎者就位；随后验收 V5/楼梯塔、18 项 Demo.PCG 与至少 10 Seed。
-- 仓库策略待确认：.gitignore 新增 DOC/PPT/；当前渲染改动仅为 r.VirtualTextures=False，软件 Lumen GI + SSR 配置未变。
-- Git 快照结果见当日夜报；仅在 origin 精确匹配内部工蜂后允许普通推送。
+- 配置并验证项目级 UE5.8 官方 MCP；主菜单、GameInstance、正式 GameMode 与 WBP 进入白天实现和装配。
+- 夜间时新 GameFlow/UI 尚无构建或资产审计证据；该边界已被 2026-08-01 当前构建、资产属性和白天日志证据取代。
+- 内部工蜂快照 204851bd8f152ba25904b349263f08ebda8061ee 与 f95379ee00f18a297113cc493772add52fc9983a 已普通推送。
 
 ## 2026-07-30
 
-- 夜间只读复核确认 Level0 的 HydroLab_RoomNetworkV5 为 259 Actor / 15 个叶文件夹；NavMeshBoundsVolume_1 与 RecastNavMesh-Default 可见，但未运行 V5 玩家、Recast 路径或真实追猎者移动。
-- 同一 Seed 15339 的 6 次 PCG 成功生成和 4 次 PlayerReachedExit 只证明单 Seed 重复运行，不是多 Seed、V5 或真实 AI 验收。
-- 本地 UE Editor MCP 当时在线；BP_ZeroEscapeCharacter 与 BP_MagneticProp 为 UpToDate。官方 UE5.8 MCP 未暴露，DataAsset、BlendSpace、地图属性级差异和引用审计未执行。
-- 当前构建、18 项 Demo.PCG、磁力相机手感与重复投掷未验收；软件 Lumen GI + SSR 保持当前基线，无 Lumen 天花板可读性需要目标机补光对照。
-- 内部工蜂快照 fd04bdfff78034d0d5b5af0092db9309e11727a5 与 627beaecfcf690a6b51a171f07be2ebd6bb2b2c1 已普通推送，7 个 LFS 对象约 4.0 MB。
+- Level0 的 HydroLab_RoomNetworkV5 为 259 Actor / 15 个叶文件夹；三层楼梯塔任务卡记录 211 Actor / 13 文件夹。玩家、Recast 与真实追猎者验收仍未完成。
+- 同一 Seed 15339 的重复生成/Exit 日志只算重复运行证据，不是多 Seed 放行。
+- 内部工蜂快照 fd04bdfff78034d0d5b5af0092db9309e11727a5 与 627beaecfcf690a6b51a171f07be2ebd6bb2b2c1 已普通推送。
 
 ## 2026-07-29
 
-- Level0 完成 V3/V4 导航样例与 V5 大小房网络静态装配；V5 保存重载为 259 Actor / 15 叶文件夹，静态接口检查通过但未做玩家/真实 AI 验收。
-- 追猎者近战/方向受击、AttackProjectile Tag 与磁力 Camera 通道改动已落盘，仍待当前构建和 PIE。
-- 遗留优先级：先玩家/真实 AI 路线，再生命归零失败/同 Seed 重开，随后追猎者攻击和重复投掷边界。
+- 完成 Level0 V3/V4 导航样例与 V5 静态装配；追猎者近战/方向受击、AttackProjectile Tag 与磁力 Camera 通道仍待当前验收。
 
 ## 2026-07-28
 
@@ -36,7 +35,6 @@
 ## 2026-07-27
 
 - 完成 PCG 空间职责精简、运行时顶灯、Population 地刺/磁力物和最小 RoundFlow。
-- 用户完成地刺首轮场景与 Physics Control PIE 验收；多 Seed、导航、正式失败闭环仍未完成。
 
 ## 2026-07-26
 
@@ -44,13 +42,11 @@
 
 ## 2026-07-25
 
-- 用户授权后仅为共同根材质 M_HydroLab 启用 Instanced Static Mesh Usage。
-- V4 全图 Grid-WFC、全局约束、有界回溯与 Runtime HISM 通过历史构建、19/19 自动化和 288/288 Seed Sweep。
+- 用户授权后为共同根材质 M_HydroLab 启用 Instanced Static Mesh Usage；V4 通过历史构建、19/19 自动化和 288/288 Seed Sweep。
 
 ## 2026-07-24
 
-- PCG V3.2 完成构造性 Progression、Grid-WFC、300 cm 分离结构展开、Runtime HISM、13/13 自动化与 288/288 Seed Sweep。
-- Demo 升级 UE 5.8；双 MCP 能力矩阵与协同规范归档。
+- PCG V3.2 完成构造性 Progression、Grid-WFC、300 cm 分离结构展开、Runtime HISM；Demo 升级 UE 5.8，双 MCP 协同规范归档。
 
 ## 2026-07-23
 

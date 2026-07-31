@@ -1,9 +1,9 @@
 # Current Task
 
-- 当前目标：完成最小一局的阶段一——主菜单选择 Seed/难度，经 GameInstance 进入正式游戏关卡，PCG 生成后玩家与追猎者正确就位。
-- 已落盘但未验证：8 个新增 GameFlow/UI C++ 文件与 UMG 模块依赖；包含 UZeroEscapeGameInstance、AMainMenuGameMode、UMainMenuWidget、AZeroEscapeGameMode。
-- 当前证据边界：新源码时间为 2026-07-30，Demo 模块二进制仍为 2026-07-29；没有当前构建、UHT、自动化或 PIE 证据。
-- UE 装配边界：本轮本地 UE Editor MCP 尚未复测；UE5.8 官方 MCP 的项目级 Codex/CodeBuddy 配置已补齐，直连握手与 23 个 toolset 验证通过，但当前 Codex 任务工具表不会热刷新，仍需客户端首次重载及 UE 重启复测后才能执行蓝图审计。
-- 静态风险：正式 GameMode 原生 DefaultPawnClass 为 AZeroEscapeCharacter，若蓝图不覆盖为已装配 InputConfig/磁力资源的玩家蓝图，角色会缺少正常输入；开局流程先移动玩家再校验/生成追猎者，失败时可能形成半初始化状态。
-- 场景并行遗留：Level0 三层楼梯塔任务卡记录 211 Actor / 13 文件夹与四个 600cm 接口，但本轮未实时资产复核；玩家、Recast 与真实追猎者连续上下楼仍未执行。
-- 明日最短下一步：先确认官方 MCP 在新任务中正式暴露，再构建新 C++；随后通过 UE 核对并装配阶段一所需资产/项目设置，并 PIE 跑通选参→生成→玩家/追猎者就位。通过后再验收 V5/楼梯塔、18 项 Demo.PCG 与至少 10 Seed。
+- 当前目标：完成最小一局——主菜单选择 Seed/难度，进入正式关卡，PCG/Population 生成，玩家与追猎者就位，再接胜负与重开。
+- 当前已验证：2026-07-31 白天构建产物晚于相关 GameFlow/UI 源码且被编辑器加载；四个 GameFlow/UI 蓝图为 UpToDate。官方 MCP 读取确认 L_Game 使用 BP_ZeroEscapeGameMode，DefaultPawn 为 BP_ZeroEscapeCharacter，Generator=ExplicitOnly，Populator 已绑定 Generator 与 DA_Population_Default。
+- 运行证据：现有白天日志确认从主菜单以 Seed 12345 进入 L_Game，只生成一次该 Seed，随后放置 4 个地刺、8 个磁性物体，并生成玩家与追猎者。
+- 验证边界：夜间未新跑构建、自动化或 PIE；玩家实际操控、Exit/生命归零、结算/同 Seed 重开、18 项 Demo.PCG、至少 10 Seed、Recast 与真实追猎者连续移动仍未验收。
+- 当前风险：PlayerStartSeparationCm 配置为 1200 cm，但最新成功日志实际 separation_cm=1138，需白天检查碰撞调整与开局公平性。
+- 场景遗留：HydroLab V5 与三层楼梯塔仍只具备静态装配证据，玩家/Recast/真实追猎者验收未完成；SFCorridors 退场未授权。
+- 最短下一步：先完成一局实玩并处理 1138 cm 出生距离，再接 Exit/死亡结算与同 Seed 重开，之后恢复 18 测试/10 Seed/导航基线。
