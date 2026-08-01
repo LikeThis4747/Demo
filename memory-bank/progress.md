@@ -15,10 +15,11 @@
 - [x] HydroLab Presentation、Generation Profile、根材质 HISM Usage 与运行时顶灯
 - [x] 独立 Population 层；支持区域、Start/Exit 邻域规避、直走廊筛选、横向并排和 Z 偏移
 - [x] 历史 UE 5.8 构建、Demo.PCG 19/19 与 288/288 Seed Sweep
+- [x] Level0 三层静态样板 V2 第一轮精修：V1 冻结 1836、V2 保存重载 1857；外墙、斜栏杆、平台护栏、高厅和 Preview 标记已静态复核
 - [ ] 当前 18 项 Demo.PCG、完整构建与 Seed Sweep 回归基线
 - [ ] 至少 10 Seed 玩家路线、接缝、碰撞、净空与 Start→Exit 验收
 - [ ] Runtime 动态导航与真实追猎者多 Seed 寻路证据
-- [ ] Level0 V5 与三层楼梯塔的玩家、Recast、真实追猎者验收及后续 Runtime WFC 取舍
+- [ ] Level0 V5、三层 V2 的玩家/Recast/真实追猎者验收，以及多层 WFC 数据合同与求解器方案确认
 - [ ] 目标机软件 Lumen 与无 Lumen 室内补光双档验收
 
 ## M2 玩法压力与追猎者
@@ -41,4 +42,4 @@
 
 ## 当前边界
 
-Generator 拥有空间，Population 拥有批量玩法对象，正式 GameMode 负责开局编排；胜负状态的唯一管理者仍需在阶段二明确。单 Seed 开局成功不能替代整局玩家验收、18 项自动化、10 Seed 或真实 AI 导航证据。
+Generator 拥有空间，Population 拥有批量玩法对象，正式 GameMode 负责开局编排。Level0 V2 是多层模块的静态设计样板，不是 Runtime WFC 已实现的证明；当前 1x1 同层 OpeningMask 仍需扩展多格垂直占用、保留区、带类型接口和求解后边界派生。静态截图不能替代玩家、导航与真实 AI 验收。

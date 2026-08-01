@@ -1,9 +1,10 @@
 # Current Task
 
-- 当前目标：完成最小一局——主菜单选择 Seed/难度，进入正式关卡，PCG/Population 生成，玩家与追猎者就位，再接胜负与重开。
-- 当前已验证：2026-07-31 白天构建产物晚于相关 GameFlow/UI 源码且被编辑器加载；四个 GameFlow/UI 蓝图为 UpToDate。官方 MCP 读取确认 L_Game 使用 BP_ZeroEscapeGameMode，DefaultPawn 为 BP_ZeroEscapeCharacter，Generator=ExplicitOnly，Populator 已绑定 Generator 与 DA_Population_Default。
-- 运行证据：现有白天日志确认从主菜单以 Seed 12345 进入 L_Game，只生成一次该 Seed，随后放置 4 个地刺、8 个磁性物体，并生成玩家与追猎者。
-- 验证边界：夜间未新跑构建、自动化或 PIE；玩家实际操控、Exit/生命归零、结算/同 Seed 重开、18 项 Demo.PCG、至少 10 Seed、Recast 与真实追猎者连续移动仍未验收。
-- 当前风险：PlayerStartSeparationCm 配置为 1200 cm，但最新成功日志实际 separation_cm=1138，需白天检查碰撞调整与开局公平性。
-- 场景遗留：HydroLab V5 与三层楼梯塔仍只具备静态装配证据，玩家/Recast/真实追猎者验收未完成；SFCorridors 退场未授权。
-- 最短下一步：先完成一局实玩并处理 1138 cm 出生距离，再接 Exit/死亡结算与同 Seed 重开，之后恢复 18 测试/10 Seed/导航基线。
+- 当前目标：以 Level0 的三层 PCG 场景 V2 静态样板为依据，先完成外墙、楼梯/平台护栏与高厅的几何收口，再讨论可落地的多层 WFC 数据和求解顺序；本轮不修改 PCG/WFC 代码。
+- 授权边界：只允许修改 `/Game/Levels/Level0`、现有任务卡与项目记忆；可截图和只读审计，不修改其他资产、代码、配置或 Git。
+- 冻结基线：V1 `PCG_AssemblyStudy/HydroLab_ThreeFloorPCGSceneV1` 保持 1836 Actor；精修发生在 X+12000cm 的 V2 `HydroLab_ThreeFloorPCGSceneV2_Refine`。
+- 当前已完成：V2 外墙复制错误、3 块共面墙、两块突兀银墙、24 段楼梯斜栏杆穿模、二三层各一处平台栏杆缺口和灯光 Preview 标记均已处理。
+- 保存重载证据：Level0 重载后 V1=1836、V2=1857，关卡非脏；D 西外墙 8/8 碰撞检测命中，24/24 斜栏杆沿跑向覆盖 322.5cm，两处平台缺口约为 0.0000003cm。
+- WFC 当前结论：垂直楼梯/平台/净空/支撑必须作为不可拆分的多格宏块，高厅必须声明上层保留占用；先固定垂直宏块与保留区，再逐层求解带类型的平面路线，最后按唯一边所有者派生墙、门框与栏杆。
+- 验证边界：当前仅有静态几何、碰撞射线、截图和保存重载证据；玩家胶囊连续实走、三层 Recast 覆盖及真实追猎者上下楼尚未执行，任务保持 Active。
+- 最短下一步：与用户确认 WFC 数据合同和求解分层方案；代码实施仍遵循讨论、确认、代码预览、明确授权后落盘。正式一局闭环暂不在本次 Level0 精修授权内。

@@ -4,17 +4,19 @@
 
 ## 当前迭代焦点
 
-最短可玩闭环已从“源码骨架”推进到已有白天构建、真实资产装配与单 Seed 开局日志证据；下一门槛是玩家完成菜单→游戏→Exit/死亡→结算或重开的整局验收。
+Level0 三层 PCG 场景 V2 已完成第一轮静态精修并保存重载。下一步从该样板提取垂直宏块、保留占用、带类型接口和共享边所有权，讨论新的多层 WFC 实现；未经新授权不改代码。
 
 ## 当前索引
 
-- GameFlow/UI：主菜单、GameInstance、正式 GameMode 与 WBP 已落盘；四个相关蓝图 UpToDate，L_Game 的 DefaultPawn、Generator 与 Populator 关键字段已通过官方 MCP 读取。
-- PCG/Population：Seed 12345 的现有日志显示一次生成、4 个地刺、8 个磁性物体；不替代 18 项 Demo.PCG、至少 10 Seed、Recast 或真实追猎者验收。
-- HydroLab：V5 静态原型与三层楼梯塔保留，继续等待玩家、Recast 与真实追猎者验收，不抢占最小一局关键路径。
+- Level0 V1/V2：V1 冻结为 1836 Actor；V2 为 1857 Actor。外墙大开口、斜栏杆穿模、平台栏杆缺口、突兀银墙与 Preview 标记已处理。
+- WFC 样板：三层均有约 550cm 净高的高厅；双层楼梯与中央三层楼梯保持多格整体占用；三层路线包含直路、转角、三岔、十字和死胡同。
+- 模块化规则：楼梯/平台/净空/支撑作为不可拆宏块，高厅向上层传播保留占用；墙、门框、栏杆由求解后拓扑按唯一边所有者派生。
+- 正式一局：此前菜单→单 Seed PCG/Population→玩家/追猎者就位的证据保留，但本次 Level0 授权不包含继续修改或验收 GameFlow。
 - SFCorridors：仅保留只读筛选任务，资产退场仍需依赖闭包、精确清单和用户授权。
 
 ## 当前边界与风险
 
-- PlayerStartSeparationCm=1200 cm，但最新成功日志实际 separation_cm=1138；需核对碰撞调整和实际出生公平性。
-- 尚无当前整局胜负/重开验收，也未重建 18 项测试、至少 10 Seed 与导航回归基线。
-- 软件 Lumen GI + SSR 配置保持 r.DynamicGlobalIlluminationMethod=1、r.ReflectionMethod=2；r.VirtualTextures=False 已进入白天提交，低配无 Lumen 室内补光仍待同机验证。
+- 静态射线、截图和关卡重载不能替代玩家胶囊、Recast 与追猎者连续移动；三项仍未完成。
+- 当前 1x1 同层 NSEW OpeningMask 不能直接表达多格垂直宏块、楼层保留区、接口类型/高度、唯一边所有者和每层楼梯配额。
+- V2 的 24 段斜栏杆与两段平台尾栏使用已审计的受控非单位缩放；不能把这一表现层例外推广为结构墙体的通用做法。
+- 软件 Lumen GI + SSR 配置保持不变；本轮没有修改渲染配置或第三方灯具蓝图。
