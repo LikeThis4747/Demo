@@ -2,6 +2,14 @@
 
 > 按日期倒序；只保留完成、验证、决定与遗留，过程细节见任务卡、日报和审计归档。
 
+## 2026-08-02
+
+- 夜间只读审计确认白天提交 `1571eba7` 只更新 Level0、HydroLab 任务卡与记忆；无 C++ 变更，开始时工作区无未提交文件、main 超前 origin/main 1 个提交。
+- 官方 UE5.8 MCP 在线、本地 UE Editor MCP 离线；Level0 非脏且 PIE 未运行，V1/V2 Actor 数仍为 1836/1857。V2 有 96 个 HydroLab 灯实例；抽查实例 RectLight 为 Movable，而第三方蓝图模板保持 Static。
+- Level0 虽存在 NavMeshBoundsVolume 与 RecastNavMesh，但导航体 X 轴只覆盖 -17600..22400 cm，V2 已核对墙体约在 X=45000 cm，当前不覆盖 V2；三层 Recast、玩家连续实走与真实追猎者上下楼仍未验证。
+- 当前运行时生成合同仍是二维 FIntPoint GridSize 与四方向 OpeningMask；正式 GameMode 只有开局生成/放置，没有 Exit、死亡结算或重开入口。本轮未运行构建、自动化或 PIE。
+- 最短下一步：白天先补 V2 导航覆盖并完成玩家/真实追猎者三层验收，再完成菜单到 Exit/死亡/重开的整局闭环，之后确认多层 WFC 宏块/保留区/接口/共享边数据合同。
+
 ## 2026-08-01
 
 - Level0 中冻结 `HydroLab_ThreeFloorPCGSceneV1` 为 1836 Actor，并在 X+12000cm 的独立 V2 精修；保存重载后 V2=1857、V1 未变、关卡非脏。
