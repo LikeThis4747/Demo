@@ -91,3 +91,14 @@
 ## 2026-07-18
 
 - 创建 C++ Demo、轻量渲染与 C++ 优先工作流；初始化 Git LFS、内部工蜂备份和夜间维护。
+
+<!-- written by shiqiqiwang at 2026-08-03 10:18 UTC -->
+
+
+## 2026-08-03 — PCG 多层完整代码预览
+
+- 完成五片可顺序审查的拟实现补丁，覆盖数据合同、完整结构布局、逐层二维 WFC、HydroLab 表现、运行时导航、GameMode 与 Population。
+- 复核并删除无依据的固定导航毫秒门槛；最多 20 个代表点/19 次路径查询只记录指标，10 秒仅作为异步导航构建等待超时。
+- 修正结构开口外普通连接格保护、额外楼梯跨楼层公平分配、高天花板房间按实际 Walkable 占地间距、HISM 分组批量提交、Population 零目标合法跳过及导航事件归属表述。
+- 隔离验证：五片顺序应用与 diff check 通过；UE 5.8 UHT 与 Demo 模块编译/DLL 链接通过；Demo.PCG 24/24、Demo.GameFlow.AsyncSetupGate 1/1 通过。
+- 正式 Source/Content/Config 未应用方案；正式资产迁移、真实 RecastNavMesh、PIE、玩家/追猎者验收等待 Code Review 和用户再次授权。

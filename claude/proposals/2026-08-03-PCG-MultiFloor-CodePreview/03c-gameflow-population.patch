@@ -1,0 +1,1382 @@
+diff --git a/Source/Demo/Private/GameFlow/Tests/ZeroEscapeGameSetupTests.cpp b/Source/Demo/Private/GameFlow/Tests/ZeroEscapeGameSetupTests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..8286fd782402283897d6a896c1e035de5a7ed9ac
+--- /dev/null
++++ b/Source/Demo/Private/GameFlow/Tests/ZeroEscapeGameSetupTests.cpp
+@@ -0,0 +1,43 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/** 纯值测试：异步开局忽略旧操作、重复终态和 EndPlay 后回调。 */
++
++#include "GameFlow/ZeroEscapeGameSetupGate.h"
++
++#if WITH_DEV_AUTOMATION_TESTS
++
++#include "Misc/AutomationTest.h"
++
++namespace ZeroEscape::GameFlow::Tests
++{
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeGameSetupGateTest,
++		"Demo.GameFlow.AsyncSetupGate",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeGameSetupGateTest::RunTest(const FString& Parameters)
++	{
++		(void)Parameters;
++		FGameSetupGateSnapshot State;
++		State.ActiveOperationId = 12;
++		TestFalse(TEXT("旧操作报告不得启动当前一局"),
++			FGameSetupGate::AcceptFinalReport(State, 11));
++		TestTrue(TEXT("当前操作的首个最终报告必须被接受"),
++			FGameSetupGate::AcceptFinalReport(State, 12));
++
++		State.LastHandledOperationId = 12;
++		TestFalse(TEXT("同一最终报告重复广播不得再次摆放"),
++			FGameSetupGate::AcceptFinalReport(State, 12));
++		State.LastHandledOperationId = 0;
++		State.bTerminal = true;
++		TestFalse(TEXT("开局已进入成功或失败终态后不得重入"),
++			FGameSetupGate::AcceptFinalReport(State, 12));
++		State.bTerminal = false;
++		State.bEndingPlay = true;
++		TestFalse(TEXT("EndPlay 后回调必须被忽略"),
++			FGameSetupGate::AcceptFinalReport(State, 12));
++		return true;
++	}
++}
++
++#endif
+diff --git a/Source/Demo/Private/GameFlow/ZeroEscapeGameMode.cpp b/Source/Demo/Private/GameFlow/ZeroEscapeGameMode.cpp
+index 34f5376e9e7e8ec6642418eaa6feb29b335afe58..28630b7d88e2de65884bb2cc980fa85c682bdd0c 100644
+--- a/Source/Demo/Private/GameFlow/ZeroEscapeGameMode.cpp
++++ b/Source/Demo/Private/GameFlow/ZeroEscapeGameMode.cpp
+@@ -2,8 +2,8 @@
+ 
+ /**
+  * @file ZeroEscapeGameMode.cpp
+- * 职责：正式一局的开局编排实现——读请求、驱动 PCG 生成、摆放追猎者与玩家。
+- * 边界：不做胜负、陷阱、AI 或磁力逻辑；生成失败或摆放失败时只记录错误，不做兜底重试。
++ * 职责：把正式 PCG、导航、玩家、追猎者、Exit 与 Population 原子编排成一局。
++ * 边界：不重试或替换 Seed；任一步失败都锁输入、回滚本局对象并返回配置的主菜单。
+  */
+ 
+ #include "GameFlow/ZeroEscapeGameMode.h"
+@@ -11,22 +11,23 @@
+ #include "Characters/PursuerCharacter.h"
+ #include "Characters/ZeroEscapeCharacter.h"
+ #include "Components/Attributes/HealthComponent.h"
++#include "Engine/World.h"
+ #include "EngineUtils.h"
+ #include "GameFlow/ZeroEscapeExitVolume.h"
++#include "GameFlow/ZeroEscapeGameSetupGate.h"
+ #include "GameFlow/ZeroEscapeGameInstance.h"
+-#include "GameFlow/ZeroEscapeGameState.h"
+ #include "GameFlow/ZeroEscapePlayerController.h"
+-#include "UI/ResultMenuWidget.h"
+ #include "GameFramework/Pawn.h"
+ #include "GameFramework/PawnMovementComponent.h"
+ #include "GameFramework/PlayerController.h"
+ #include "Kismet/GameplayStatics.h"
++#include "PCG/Population/ZeroEscapeGameplayPopulator.h"
+ #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
++#include "UI/ResultMenuWidget.h"
+ #include "UI/ZeroEscapeHUD.h"
+ 
+ DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeGameMode, Log, All);
+ 
+-/** 与原型一致的角色/Controller/HUD；完整角色资源仍由玩家角色蓝图装配。 */
+ AZeroEscapeGameMode::AZeroEscapeGameMode()
+ {
+ 	DefaultPawnClass = AZeroEscapeCharacter::StaticClass();
+@@ -34,185 +35,206 @@ AZeroEscapeGameMode::AZeroEscapeGameMode()
+ 	HUDClass = AZeroEscapeHUD::StaticClass();
+ }
+ 
+-/** 读取本局请求，驱动 PCG 生成，成功后摆放追猎者与玩家。 */
+ void AZeroEscapeGameMode::BeginPlay()
+ {
+ 	Super::BeginPlay();
++	SetGameplayInputLocked(true);
+ 
+-	// 从主菜单 OpenLevel 进来时，PlayerController 仍停留在主菜单设置的 UI-Only 输入模式，
+-	// 会拦截所有游戏输入导致玩家无法操控；正式关卡必须显式切回 GameOnly 并隐藏鼠标。
+-	if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
++	ActiveGenerator = FindLevelGenerator();
++	ActivePopulator = FindGameplayPopulator();
++	if (!IsValid(ActiveGenerator))
+ 	{
+-		PlayerController->SetInputMode(FInputModeGameOnly());
+-		PlayerController->SetShowMouseCursor(false);
++		AbortSetupAndReturnToMainMenu(TEXT("GeneratorNotUnique"));
++		return;
+ 	}
+-
+-	AZeroEscapeRuntimeLevelGenerator* Generator = FindLevelGenerator();
+-	if (Generator == nullptr)
++	if (!IsValid(ActivePopulator))
+ 	{
+-		UE_LOG(LogZeroEscapeGameMode, Error,
+-			TEXT("ZE_GAME_SETUP result=Failure reason=GeneratorNotFound"));
++		AbortSetupAndReturnToMainMenu(TEXT("PopulationNotUnique"));
+ 		return;
+ 	}
+-
+-	// Seed/难度来自 GameInstance；单独运行 L_Game（未经主菜单）时回退到 Generator 自带的 DefaultRequest。
+-	const UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>();
+-	if (GameInstancePtr != nullptr)
++	if (MainMenuLevel.IsNull())
+ 	{
+-		if (!Generator->GenerateFromRequest(GameInstancePtr->GetPendingRequest()))
+-		{
+-			UE_LOG(LogZeroEscapeGameMode, Error,
+-				TEXT("ZE_GAME_SETUP result=Failure reason=GenerationRejected"));
+-			return;
+-		}
++		AbortSetupAndReturnToMainMenu(TEXT("MainMenuLevelUnset"));
++		return;
+ 	}
+-	else if (!Generator->Generate())
++	if (PursuerClass == nullptr || ExitActorClass == nullptr
++		|| ResultMenuWidgetClass == nullptr)
+ 	{
+-		UE_LOG(LogZeroEscapeGameMode, Warning,
+-			TEXT("ZE_GAME_SETUP reason=NoGameInstanceFellBackToDefaultRequest"));
++		AbortSetupAndReturnToMainMenu(TEXT("RoundClassUnset"));
+ 		return;
+ 	}
+ 
+-	if (Generator->State != EZeroEscapeRuntimeGenerationState::Ready
+-		|| !PlacePlayerAndPursuer(*Generator)
+-		|| !PlaceExit(*Generator))
++	const APursuerCharacter* PursuerDefaults =
++		PursuerClass->GetDefaultObject<APursuerCharacter>();
++	if (!IsValid(PursuerDefaults)
++		|| !ActiveGenerator->ConfigurePursuerNavigationAgent(
++			PursuerDefaults->GetNavAgentPropertiesRef()))
+ 	{
+-		UE_LOG(LogZeroEscapeGameMode, Error,
+-			TEXT("ZE_GAME_SETUP result=Failure reason=PlacementFailed"));
++		AbortSetupAndReturnToMainMenu(TEXT("PursuerNavAgentInvalid"));
+ 		return;
+ 	}
+ 
+-	BindPlayerDeath();
+-	BindRoundStateForUI();
++	ActiveGenerator->OnGenerationFinished.AddUniqueDynamic(
++		this, &AZeroEscapeGameMode::HandleGenerationFinished);
++	const UZeroEscapeGameInstance* GameInstancePtr =
++		GetGameInstance<UZeroEscapeGameInstance>();
++	const bool bAccepted = GameInstancePtr != nullptr
++		? ActiveGenerator->GenerateFromRequest(GameInstancePtr->GetPendingRequest())
++		: ActiveGenerator->Generate();
++	if (GameInstancePtr == nullptr)
++	{
++		UE_LOG(LogZeroEscapeGameMode, Warning,
++			TEXT("ZE_GAME_SETUP state=Waiting source=GeneratorDefaultRequest"));
++	}
++	if (!bAccepted && !bSetupTerminal)
++	{
++		AbortSetupAndReturnToMainMenu(TEXT("GenerationRejected"));
++	}
+ }
+ 
+-/** 遍历世界查找唯一 Generator；发现多于一个时选第一个并记录警告。 */
+ AZeroEscapeRuntimeLevelGenerator* AZeroEscapeGameMode::FindLevelGenerator() const
+ {
+ 	AZeroEscapeRuntimeLevelGenerator* Found = nullptr;
+ 	for (TActorIterator<AZeroEscapeRuntimeLevelGenerator> It(GetWorld()); It; ++It)
+ 	{
+-		if (Found == nullptr)
++		if (Found != nullptr)
+ 		{
+-			Found = *It;
++			UE_LOG(LogZeroEscapeGameMode, Error,
++				TEXT("ZE_GAME_SETUP result=Failure reason=MultipleGenerators"));
++			return nullptr;
+ 		}
+-		else
++		Found = *It;
++	}
++	return Found;
++}
++
++AZeroEscapeGameplayPopulator* AZeroEscapeGameMode::FindGameplayPopulator() const
++{
++	AZeroEscapeGameplayPopulator* Found = nullptr;
++	for (TActorIterator<AZeroEscapeGameplayPopulator> It(GetWorld()); It; ++It)
++	{
++		if (Found != nullptr)
+ 		{
+-			UE_LOG(LogZeroEscapeGameMode, Warning,
+-				TEXT("ZE_GAME_SETUP reason=MultipleGeneratorsUsingFirst"));
+-			break;
++			UE_LOG(LogZeroEscapeGameMode, Error,
++				TEXT("ZE_GAME_SETUP result=Failure reason=MultiplePopulators"));
++			return nullptr;
+ 		}
++		Found = *It;
+ 	}
+ 	return Found;
+ }
+ 
+-/** 追猎者放起点、玩家放两格外，双方面向同一逃跑方向。 */
+-bool AZeroEscapeGameMode::PlacePlayerAndPursuer(AZeroEscapeRuntimeLevelGenerator& Generator)
++void AZeroEscapeGameMode::HandleGenerationFinished(
++	const bool bSuccess,
++	const FZeroEscapeGenerationReport& Report)
+ {
+-	FTransform StartTransform;
+-	FTransform PlayerTransform;
+-	if (!Generator.GetGeneratedStartWorldTransform(StartTransform)
+-		|| !FindPlayerSpawnTransform(Generator, StartTransform, PlayerTransform))
++	if (!IsValid(ActiveGenerator))
+ 	{
+-		return false;
++		return;
+ 	}
+-
+-	// 逃跑正方向：从起点（追猎者）指向玩家；玩家背对追猎者向前逃，追猎者面向玩家追击。
+-	const FRotator ForwardRotation =
+-		(PlayerTransform.GetLocation() - StartTransform.GetLocation()).Rotation();
+-	const FQuat ForwardYaw = FRotator(0.0, ForwardRotation.Yaw, 0.0).Quaternion();
+-	StartTransform.SetRotation(ForwardYaw);
+-	PlayerTransform.SetRotation(ForwardYaw);
+-
+-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+-	APawn* Player = IsValid(PlayerController) ? PlayerController->GetPawn() : nullptr;
+-	if (!IsValid(Player))
++	ZeroEscape::GameFlow::FGameSetupGateSnapshot GateState;
++	GateState.ActiveOperationId = ActiveGenerator->GetActiveOperationId();
++	GateState.LastHandledOperationId = LastHandledGenerationOperationId;
++	GateState.bTerminal = bSetupTerminal;
++	GateState.bEndingPlay = bEndingPlay;
++	if (!ZeroEscape::GameFlow::FGameSetupGate::AcceptFinalReport(
++			GateState, Report.OperationId))
+ 	{
+-		return false;
++		UE_LOG(LogZeroEscapeGameMode, Warning,
++			TEXT("ZE_GAME_SETUP state=IgnoredCallback operation=%lld active=%lld"),
++			static_cast<long long>(Report.OperationId),
++			static_cast<long long>(ActiveGenerator->GetActiveOperationId()));
++		return;
+ 	}
++	LastHandledGenerationOperationId = Report.OperationId;
+ 
+-	if (UPawnMovementComponent* Movement = Player->GetMovementComponent())
++	if (!bSuccess || ActiveGenerator->State != EZeroEscapeRuntimeGenerationState::Ready)
+ 	{
+-		Movement->StopMovementImmediately();
++		AbortSetupAndReturnToMainMenu(TEXT("GenerationFinalFailure"));
++		return;
+ 	}
+-	const FRotator PlayerRotation = PlayerTransform.GetRotation().Rotator();
+-	if (!Player->TeleportTo(PlayerTransform.GetLocation(), PlayerRotation, false, false))
++	if (!PlacePlayerAndPursuer(*ActiveGenerator))
+ 	{
+-		return false;
++		AbortSetupAndReturnToMainMenu(TEXT("PlayerOrPursuerPlacementFailed"));
++		return;
+ 	}
+-	PlayerController->SetControlRotation(PlayerRotation);
+-
+-	if (PursuerClass == nullptr)
++	if (!PlaceExit(*ActiveGenerator))
+ 	{
+-		UE_LOG(LogZeroEscapeGameMode, Error,
+-			TEXT("ZE_GAME_SETUP result=Failure reason=PursuerClassUnset"));
+-		return false;
++		AbortSetupAndReturnToMainMenu(TEXT("ExitPlacementFailed"));
++		return;
+ 	}
+-
+-	FActorSpawnParameters SpawnParameters;
+-	SpawnParameters.Owner = this;
+-	SpawnParameters.SpawnCollisionHandlingOverride =
+-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+-	SpawnedPursuer = GetWorld()->SpawnActor<APursuerCharacter>(
+-		PursuerClass,
+-		StartTransform,
+-		SpawnParameters);
+-	if (!IsValid(SpawnedPursuer))
++	if (!IsValid(ActivePopulator) || !ActivePopulator->Populate(*ActiveGenerator))
+ 	{
+-		return false;
++		AbortSetupAndReturnToMainMenu(TEXT("PopulationFailed"));
++		return;
++	}
++	if (!BindPlayerDeath() || !BindRoundStateForUI())
++	{
++		AbortSetupAndReturnToMainMenu(TEXT("RoundDelegateBindingFailed"));
++		return;
+ 	}
+ 
++	ActiveGenerator->OnGenerationFinished.RemoveDynamic(
++		this, &AZeroEscapeGameMode::HandleGenerationFinished);
++	bRoundStarted = true;
++	bSetupTerminal = true;
++	SetGameplayInputLocked(false);
+ 	UE_LOG(LogZeroEscapeGameMode, Display,
+-		TEXT("ZE_GAME_SETUP result=Success player=\"%s\" pursuer=\"%s\" separation_cm=%.0f"),
+-		*GetNameSafe(Player),
++		TEXT("ZE_GAME_SETUP result=Success operation=%lld player=%s pursuer=%s exit=%s"),
++		static_cast<long long>(Report.OperationId),
++		*GetNameSafe(UGameplayStatics::GetPlayerPawn(this, 0)),
+ 		*GetNameSafe(SpawnedPursuer),
+-		FVector::Dist2D(Player->GetActorLocation(), SpawnedPursuer->GetActorLocation()));
+-	return true;
++		*GetNameSafe(SpawnedExit));
+ }
+ 
+-/** 稳定顺序选出距起点最接近下限的走廊格；追猎者位于起点，故此点即玩家两格缓冲出生点。 */
+-bool AZeroEscapeGameMode::FindPlayerSpawnTransform(
+-	AZeroEscapeRuntimeLevelGenerator& Generator,
+-	const FTransform& StartTransform,
+-	FTransform& OutPlayerTransform) const
++bool AZeroEscapeGameMode::PlacePlayerAndPursuer(
++	AZeroEscapeRuntimeLevelGenerator& Generator)
+ {
+-	OutPlayerTransform = FTransform::Identity;
+-	TArray<FTransform> Candidates;
+-	if (!Generator.GetGeneratedCellWorldTransforms(
+-			EZeroEscapeGridRegionKind::Corridor,
+-			false,
+-			false,
+-			Candidates))
++	FTransform PlayerTransform;
++	FTransform PursuerTransform;
++	if (!Generator.GetGeneratedPlayerSpawnWorldTransform(PlayerTransform)
++		|| !Generator.GetGeneratedPursuerSpawnWorldTransform(PursuerTransform))
+ 	{
+ 		return false;
+ 	}
+ 
+-	const FVector StartLocation = StartTransform.GetLocation();
+-	const double MinimumDistanceSquared = FMath::Square(PlayerStartSeparationCm);
+-	double BestDistanceSquared = TNumericLimits<double>::Max();
+-	int32 BestIndex = INDEX_NONE;
+-
+-	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
++	const FVector ChaseDirection =
++		PlayerTransform.GetLocation() - PursuerTransform.GetLocation();
++	if (ChaseDirection.SizeSquared2D() <= KINDA_SMALL_NUMBER)
+ 	{
+-		const double DistanceSquared =
+-			FVector::DistSquared2D(StartLocation, Candidates[Index].GetLocation());
+-		if (DistanceSquared >= MinimumDistanceSquared && DistanceSquared < BestDistanceSquared)
+-		{
+-			BestDistanceSquared = DistanceSquared;
+-			BestIndex = Index;
+-		}
++		return false;
+ 	}
++	const FQuat ForwardYaw = FRotator(
++		0.0, ChaseDirection.Rotation().Yaw, 0.0).Quaternion();
++	PlayerTransform.SetRotation(ForwardYaw);
++	PursuerTransform.SetRotation(ForwardYaw);
+ 
+-	if (BestIndex == INDEX_NONE)
++	APlayerController* PlayerController =
++		UGameplayStatics::GetPlayerController(this, 0);
++	APawn* Player = IsValid(PlayerController) ? PlayerController->GetPawn() : nullptr;
++	if (!IsValid(Player))
++	{
++		return false;
++	}
++	if (UPawnMovementComponent* Movement = Player->GetMovementComponent())
++	{
++		Movement->StopMovementImmediately();
++	}
++	const FRotator PlayerRotation = PlayerTransform.GetRotation().Rotator();
++	if (!Player->TeleportTo(
++			PlayerTransform.GetLocation(), PlayerRotation, false, false))
+ 	{
+ 		return false;
+ 	}
++	PlayerController->SetControlRotation(PlayerRotation);
+ 
+-	FVector PlayerLocation = Candidates[BestIndex].GetLocation();
+-	// 候选位于地板表面；玩家复用起点的胶囊中心高度，避免半身陷入地板。
+-	PlayerLocation.Z = StartLocation.Z;
+-	OutPlayerTransform = FTransform(StartTransform.GetRotation(), PlayerLocation);
+-	return true;
++	FActorSpawnParameters SpawnParameters;
++	SpawnParameters.Owner = this;
++	SpawnParameters.SpawnCollisionHandlingOverride =
++		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
++	SpawnedPursuer = GetWorld()->SpawnActor<APursuerCharacter>(
++		PursuerClass, PursuerTransform, SpawnParameters);
++	return IsValid(SpawnedPursuer);
+ }
+ 
+ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
+@@ -220,99 +242,220 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
+ 	FTransform ExitTransform;
+ 	if (!Generator.GetGeneratedExitWorldTransform(ExitTransform))
+ 	{
+-		UE_LOG(LogZeroEscapeGameMode, Error,
+-			TEXT("ZE_GAME_SETUP result=Failure reason=ExitTransformUnavailable"));
+-		return false;
+-	}
+-
+-	if (ExitActorClass == nullptr)
+-	{
+-		UE_LOG(LogZeroEscapeGameMode, Error,
+-			TEXT("ZE_GAME_SETUP result=Failure reason=ExitActorClassUnset"));
+ 		return false;
+ 	}
+ 
+ 	FActorSpawnParameters SpawnParameters;
+ 	SpawnParameters.Owner = this;
++	SpawnParameters.SpawnCollisionHandlingOverride =
++		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+ 	SpawnedExit = GetWorld()->SpawnActor<AZeroEscapeExitVolume>(
+-		ExitActorClass,
+-		ExitTransform,
+-		SpawnParameters);
++		ExitActorClass, ExitTransform, SpawnParameters);
+ 	if (!IsValid(SpawnedExit))
+ 	{
+ 		return false;
+ 	}
+-
+-	SpawnedExit->OnExitReached.AddDynamic(this, &AZeroEscapeGameMode::HandleExitReached);
++	SpawnedExit->OnExitReached.AddUniqueDynamic(
++		this, &AZeroEscapeGameMode::HandleExitReached);
+ 	SpawnedExit->Activate(ExitTransform);
+ 	return true;
+ }
+ 
+-/** 找到玩家的生命组件，绑定归零事件用于判负转发。 */
+-void AZeroEscapeGameMode::BindPlayerDeath()
++bool AZeroEscapeGameMode::BindPlayerDeath()
+ {
+ 	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+-	if (!IsValid(Player))
++	BoundHealthComponent = IsValid(Player)
++		? Player->FindComponentByClass<UHealthComponent>()
++		: nullptr;
++	if (!IsValid(BoundHealthComponent))
+ 	{
+-		return;
++		return false;
+ 	}
++	BoundHealthComponent->OnHealthDepleted.AddUniqueDynamic(
++		this, &AZeroEscapeGameMode::HandlePlayerDeath);
++	return true;
++}
+ 
+-	if (UHealthComponent* Health = Player->FindComponentByClass<UHealthComponent>())
++bool AZeroEscapeGameMode::BindRoundStateForUI()
++{
++	BoundRoundState = GetGameState<AZeroEscapeGameState>();
++	if (!IsValid(BoundRoundState) || ResultMenuWidgetClass == nullptr)
+ 	{
+-		Health->OnHealthDepleted.AddDynamic(this, &AZeroEscapeGameMode::HandlePlayerDeath);
++		return false;
+ 	}
++	BoundRoundState->OnRoundStateChanged.AddUniqueDynamic(
++		this, &AZeroEscapeGameMode::HandleRoundStateChanged);
++	return true;
+ }
+ 
+ void AZeroEscapeGameMode::HandleExitReached()
+ {
+-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
++	if (bRoundStarted && IsValid(BoundRoundState))
+ 	{
+-		ZeState->SetRoundWon();
++		BoundRoundState->SetRoundWon();
+ 	}
+ }
+ 
+ void AZeroEscapeGameMode::HandlePlayerDeath()
+ {
+-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
++	if (bRoundStarted && IsValid(BoundRoundState))
+ 	{
+-		ZeState->SetRoundLost();
++		BoundRoundState->SetRoundLost();
+ 	}
+ }
+ 
+-void AZeroEscapeGameMode::BindRoundStateForUI()
++void AZeroEscapeGameMode::HandleRoundStateChanged(
++	const EZeroEscapeRoundState NewState)
+ {
+-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
++	if (!bRoundStarted
++		|| NewState == EZeroEscapeRoundState::InProgress
++		|| ResultMenuWidgetClass == nullptr
++		|| IsValid(ResultMenuWidget))
+ 	{
+-		ZeState->OnRoundStateChanged.AddDynamic(
+-			this, &AZeroEscapeGameMode::HandleRoundStateChanged);
++		return;
++	}
++
++	APlayerController* PlayerController =
++		UGameplayStatics::GetPlayerController(this, 0);
++	if (!IsValid(PlayerController))
++	{
++		return;
++	}
++	ResultMenuWidget = CreateWidget<UResultMenuWidget>(
++		PlayerController, ResultMenuWidgetClass);
++	if (!IsValid(ResultMenuWidget))
++	{
++		return;
+ 	}
++	ResultMenuWidget->ShowResult(NewState == EZeroEscapeRoundState::Won);
++	ResultMenuWidget->AddToViewport();
++	PlayerController->SetInputMode(FInputModeUIOnly());
++	PlayerController->SetShowMouseCursor(true);
++	UGameplayStatics::SetGamePaused(this, true);
+ }
+ 
+-/** 局状态变化：非进行中时创建结算界面、切 UI 输入并暂停。 */
+-void AZeroEscapeGameMode::HandleRoundStateChanged(EZeroEscapeRoundState NewState)
++void AZeroEscapeGameMode::SetGameplayInputLocked(const bool bLocked) const
+ {
+-	if (NewState == EZeroEscapeRoundState::InProgress || ResultMenuWidgetClass == nullptr)
++	APlayerController* PlayerController =
++		UGameplayStatics::GetPlayerController(this, 0);
++	if (!IsValid(PlayerController))
+ 	{
+ 		return;
+ 	}
++	PlayerController->ResetIgnoreMoveInput();
++	PlayerController->ResetIgnoreLookInput();
++	if (bLocked)
++	{
++		PlayerController->SetIgnoreMoveInput(true);
++		PlayerController->SetIgnoreLookInput(true);
++	}
++	PlayerController->SetInputMode(FInputModeGameOnly());
++	PlayerController->SetShowMouseCursor(false);
++}
+ 
+-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+-	if (!IsValid(PlayerController))
++void AZeroEscapeGameMode::AbortSetupAndReturnToMainMenu(const TCHAR* Reason)
++{
++	if (bSetupTerminal || bEndingPlay)
+ 	{
+ 		return;
+ 	}
++	bSetupTerminal = true;
++	bReturningToMainMenu = true;
++	PendingFailureReason = Reason != nullptr ? Reason : TEXT("Unknown");
++	SetGameplayInputLocked(true);
++	UnbindRuntimeDelegates();
++	CleanupRoundActors();
++	UE_LOG(LogZeroEscapeGameMode, Error,
++		TEXT("ZE_GAME_SETUP result=Failure reason=%s operation=%lld"),
++		*PendingFailureReason,
++		static_cast<long long>(LastHandledGenerationOperationId));
++
++	if (UWorld* World = GetWorld())
++	{
++		ReturnToMainMenuTimer = World->GetTimerManager().SetTimerForNextTick(
++			this, &AZeroEscapeGameMode::FinalizeAbortAndReturnToMainMenu);
++	}
++}
+ 
+-	ResultMenuWidget = CreateWidget<UResultMenuWidget>(PlayerController, ResultMenuWidgetClass);
+-	if (!IsValid(ResultMenuWidget))
++void AZeroEscapeGameMode::FinalizeAbortAndReturnToMainMenu()
++{
++	if (bEndingPlay || !bReturningToMainMenu)
++	{
++		return;
++	}
++	if (IsValid(ActiveGenerator) && !ActiveGenerator->ClearGeneratedScene())
+ 	{
++		UE_LOG(LogZeroEscapeGameMode, Warning,
++			TEXT("ZE_GAME_SETUP reason=GeneratorClearDeferredOrRejected"));
++	}
++	if (MainMenuLevel.IsNull())
++	{
++		UE_LOG(LogZeroEscapeGameMode, Error,
++			TEXT("ZE_GAME_SETUP reason=CannotReturnMainMenuLevelUnset"));
+ 		return;
+ 	}
++	UGameplayStatics::OpenLevelBySoftObjectPtr(this, MainMenuLevel);
++}
+ 
+-	ResultMenuWidget->ShowResult(NewState == EZeroEscapeRoundState::Won);
+-	ResultMenuWidget->AddToViewport();
++void AZeroEscapeGameMode::UnbindRuntimeDelegates()
++{
++	if (IsValid(ActiveGenerator))
++	{
++		ActiveGenerator->OnGenerationFinished.RemoveDynamic(
++			this, &AZeroEscapeGameMode::HandleGenerationFinished);
++	}
++	if (IsValid(BoundHealthComponent))
++	{
++		BoundHealthComponent->OnHealthDepleted.RemoveDynamic(
++			this, &AZeroEscapeGameMode::HandlePlayerDeath);
++	}
++	BoundHealthComponent = nullptr;
++	if (IsValid(BoundRoundState))
++	{
++		BoundRoundState->OnRoundStateChanged.RemoveDynamic(
++			this, &AZeroEscapeGameMode::HandleRoundStateChanged);
++	}
++	BoundRoundState = nullptr;
++	if (IsValid(SpawnedExit))
++	{
++		SpawnedExit->OnExitReached.RemoveDynamic(
++			this, &AZeroEscapeGameMode::HandleExitReached);
++	}
++}
+ 
+-	FInputModeUIOnly InputMode;
+-	PlayerController->SetInputMode(InputMode);
+-	PlayerController->SetShowMouseCursor(true);
+-	UGameplayStatics::SetGamePaused(this, true);
++void AZeroEscapeGameMode::CleanupRoundActors()
++{
++	if (IsValid(ActivePopulator))
++	{
++		ActivePopulator->ClearPopulation();
++	}
++	if (IsValid(SpawnedExit))
++	{
++		SpawnedExit->Destroy();
++	}
++	SpawnedExit = nullptr;
++	if (IsValid(SpawnedPursuer))
++	{
++		SpawnedPursuer->Destroy();
++	}
++	SpawnedPursuer = nullptr;
++}
++
++void AZeroEscapeGameMode::EndPlay(
++	const EEndPlayReason::Type EndPlayReason)
++{
++	bEndingPlay = true;
++	if (UWorld* World = GetWorld())
++	{
++		World->GetTimerManager().ClearTimer(ReturnToMainMenuTimer);
++	}
++	UnbindRuntimeDelegates();
++	CleanupRoundActors();
++	if (IsValid(ResultMenuWidget))
++	{
++		ResultMenuWidget->RemoveFromParent();
++	}
++	ResultMenuWidget = nullptr;
++	SetGameplayInputLocked(false);
++	Super::EndPlay(EndPlayReason);
+ }
+diff --git a/Source/Demo/Private/GameFlow/ZeroEscapeGameSetupGate.h b/Source/Demo/Private/GameFlow/ZeroEscapeGameSetupGate.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..e62e873d7140e1aeb235242e88ddd34fbd11a4af
+--- /dev/null
++++ b/Source/Demo/Private/GameFlow/ZeroEscapeGameSetupGate.h
+@@ -0,0 +1,33 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/** 纯值过滤器：GameMode 只接管当前 Generator 的一次最终报告。 */
++
++#pragma once
++
++#include "CoreMinimal.h"
++
++namespace ZeroEscape::GameFlow
++{
++	struct FGameSetupGateSnapshot
++	{
++		int64 ActiveOperationId = 0;
++		int64 LastHandledOperationId = 0;
++		bool bTerminal = false;
++		bool bEndingPlay = false;
++	};
++
++	class FGameSetupGate final
++	{
++	public:
++		static bool AcceptFinalReport(
++			const FGameSetupGateSnapshot& State,
++			const int64 ReportOperationId)
++		{
++			return !State.bTerminal
++				&& !State.bEndingPlay
++				&& State.ActiveOperationId > 0
++				&& ReportOperationId == State.ActiveOperationId
++				&& ReportOperationId > State.LastHandledOperationId;
++		}
++	};
++}
+diff --git a/Source/Demo/Private/PCG/Population/ZeroEscapeGameplayPopulator.cpp b/Source/Demo/Private/PCG/Population/ZeroEscapeGameplayPopulator.cpp
+index 9ce072021b1a0c66785dd5d2c862bc072ad1baa4..9987b53e9c8adf51f78147e1ab40701e21d3d0cb 100644
+--- a/Source/Demo/Private/PCG/Population/ZeroEscapeGameplayPopulator.cpp
++++ b/Source/Demo/Private/PCG/Population/ZeroEscapeGameplayPopulator.cpp
+@@ -2,140 +2,177 @@
+ 
+ /**
+  * @file ZeroEscapeGameplayPopulator.cpp
+- * 职责：绑定生成器完成事件，读取只读空间查询，按 Population Profile 用本局 Seed 确定性 Spawn 对象。
+- * 边界：不生成空间结构，不结算玩法后果；只负责放置与本局对象清理。
++ * 职责：在 GameMode 明确提交开局时读取普通格候选，并原子放置全部玩法对象规则。
++ * 边界：不订阅 Generator、不生成空间结构、不结算玩法后果；失败只回滚自己 Spawn 的对象。
+  */
+ 
+ #include "PCG/Population/ZeroEscapeGameplayPopulator.h"
+ 
+ #include "Engine/World.h"
++#include "PCG/Population/ZeroEscapePopulationPlacementPolicy.h"
+ #include "PCG/Population/ZeroEscapePopulationProfile.h"
+ #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
+ 
+ DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePopulator, Log, All);
+ 
+-/** 创建关闭 Tick 的放置器。 */
+ AZeroEscapeGameplayPopulator::AZeroEscapeGameplayPopulator()
+ {
+ 	PrimaryActorTick.bCanEverTick = false;
+ }
+ 
+-/** 绑定关联生成器完成事件；若绑定前生成已完成则立即补放一次，避免漏过。 */
+-void AZeroEscapeGameplayPopulator::BeginPlay()
++bool AZeroEscapeGameplayPopulator::Populate(
++	AZeroEscapeRuntimeLevelGenerator& Generator)
+ {
+-	Super::BeginPlay();
+-
+-	if (!IsValid(Generator))
+-	{
+-		UE_LOG(LogZeroEscapePopulator, Warning,
+-			TEXT("%s 未指定 Generator，放置层不会触发。"), *GetName());
+-		return;
+-	}
+-
+-	Generator->OnGenerationFinished.AddDynamic(
+-		this, &AZeroEscapeGameplayPopulator::HandleGenerationFinished);
+-
+-	if (Generator->State == EZeroEscapeRuntimeGenerationState::Ready)
+-	{
+-		HandleGenerationFinished(true, Generator->LastReport);
+-	}
+-}
+-
+-/** 结束时解绑事件并清理本局对象。 */
+-void AZeroEscapeGameplayPopulator::EndPlay(const EEndPlayReason::Type EndPlayReason)
+-{
+-	if (IsValid(Generator))
+-	{
+-		Generator->OnGenerationFinished.RemoveDynamic(
+-			this, &AZeroEscapeGameplayPopulator::HandleGenerationFinished);
+-	}
+-	ClearSpawnedActors();
+-	Super::EndPlay(EndPlayReason);
+-}
+-
+-/** 生成成功后先清旧对象，再对每条规则确定性抽取候选格并 Spawn。 */
+-void AZeroEscapeGameplayPopulator::HandleGenerationFinished(
+-	bool bSuccess, const FZeroEscapeGenerationReport& /*Report*/)
+-{
+-	ClearSpawnedActors();
+-
+-	if (!bSuccess || !IsValid(Generator) || !IsValid(PopulationProfile))
+-	{
+-		return;
+-	}
+-
++	ClearPopulation();
+ 	UWorld* World = GetWorld();
+-	if (World == nullptr)
++	if (!IsValid(World)
++		|| !IsValid(PopulationProfile)
++		|| Generator.State != EZeroEscapeRuntimeGenerationState::Ready)
+ 	{
+-		return;
++		UE_LOG(LogZeroEscapePopulator, Error,
++			TEXT("ZE_POPULATION result=Failure reason=InvalidSetup"));
++		return false;
+ 	}
+ 
+-	FRandomStream Rng(Generator->GetGeneratedSeed());
++	auto Fail = [this](const TCHAR* Reason, const int32 RuleIndex)
++	{
++		UE_LOG(LogZeroEscapePopulator, Error,
++			TEXT("ZE_POPULATION result=Failure reason=%s rule=%d"), Reason, RuleIndex);
++		ClearPopulation();
++		return false;
++	};
+ 
++	FRandomStream Rng(Generator.GetGeneratedSeed());
+ 	FActorSpawnParameters SpawnParameters;
+ 	SpawnParameters.Owner = this;
+ 	SpawnParameters.SpawnCollisionHandlingOverride =
+ 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+ 
+-	for (const FZeroEscapePlacementRule& Rule : PopulationProfile->Rules)
++	for (int32 RuleIndex = 0;
++		RuleIndex < PopulationProfile->Rules.Num();
++		++RuleIndex)
+ 	{
++		const FZeroEscapePlacementRule& Rule = PopulationProfile->Rules[RuleIndex];
++		if (Rule.ActorClass.IsNull()
++			|| Rule.OneEveryNCells <= 0
++			|| Rule.MaxCount <= 0
++			|| Rule.LateralCount <= 0
++			|| !FMath::IsFinite(Rule.LateralSpacing)
++			|| Rule.LateralSpacing < 0.0f
++			|| !FMath::IsFinite(Rule.SpawnZOffsetCm)
++			|| Rule.SpawnZOffsetCm < 0.0f)
++		{
++			return Fail(TEXT("InvalidRule"), RuleIndex);
++		}
++
+ 		UClass* ActorClass = Rule.ActorClass.LoadSynchronous();
+-		if (ActorClass == nullptr)
++		if (!IsValid(ActorClass) || ActorClass->HasAnyClassFlags(CLASS_Abstract))
+ 		{
+-			continue;
++			return Fail(TEXT("ActorClassLoadFailed"), RuleIndex);
+ 		}
+ 
+ 		TArray<FTransform> Candidates;
+-		if (!Generator->GetGeneratedCellWorldTransforms(
+-				Rule.TargetRegionKind, Rule.bAvoidStartExitNeighbors,
+-				Rule.bStraightCorridorOnly, Candidates)
+-			|| Candidates.Num() == 0)
++		if (!Generator.GetGeneratedOrdinaryGameplayCellWorldTransforms(
++				Rule.bAvoidStartExitNeighbors,
++				Rule.bStraightCorridorOnly,
++				Candidates))
++		{
++			return Fail(TEXT("OrdinaryCandidateQueryFailed"), RuleIndex);
++		}
++
++		int32 TargetCount = 0;
++		int32 PlannedActorCount = 0;
++		const ZeroEscape::LevelGeneration::EPopulationPlacementBudgetResult BudgetResult =
++			ZeroEscape::LevelGeneration::FPopulationPlacementPolicy::Evaluate(
++				Candidates.Num(),
++				Rule.OneEveryNCells,
++				Rule.MaxCount,
++				Rule.LateralCount,
++				TargetCount,
++				PlannedActorCount);
++		if (BudgetResult !=
++			ZeroEscape::LevelGeneration::EPopulationPlacementBudgetResult::Success)
+ 		{
++			return Fail(TEXT("PlacementBudgetInvalid"), RuleIndex);
++		}
++		constexpr int64 MaxGeneratedAddresses =
++			static_cast<int64>(ZeroEscape::GenerationLimits::MaxGridCells)
++			* ZeroEscape::GenerationLimits::MaxFloorCount;
++		if (static_cast<int64>(SpawnedActors.Num()) + PlannedActorCount
++			> MaxGeneratedAddresses)
++		{
++			return Fail(TEXT("TotalSpawnBudgetExceeded"), RuleIndex);
++		}
++		if (TargetCount == 0)
++		{
++			UE_LOG(LogZeroEscapePopulator, Log,
++				TEXT("ZE_POPULATION result=RuleSkipped rule=%d candidates=%d"),
++				RuleIndex, Candidates.Num());
+ 			continue;
+ 		}
+ 
+-		// 确定性洗牌后按稀疏度取前若干个，兼顾随机分布与 Seed 复现。
++		for (const FTransform& Candidate : Candidates)
++		{
++			if (Candidate.ContainsNaN()
++				|| !Candidate.GetRotation().IsNormalized()
++				|| !Candidate.GetScale3D().Equals(FVector::OneVector, KINDA_SMALL_NUMBER))
++			{
++				return Fail(TEXT("InvalidCandidateTransform"), RuleIndex);
++			}
++		}
++
++		// 规则间仍按 DataAsset 顺序消费随机数；同一 Seed 与同一规则表保持可复现。
+ 		for (int32 Index = Candidates.Num() - 1; Index > 0; --Index)
+ 		{
+ 			Candidates.Swap(Index, Rng.RandRange(0, Index));
+ 		}
+ 
+-		const int32 TargetCount = FMath::Min(
+-			Rule.MaxCount, Candidates.Num() / FMath::Max(Rule.OneEveryNCells, 1));
+-		const int32 LateralCount = FMath::Max(Rule.LateralCount, 1);
++		int32 SpawnedForRule = 0;
+ 		for (int32 Index = 0; Index < TargetCount; ++Index)
+ 		{
+ 			const FTransform& CellTransform = Candidates[Index];
+-			// 生成器已把候选 Transform 的 Y 轴设为走廊横向；沿其居中并排 LateralCount 个。
+-			const FVector LateralDirection = CellTransform.GetRotation().GetRightVector();
++			const FVector LateralDirection =
++				CellTransform.GetRotation().GetRightVector();
+ 			const FRotator SpawnRotation = CellTransform.GetRotation().Rotator();
+-			for (int32 LateralIndex = 0; LateralIndex < LateralCount; ++LateralIndex)
++			for (int32 LateralIndex = 0;
++				LateralIndex < Rule.LateralCount;
++				++LateralIndex)
+ 			{
+ 				const float LateralOffset =
+-					(static_cast<float>(LateralIndex) - (LateralCount - 1) * 0.5f) * Rule.LateralSpacing;
++					(static_cast<float>(LateralIndex)
++						- (Rule.LateralCount - 1) * 0.5f)
++					* Rule.LateralSpacing;
+ 				const FVector SpawnLocation = CellTransform.GetLocation()
+ 					+ LateralDirection * LateralOffset
+ 					+ FVector(0.0f, 0.0f, Rule.SpawnZOffsetCm);
+-				// Location+Rotation 重载不传 Scale，保留蓝图 CDO 的根缩放。
+ 				AActor* Spawned = World->SpawnActor<AActor>(
+ 					ActorClass, SpawnLocation, SpawnRotation, SpawnParameters);
+-				if (IsValid(Spawned))
++				if (!IsValid(Spawned))
+ 				{
+-					SpawnedActors.Add(Spawned);
++					return Fail(TEXT("ActorSpawnFailed"), RuleIndex);
+ 				}
++				SpawnedActors.Add(Spawned);
++				++SpawnedForRule;
+ 			}
+ 		}
++		if (SpawnedForRule != PlannedActorCount)
++		{
++			return Fail(TEXT("SpawnCountInvariantFailed"), RuleIndex);
++		}
+ 
+ 		UE_LOG(LogZeroEscapePopulator, Log,
+-			TEXT("%s 放置 %s：候选 %d 格，放置 %d 个。"),
+-			*GetName(), *ActorClass->GetName(), Candidates.Num(), TargetCount);
++			TEXT("ZE_POPULATION result=RuleSuccess rule=%d class=%s candidates=%d actors=%d"),
++			RuleIndex, *ActorClass->GetName(), Candidates.Num(), SpawnedForRule);
+ 	}
++
++	UE_LOG(LogZeroEscapePopulator, Display,
++		TEXT("ZE_POPULATION result=Success actors=%d"), SpawnedActors.Num());
++	return true;
+ }
+ 
+-/** 销毁本局已 Spawn 的全部对象并清空登记。 */
+-void AZeroEscapeGameplayPopulator::ClearSpawnedActors()
++void AZeroEscapeGameplayPopulator::ClearPopulation()
+ {
+-	for (const TObjectPtr<AActor>& Actor : SpawnedActors)
++	for (AActor* Actor : SpawnedActors)
+ 	{
+ 		if (IsValid(Actor))
+ 		{
+@@ -144,3 +181,10 @@ void AZeroEscapeGameplayPopulator::ClearSpawnedActors()
+ 	}
+ 	SpawnedActors.Reset();
+ }
++
++void AZeroEscapeGameplayPopulator::EndPlay(
++	const EEndPlayReason::Type EndPlayReason)
++{
++	ClearPopulation();
++	Super::EndPlay(EndPlayReason);
++}
+diff --git a/Source/Demo/Private/PCG/Population/ZeroEscapePopulationPlacementPolicy.h b/Source/Demo/Private/PCG/Population/ZeroEscapePopulationPlacementPolicy.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..32d50449befceb21e712eccf1eccfbf7897f9d92
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Population/ZeroEscapePopulationPlacementPolicy.h
+@@ -0,0 +1,68 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapePopulationPlacementPolicy.h
++ * 职责：用纯整数计算单条 Population 规则的目标格数与 Actor 数安全预算。
++ * 边界：不加载资产、不消费随机数、不 Spawn；0 个目标是合法成功结果。
++ */
++
++#pragma once
++
++#include "CoreMinimal.h"
++#include "PCG/ZeroEscapeGenerationTypes.h"
++
++namespace ZeroEscape::LevelGeneration
++{
++	enum class EPopulationPlacementBudgetResult : uint8
++	{
++		Success = 0,
++		InvalidRule = 1,
++		InvalidCandidateCount = 2,
++		SpawnBudgetExceeded = 3
++	};
++
++	class FPopulationPlacementPolicy final
++	{
++	public:
++		/**
++		 * Actor 上限复用 C++ 的 MaxGridCells × MaxFloorCount，而不是另造很小常数。
++		 * 用 int64 先乘，避免 LateralCount 导致 int32 溢出或意外海量 Spawn。
++		 */
++		static EPopulationPlacementBudgetResult Evaluate(
++			const int32 CandidateCount,
++			const int32 OneEveryNCells,
++			const int32 MaxCount,
++			const int32 LateralCount,
++			int32& OutTargetCellCount,
++			int32& OutActorCount)
++		{
++			OutTargetCellCount = 0;
++			OutActorCount = 0;
++			if (OneEveryNCells <= 0 || MaxCount <= 0 || LateralCount <= 0)
++			{
++				return EPopulationPlacementBudgetResult::InvalidRule;
++			}
++
++			constexpr int64 MaxGeneratedAddresses =
++				static_cast<int64>(GenerationLimits::MaxGridCells)
++				* GenerationLimits::MaxFloorCount;
++			if (CandidateCount < 0
++				|| static_cast<int64>(CandidateCount) > MaxGeneratedAddresses)
++			{
++				return EPopulationPlacementBudgetResult::InvalidCandidateCount;
++			}
++
++			OutTargetCellCount = FMath::Min(
++				MaxCount, CandidateCount / OneEveryNCells);
++			const int64 ActorCount =
++				static_cast<int64>(OutTargetCellCount) * LateralCount;
++			if (ActorCount > MaxGeneratedAddresses)
++			{
++				OutTargetCellCount = 0;
++				return EPopulationPlacementBudgetResult::SpawnBudgetExceeded;
++			}
++			OutActorCount = static_cast<int32>(ActorCount);
++			return EPopulationPlacementBudgetResult::Success;
++		}
++	};
++}
+diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapePopulationPlacementTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapePopulationPlacementTests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..7a5c7cc18690a83cbb48415aa73fb37f31e1d313
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Tests/ZeroEscapePopulationPlacementTests.cpp
+@@ -0,0 +1,59 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/** 纯值测试：0 候选/密度取整为 0 均成功，非法规则和超网格预算必须拒绝。 */
++
++#include "PCG/Population/ZeroEscapePopulationPlacementPolicy.h"
++
++#if WITH_DEV_AUTOMATION_TESTS
++
++#include "Misc/AutomationTest.h"
++
++namespace ZeroEscape::LevelGeneration::Tests
++{
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapePopulationPlacementPolicyTest,
++		"Demo.PCG.Population.PlacementBudget",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapePopulationPlacementPolicyTest::RunTest(const FString& Parameters)
++	{
++		(void)Parameters;
++		int32 Targets = INDEX_NONE;
++		int32 Actors = INDEX_NONE;
++		TestTrue(
++			TEXT("没有普通候选格是合法的零放置结果"),
++			FPopulationPlacementPolicy::Evaluate(0, 4, 8, 2, Targets, Actors)
++				== EPopulationPlacementBudgetResult::Success);
++		TestEqual(TEXT("零候选目标数"), Targets, 0);
++		TestEqual(TEXT("零候选 Actor 数"), Actors, 0);
++
++		TestTrue(
++			TEXT("候选少于密度分母时沿用旧语义并成功跳过"),
++			FPopulationPlacementPolicy::Evaluate(3, 4, 8, 2, Targets, Actors)
++				== EPopulationPlacementBudgetResult::Success);
++		TestEqual(TEXT("整数密度取整为零"), Targets, 0);
++
++		TestTrue(
++			TEXT("普通规则按整数密度和横向数量计算"),
++			FPopulationPlacementPolicy::Evaluate(20, 4, 8, 2, Targets, Actors)
++				== EPopulationPlacementBudgetResult::Success);
++		TestEqual(TEXT("普通规则目标格"), Targets, 5);
++		TestEqual(TEXT("普通规则 Actor 数"), Actors, 10);
++
++		TestTrue(
++			TEXT("非法横向数量必须拒绝"),
++			FPopulationPlacementPolicy::Evaluate(20, 4, 8, 0, Targets, Actors)
++				== EPopulationPlacementBudgetResult::InvalidRule);
++
++		constexpr int32 MaxAddresses = GenerationLimits::MaxGridCells
++			* GenerationLimits::MaxFloorCount;
++		TestTrue(
++			TEXT("超过全四层最大地址数的 Actor 请求必须拒绝"),
++			FPopulationPlacementPolicy::Evaluate(
++				MaxAddresses, 1, MaxAddresses, 2, Targets, Actors)
++				== EPopulationPlacementBudgetResult::SpawnBudgetExceeded);
++		return true;
++	}
++}
++
++#endif
+diff --git a/Source/Demo/Public/GameFlow/ZeroEscapeGameMode.h b/Source/Demo/Public/GameFlow/ZeroEscapeGameMode.h
+index 7b0f0c5fb3fc460d327fe1ff5ea3d9360098c452..a1009024a0d7ae7bdc3f264900f19c43315c1af6 100644
+--- a/Source/Demo/Public/GameFlow/ZeroEscapeGameMode.h
++++ b/Source/Demo/Public/GameFlow/ZeroEscapeGameMode.h
+@@ -2,10 +2,9 @@
+ 
+ /**
+  * @file ZeroEscapeGameMode.h
+- * 职责：正式一局的开局编排——读取本局请求、驱动 PCG 生成、把追猎者放在起点、玩家放在起点两格外、放置出口。
+- * 边界：不做局状态机（由 GameState 承接胜负真相）；不撒放陷阱/奖励、不接管追猎者 AI 或磁力手感；
+- *       只在开局摆好人和出口，把胜负触发源（出口到达、玩家死亡）转发给 GameState，并在分出胜负时弹结算界面。
+- * 状态 Owner：本类只在开局临时持有对 Generator、本局追猎者与出口的引用，不长期拥有局状态。
++ * 职责：锁输入并编排正式异步开局；Generator、角色、出口、Population 全部成功后才开放一局。
++ * 边界：GameState 仍拥有胜负真相；本类不求解 PCG、不接管追猎者 AI 或玩法对象行为。
++ * 状态 Owner：只拥有开局事务、生成对象引用与回主菜单的失败收口。
+  */
+ 
+ #pragma once
+@@ -13,14 +12,19 @@
+ #include "CoreMinimal.h"
+ #include "GameFramework/GameModeBase.h"
+ #include "GameFlow/ZeroEscapeGameState.h"
++#include "PCG/ZeroEscapeGenerationTypes.h"
++#include "TimerManager.h"
+ 
+ #include "ZeroEscapeGameMode.generated.h"
+ 
+ class APawn;
+ class APursuerCharacter;
++class AZeroEscapeGameplayPopulator;
+ class AZeroEscapeExitVolume;
+ class AZeroEscapeRuntimeLevelGenerator;
++class UHealthComponent;
+ class UResultMenuWidget;
++class UWorld;
+ 
+ /** 正式游戏关卡的 GameMode：开局读参数生成 PCG，并完成追猎者/玩家的初始摆放。 */
+ UCLASS()
+@@ -33,27 +37,29 @@ public:
+ 	AZeroEscapeGameMode();
+ 
+ protected:
+-	/** 读取 GameInstance 请求、驱动本局生成并摆放角色。 */
++	/** 请求前绑定最终事件并锁输入；直接运行 L_Game 也走同一异步流程。 */
+ 	virtual void BeginPlay() override;
++	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+ 
+ private:
+-	/** 按类型定位关卡中唯一的空间 Generator；缺失或多于一个都记为错误。 */
++	/** 按类型定位关卡中唯一的对象；缺失或多于一个都失败，不选择“第一个”。 */
+ 	AZeroEscapeRuntimeLevelGenerator* FindLevelGenerator() const;
++	AZeroEscapeGameplayPopulator* FindGameplayPopulator() const;
+ 
+-	/** 生成成功后：追猎者放起点、玩家放两格外；任一步失败记录错误并返回 false。 */
+-	bool PlacePlayerAndPursuer(AZeroEscapeRuntimeLevelGenerator& Generator);
++	/** Generator 的唯一最终回调；只接受当前 Generator 的最终报告，OperationId 负责去重。 */
++	UFUNCTION()
++	void HandleGenerationFinished(
++		bool bSuccess,
++		const FZeroEscapeGenerationReport& Report);
+ 
+-	/** 从走廊候选中选出与起点直线距离达到下限、且额外距离最小的玩家出生点。 */
+-	bool FindPlayerSpawnTransform(
+-		AZeroEscapeRuntimeLevelGenerator& Generator,
+-		const FTransform& StartTransform,
+-		FTransform& OutPlayerTransform) const;
++	/** 读取 Plan 明确给出的玩家/追猎者出生点，不再从普通格二次猜选。 */
++	bool PlacePlayerAndPursuer(AZeroEscapeRuntimeLevelGenerator& Generator);
+ 
+ 	/** 生成成功后在出口坐标放置出口体积并激活；失败记录错误并返回 false。 */
+ 	bool PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator);
+ 
+-	/** 绑定玩家生命归零事件，用于判负转发。 */
+-	void BindPlayerDeath();
++	/** 必需绑定失败也让本局回滚，避免生成一局无法判负的半成品。 */
++	bool BindPlayerDeath();
+ 
+ 	/** 出口到达回调：转发判胜给 GameState。 */
+ 	UFUNCTION()
+@@ -64,20 +70,22 @@ private:
+ 	void HandlePlayerDeath();
+ 
+ 	/** 订阅 GameState 状态变化，用于分出胜负时弹结算界面。 */
+-	void BindRoundStateForUI();
++	bool BindRoundStateForUI();
+ 
+ 	/** 局状态变化回调：非进行中时创建结算界面、切 UI 输入并暂停。 */
+ 	UFUNCTION()
+ 	void HandleRoundStateChanged(EZeroEscapeRoundState NewState);
+ 
++	void SetGameplayInputLocked(bool bLocked) const;
++	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
++	void FinalizeAbortAndReturnToMainMenu();
++	void CleanupRoundActors();
++	void UnbindRuntimeDelegates();
++
+ 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
+ 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
+ 	TSubclassOf<APursuerCharacter> PursuerClass;
+ 
+-	/** 玩家与起点（追猎者所在）的最小二维距离；1200 cm 等于当前两个 600 cm 逻辑格。 */
+-	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round", meta = (ClampMin = "600.0", Units = "cm"))
+-	double PlayerStartSeparationCm = 1200.0;
+-
+ 	/** 本局生成的唯一追猎者；仅用于开局摆放记录，不承担后续状态管理。 */
+ 	UPROPERTY(Transient)
+ 	TObjectPtr<APursuerCharacter> SpawnedPursuer;
+@@ -90,6 +98,10 @@ private:
+ 	UPROPERTY(Transient)
+ 	TObjectPtr<AZeroEscapeExitVolume> SpawnedExit;
+ 
++	/** 失败时返回的主菜单软引用；由正式 GameMode 蓝图显式装配，不按关卡名猜测。 */
++	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
++	TSoftObjectPtr<UWorld> MainMenuLevel;
++
+ 	/** 结算界面 Widget 类；由正式 GameMode 蓝图指定。 */
+ 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
+ 	TSubclassOf<UResultMenuWidget> ResultMenuWidgetClass;
+@@ -97,4 +109,24 @@ private:
+ 	/** 本局创建的结算界面实例。 */
+ 	UPROPERTY(Transient)
+ 	TObjectPtr<UResultMenuWidget> ResultMenuWidget;
++
++	UPROPERTY(Transient)
++	TObjectPtr<AZeroEscapeRuntimeLevelGenerator> ActiveGenerator;
++
++	UPROPERTY(Transient)
++	TObjectPtr<AZeroEscapeGameplayPopulator> ActivePopulator;
++
++	UPROPERTY(Transient)
++	TObjectPtr<UHealthComponent> BoundHealthComponent;
++
++	UPROPERTY(Transient)
++	TObjectPtr<AZeroEscapeGameState> BoundRoundState;
++
++	FTimerHandle ReturnToMainMenuTimer;
++	FString PendingFailureReason;
++	int64 LastHandledGenerationOperationId = 0;
++	bool bSetupTerminal = false;
++	bool bRoundStarted = false;
++	bool bReturningToMainMenu = false;
++	bool bEndingPlay = false;
+ };
+diff --git a/Source/Demo/Public/PCG/Population/ZeroEscapeGameplayPopulator.h b/Source/Demo/Public/PCG/Population/ZeroEscapeGameplayPopulator.h
+index 2773b81de986d477c0fdbda024bbde0795620de7..f2b0ad13eb1e892baf6aa85ac61c5de46d91468f 100644
+--- a/Source/Demo/Public/PCG/Population/ZeroEscapeGameplayPopulator.h
++++ b/Source/Demo/Public/PCG/Population/ZeroEscapeGameplayPopulator.h
+@@ -2,9 +2,9 @@
+ 
+ /**
+  * @file ZeroEscapeGameplayPopulator.h
+- * 职责：在关联生成器完成后，按 Population Profile 确定性地把玩法对象 Actor 撒入生成结果。
++ * 职责：由 GameMode 在角色与出口就绪后显式调用，按 Profile 确定性放置玩法对象。
+  * 边界：只消费生成器的只读空间查询与本局 Seed；不参与空间生成，不结算玩法后果。
+- * 状态 Owner：只拥有自己本局已 Spawn 的对象集合，用于重生成/结束时清理。
++ * 状态 Owner：只拥有本局由自己 Spawn 的对象；任一规则失败会原子清空。
+  */
+ 
+ #pragma once
+@@ -16,9 +16,8 @@
+ 
+ class AZeroEscapeRuntimeLevelGenerator;
+ class UZeroEscapePopulationProfile;
+-struct FZeroEscapeGenerationReport;
+ 
+-/** 订阅生成完成事件、把 Population Profile 里的对象确定性放置到关卡的独立放置器。 */
++/** 不订阅生成事件；正式开局的原子提交顺序只由 GameMode 编排。 */
+ UCLASS(Blueprintable)
+ class DEMO_API AZeroEscapeGameplayPopulator final : public AActor
+ {
+@@ -28,30 +27,25 @@ public:
+ 	/** 创建无 Tick 的放置器。 */
+ 	AZeroEscapeGameplayPopulator();
+ 
+-protected:
+-	/** 绑定关联生成器的完成事件；若绑定时已 Ready 立即补放一次。 */
+-	virtual void BeginPlay() override;
++	/**
++	 * 清旧对象后执行全部规则。无候选或按密度计算为零目标时合法跳过；
++	 * 配置、加载或实际 Spawn 失败时清掉本次已放对象并返回 false。
++	 */
++	bool Populate(AZeroEscapeRuntimeLevelGenerator& Generator);
++
++	/** GameMode 失败回滚与 EndPlay 共用的幂等清理入口。 */
++	void ClearPopulation();
+ 
+-	/** 结束时解绑事件并清理本局已放置对象。 */
++protected:
++	/** 结束时清理本局已放置对象。 */
+ 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+ 
+ private:
+-	/** 生成成功后清理旧对象并按规则重新放置；失败则不放置。 */
+-	UFUNCTION()
+-	void HandleGenerationFinished(bool bSuccess, const FZeroEscapeGenerationReport& Report);
+-
+-	/** 销毁本局已 Spawn 的全部对象并清空登记。 */
+-	void ClearSpawnedActors();
+-
+-	/** 关联的空间生成器；关卡实例中指定，其完成事件驱动本放置器。 */
+-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Population", meta = (AllowPrivateAccess = "true"))
+-	TObjectPtr<AZeroEscapeRuntimeLevelGenerator> Generator;
+-
+-	/** 放置规则表；决定放哪些对象、放到哪类格、放多少。 */
++	/** 放置规则表；决定在普通候选格放哪些对象、放多少。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population", meta = (AllowPrivateAccess = "true"))
+ 	TObjectPtr<UZeroEscapePopulationProfile> PopulationProfile;
+ 
+-	/** 本局已放置对象；重生成或结束时统一销毁。 */
++	/** 本局已放置对象；失败回滚或结束时统一销毁。 */
+ 	UPROPERTY(Transient)
+ 	TArray<TObjectPtr<AActor>> SpawnedActors;
+ };
+diff --git a/Source/Demo/Public/PCG/Population/ZeroEscapePlacementTypes.h b/Source/Demo/Public/PCG/Population/ZeroEscapePlacementTypes.h
+index 0829b9526ef72dd3529589772f9271f98459dd43..cb7cf62be351ed0f6117c0b5d98dfadf9c1dbbd6 100644
+--- a/Source/Demo/Public/PCG/Population/ZeroEscapePlacementTypes.h
++++ b/Source/Demo/Public/PCG/Population/ZeroEscapePlacementTypes.h
+@@ -2,18 +2,19 @@
+ 
+ /**
+  * @file ZeroEscapePlacementTypes.h
+- * 职责：定义生成后玩法对象放置层的纯数据规则；一条规则=一类要撒进关卡的 Actor 及其放置约束。
++ * 职责：定义普通可走格上的玩法对象放置规则；一条规则=一类 Actor 及其数量/间距约束。
+  * 边界：只保存纯值，不引用具体资产实例、不执行放置、不依赖生成器内部结构。
+  */
+ 
+ #pragma once
+ 
+ #include "CoreMinimal.h"
+-#include "PCG/ZeroEscapeGenerationTypes.h"
+ 
+ #include "ZeroEscapePlacementTypes.generated.h"
+ 
+-/** 单条放置规则：把某类 Actor 按区域语义与稀疏度撒入生成结果。 */
++class AActor;
++
++/** 单条放置规则：只消费生成器明确返回的普通玩法候选格。 */
+ USTRUCT(BlueprintType)
+ struct DEMO_API FZeroEscapePlacementRule
+ {
+@@ -23,10 +24,6 @@ struct DEMO_API FZeroEscapePlacementRule
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+ 	TSoftClassPtr<AActor> ActorClass;
+ 
+-	/** 只放在此区域语义的格子上（走廊/房间/…），复用生成器空间标签。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+-	EZeroEscapeGridRegionKind TargetRegionKind = EZeroEscapeGridRegionKind::Corridor;
+-
+ 	/** 稀疏度：约每这么多个候选格放一个；越大越稀疏。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "1"))
+ 	int32 OneEveryNCells = 4;
+@@ -43,11 +40,11 @@ struct DEMO_API FZeroEscapePlacementRule
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement", meta = (ClampMin = "0.0"))
+ 	float LateralSpacing = 300.0f;
+ 
+-	/** 避开 Start/Exit 及其相邻格，避免一出生就命中或堵住出口。 */
++	/** 避开玩家、追猎者、Exit 及其同层相邻格，避免出生命中或堵住出口。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+ 	bool bAvoidStartExitNeighbors = true;
+ 
+-	/** 仅放在直走的走廊格（排除拐角/T型/十字/死胡同），避免横向并排挡不住路。 */
++	/** 仅放在直走普通格（排除拐角/T 型/十字/死胡同）。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Placement")
+ 	bool bStraightCorridorOnly = true;
+ 

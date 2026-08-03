@@ -1,16 +1,15 @@
 # Current Task
 
-- 当前目标：继续拟定 PCG 多层关卡的完整实现代码；正式 Plan 已获用户批准，但功能 C++、DataAsset、蓝图和关卡尚未获落盘授权。先把关键数据、楼梯/高天花板房间放置、逐层二维 WFC、HydroLab 表现和正式开局流程全部展示清楚，再讨论分步实现。
-- 权威记录：`DOC/DailyPlan/2026-08-03-PCG多层关卡正式实施计划.md` 与 `claude/tasks/active/TASK-20260802-001-PCG多层WFC新方案讨论.md`。用户后续纠正必须同步更新这两处和本记忆，不得继续引用被覆盖的旧讨论。
-- 已确认架构：先完整放置跨层楼梯/高天花板房间并冻结占用、净空和开口，再把每层结果转成固定格、禁用格和固定边，分别复用现有二维 WFC；最后合并同层边与楼梯内部跨层连接，只做一次整栋通行图遍历。不改首版二维 WFC 核心算法或接口。
-- 尺寸：`GridSize` 来自每局 DataAsset，可频繁调整；`20×12`、`24×16` 都不是生产合同或真实资产固定测试值。距离比例按本局实际尺寸派生。固定合成测试夹具可以继续使用自己的尺寸。
-- 楼层与楼梯：首版覆盖 2/3/4 层，每个难度各自保存楼层数权重；每对相邻楼层至少一座双层楼梯。必需楼梯优先相隔尽量远并倾向地图边缘；额外楼梯逐座最大化到已有玩家出生点、Exit 和楼梯口的最近距离，数量/概率/分离比例均可按难度配置。贯通三层的楼梯间最多一座，只是额外捷径，不能替代相邻楼层必需双层楼梯。
-- 高天花板房间：按难度配置整栋最低数量、目标数量权重、每层上限和间距；允许某层为零。它的上层净空与实体占用必须分开记录。
-- 出生与终点：玩家和追猎者都在一楼（楼层索引 0），Exit 固定在本局最高层。
-- 旧代码：旧 `RoomCount/RoomSizeTiles` 整链删除；但 `RegionKind` 目前被 GameMode 和 Population 使用，必须先迁移到明确出生结果和普通玩法对象候选查询，再删除旧枚举/字段。
-- 导航：Level0 已验证 12/12 正式隐藏坡面、连续 `RecastNavMesh` 和真实追猎者双向通行；取消一次性导航实验源码。正式 PCG 运行时差异用真实楼梯 HISM 验证，临时 Actor 最终为 0。正式每局只在导航更新完成后做一次有上限的代表点路径存在性检查，不使用 Tick。
-- 当前进度：只修改了正式 Plan、任务卡和项目记忆；未修改任何功能源码或资产。正在起草多层类型、DataAsset 字段和完整结构放置代码。
-
-<!-- written by shiqiqiwang at 2026-08-03 08:40 UTC -->
-
-- 顶层高天花板房间：Level0 V2 的 L3 已证明顶层也需要支持。只有上方仍存在实际生成楼层时才写入净空格；顶层不制造越界楼层地址，高顶和屋面由房间表现配方负责。
+- 当前目标：PCG 多层关卡正式 Plan 已批准，整套拟实现代码预览已完成，等待 Code Review。补丁位于 `claude/proposals/2026-08-03-PCG-MultiFloor-CodePreview/`；审查通过且用户再次明确允许前，不修改正式功能 `Source/`、`Content/` 或 `Config/`。
+- 权威记录：`DOC/DailyPlan/2026-08-03-PCG多层关卡正式实施计划.md`、`claude/tasks/active/TASK-20260802-001-PCG多层WFC新方案讨论.md` 与代码预览目录。
+- 补丁顺序：`01-data-contract-core.patch` → `02-multifloor-layout.patch` → `03a-presentation.patch` → `03b-runtime-navigation.patch` → `03c-gameflow-population.patch`。
+- 架构：先完整放置跨层楼梯/高天花板房间并冻结占用、净空、开口和开口外普通连接格，再把各层投影给现有二维 WFC；最后合并同层与楼梯内部跨层连接，一次验收整栋通行图。不做三维 WFC。
+- 尺寸与楼层：每局从 DataAsset 读取实际 `GridSize`；首版 2/3/4 层按难度权重选择。玩家与追猎者在一楼，Exit 在最高层。
+- 楼梯：每对相邻楼层至少一座必需双层楼梯；必需端点先扩大每层路线跨度，靠边只是次级偏好。额外楼梯按楼层对独立抽取，再用 Seed 决定轮转起点、按轮次公平消耗整栋上限，逐座远离全部已有端点。贯通三层的楼梯间最多一座，只是额外捷径，不能替代必需楼梯。
+- 高天花板房间：整栋最低数、目标权重、每层上限和间距按难度配置；任意层可为零，顶层可生成。间距比较同层实际 Walkable 占地轮廓；只有真实上层存在时才占用上层净空。
+- 旧链：删除旧 `RoomCount/RoomSizeTiles/GeneratedRoom`；GameMode 和 Population 先迁移到明确出生结果与普通玩法候选查询，再删除 `RegionKind/RegionId`。
+- 导航：Level0 已验证正式隐藏坡面，不创建临时导航实验。正式 HISM 提交后事件驱动等待目标 `RecastNavMesh`，不使用 Tick 或全局 Build。导航查询没有固定 10ms 或其他毫秒门槛；最多检查 20 个代表点、19 次实际路径，只记录查询数、访问节点与耗时。可配置的 10 秒仅是防止异步等待永久锁死的导航构建超时，不是性能目标。
+- 事件边界：`OnNavigationGenerationFinished` 不携带 PCG 操作编号；操作编号只过滤旧 Timer/重复终态。成功仍依赖单 Generator 单局、目标导航数据、全部几何已提交和最终路径存在性检查。
+- GameMode/Population：请求前绑定并锁输入；Generator 最终成功后才放置玩家、追猎者、Exit，显式调用 Population、绑定死亡/胜负并解锁。Population 没候选或整数密度目标为零是合法跳过；配置、查询、加载或实际 Spawn 失败才原子回滚。
+- 隔离验证：五片补丁在全新副本中顺序通过 apply check、实际应用和 diff check；UE 5.8 UHT 与 Demo 模块编译通过，生成 `UnrealEditor-Demo.lib/.dll`，无 Demo 编译警告；`Demo.PCG` 24/24、`Demo.GameFlow.AsyncSetupGate` 1/1 通过。完整 Build 只因正在运行的 Editor 锁定引擎 `UnrealEditor-NetCore.dll` 返回失败，发生在 Demo DLL 已生成后。
+- 未验证：正式资产迁移、真实运行时 `RecastNavMesh`、PIE、玩家行走、追猎者跨层移动和用户验收均尚未执行。
