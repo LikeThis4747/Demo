@@ -16,10 +16,11 @@
 - [x] 独立 Population 层；支持区域、Start/Exit 邻域规避、直走廊筛选、横向并排和 Z 偏移
 - [x] 历史 UE 5.8 构建、Demo.PCG 19/19 与 288/288 Seed Sweep
 - [x] Level0 三层静态样板 V2 第一轮精修：V1 冻结 1836、V2 保存重载 1857；外墙、斜栏杆、平台护栏、高厅和 Preview 标记已静态复核
+- [x] Level0 V2 楼梯导航原型：中央塔 4 段、A/B/C/D 各 2 段隐藏坡面，四处尾栏缺口闭合；Recast 与真实 BP_Pursuer 全部双向路线通过，保存重载后 12 段持久化
 - [ ] 当前 18 项 Demo.PCG、完整构建与 Seed Sweep 回归基线
 - [ ] 至少 10 Seed 玩家路线、接缝、碰撞、净空与 Start→Exit 验收
 - [ ] Runtime 动态导航与真实追猎者多 Seed 寻路证据；Level0 当前导航体 X=-17600..22400 cm，不覆盖约 X=45000 cm 的 V2
-- [ ] Level0 V5、三层 V2 的玩家/Recast/真实追猎者验收，以及多层 WFC 数据合同与求解器方案确认
+- [ ] Level0 V5 与 V2 的玩家手动实走验收，以及多层 WFC 数据合同与求解器方案确认；V2 Recast 与真实追猎者双向验证已通过
 - [ ] 目标机软件 Lumen 与无 Lumen 室内补光双档验收
 
 ## M2 玩法压力与追猎者
