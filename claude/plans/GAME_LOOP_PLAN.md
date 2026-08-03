@@ -58,7 +58,7 @@
 - 难度到底影响什么（目前只影响 WFC 权重）：做胜负时再定要不要挂更多。
 - 结算/暂停 UI 的具体字段与美术：做到阶段二再定。
 - ~~L_PCG_RuntimeTest 是否删除：阶段一验证后再决定。~~ **已决定：2026-08-03 删除。**
-- GameState vs 直接在 GameMode 里判胜负：阶段三落地时再定要不要独立 GameState。
+- ~~GameState vs 直接在 GameMode 里判胜负：阶段三落地时再定要不要独立 GameState。~~ **已决定：使用独立 `AZeroEscapeGameState` 作为局状态唯一真相源，2026-08-03 落地。**
 
 ## 5. 交接备忘
 
@@ -86,8 +86,19 @@
   - 排查记录：陷阱未生成根因=`L_Game` Populator.Generator=None + Generator.TriggerMode=BeginPlay 导致重复生成，已修复（详见 TASK-20260731-003）
 - [x] 清理（2026-08-03）：删除 `L_PCG_RuntimeTest` + `BP_ZeroEscapePrototypeRoundFlow` + C++ `ZeroEscapePrototypeRoundFlow.h/.cpp`；保留 `PrototypeGameMode` 给 Level0；完整构建通过
 
-### 阶段二：重开/流转/暂停（未开始）
-### 阶段三：伤害/胜负结算（未开始）
+### 阶段三：伤害/胜负结算（✅ 核心已完成）
+- [x] C++ `AZeroEscapeGameState` — 局状态机(`InProgress/Won/Lost` + `OnRoundStateChanged` 广播),作为胜负唯一真相源
+- [x] C++ `AZeroEscapeExitVolume` — 出口 Actor(StaticMesh 占位 + 球形触发器),玩家到达广播 `OnExitReached`
+- [x] C++ `HealthComponent` 加 `OnHealthDepleted` 委托,归零时广播一次
+- [x] C++ `ZeroEscapeGameMode` — `PlaceExit` + `BindPlayerDeath` + 两个 Handler,转发胜负触发源到 GameState
+- [x] 蓝图:新建 `BP_ZeroEscapeGameState` / `BP_ZeroEscapeExitVolume`(Mesh=Sphere*0.5);`BP_ZeroEscapeGameMode` 配置 `GameStateClass` + `ExitActorClass`(MCP 核实)
+- [x] PIE 验证双链(2026-08-03):
+  - 胜利链:玩家进入出口触发器 → `ZE_ROUND_RESULT result=Win` ✓
+  - 失败链:玩家生命归零 → `ZE_ROUND_RESULT result=Lost` ✓
+- [ ] 结算 UI 接入:订阅 `OnRoundStateChanged`,胜显示胜利界面、负显示失败界面(归入阶段二一起做)
+- [ ] 胜负后果:停输入/暂停/自动重开(归入阶段二一起做)
+
+### 阶段二：重开/流转/暂停（未开始，下一个）
 
 ### 关键资产路径备忘（MCP 已核实）
 - Generator 蓝图：`/Game/ZeroEscape/Generation/BP_ZeroEscapeRuntimeLevelGenerator`

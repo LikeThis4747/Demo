@@ -29,3 +29,9 @@ WFC/Generator 是空间结果的唯一 Owner；Population 只消费只读空间�
 
 ## ADR-010：楼梯宏模块使用单一平滑 Pawn/Recast 行走面
 HydroLab 楼梯的可见踏步只负责外观与非 Pawn 碰撞，并忽略 Pawn、关闭导航影响；每一跑随宏模块生成一块不可见坡面，独占 Pawn 阻挡与 Recast 采样，同时忽略 Visibility/Camera。转向平台保持真实水平地板。玩家在当前约 34.90° 配方中关闭 Character Movement 的 Maintain Horizontal Ground Velocity，避免沿坡速度突增。该配方属于项目模块合同，不是 UE 官方 WFC 概念；最终仍需玩家手感验收。
+
+<!-- written by shiqiqiwang at 2026-08-03 08:37 UTC -->
+
+
+## ADR-011：多层 PCG 先放完整跨层结构，再逐层复用二维 WFC
+首版多层关卡不改成统一三维 WFC。生成器先按 Seed 和难度完整放置双层楼梯、贯通三层的楼梯间与高天花板房间，冻结各层可走格、实体占用、净空和开放口，再把每层约束交给现有二维 WFC，最后合并楼梯内部跨层连接并一次验收整栋可达。每对相邻楼层至少一座双层楼梯；贯通三层的楼梯间只能额外生成。玩家与追猎者位于一楼，Exit 位于最高层。GridSize 是 DataAsset 可调值，不得写成固定生产合同。旧 Room 链删除；RegionKind 必须先迁移 GameMode/Population 消费者再删除。Level0 已验证的隐藏坡面是正式楼梯内部构件，不再创建一次性导航实验源码。
