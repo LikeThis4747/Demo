@@ -2,7 +2,7 @@
 
 > 状态：讨论稿。只描述"大概要做什么"，不锁死实现细节；边做边按需求调整。
 > Owner：本对话（完成"一局游戏构成的要件"）。Code review 由另一对话负责。
-> 最后更新：2026-07-30
+> 最后更新：2026-08-03（更新：RoundFlow 退役、测试图清理、阶段一验证状态）
 
 ## 0. 目标一句话
 
@@ -14,7 +14,7 @@
 - **关卡分离**：`Level0` 永久做调试场（不动）；正式游戏用新建的干净关卡。
 - **重开方式**：统一走 `OpenLevel` 整关重载，不做原地清理重生成。理由：世界重建天然归零，省清理代码。
 - **参数传递**：用 `UGameInstance` 子类跨关卡持有 Seed + 难度（复用现成的 `FZeroEscapeGenerationRequest`）。
-- **删除 RoundFlow**：其职责错位（关卡 Actor 却干开局编排 + 局状态）。拆分为 GameMode(开局编排) + GameState(局状态/胜负)。等新流程验证后再删。
+- **删除 RoundFlow**：其职责错位（关卡 Actor 却干开局编排 + 局状态）。已由正式 `AZeroEscapeGameMode` 接管开局编排（读参数→驱动 PCG→摆玩家+追猎者）。**原型 `ZeroEscapePrototypeRoundFlow` 的 C++(.h/.cpp) 与蓝图 `BP_ZeroEscapePrototypeRoundFlow` 已于 2026-08-03 删除；旧测试图 `L_PCG_RuntimeTest` 同步删除。** 局状态/胜负职责后续由 `AZeroEscapeGameState` 承接（阶段三）。
 - **GameMode 新建不改造**：新建正式 `ZeroEscapeGameMode` 绑正式关卡；`PrototypeGameMode` 留给 Level0。
 - **环境光**：PCG 关卡不放静态环境光（设计需求）；运行时只生成"依赖布局"的东西（如跟走廊走的顶灯）。
 - **出生位置**：追猎者在 Start，玩家离两格出生防突脸；第一版怎么简单怎么来（直线距离）。
@@ -25,8 +25,8 @@
 关卡：
 - `L_MainMenu`：纯 UI，主菜单。
 - `L_Game`：正式游戏关卡，放 PCG Generator + 玩家出生；无静态环境光。
-- `Level0`：调试场，保留不动。
-- `L_PCG_RuntimeTest`：旧 PCG 测试图，保留或废弃（新建 L_Game 后基本不用）。
+- `Level0`：调试场，保留不动（仍使用 `BP_ZeroEscapePrototypeGameMode`，该原型 GameMode 按约定保留给 Level0）。
+- ~~`L_PCG_RuntimeTest`~~：旧 PCG 测试图，**已于 2026-08-03 删除**（阶段一验证通过，职责完全由 `L_Game` 接管）。
 
 核心类（按职责，具体成员边做边定）：
 - `UZeroEscapeGameInstance`：跨关卡存本局请求参数（Seed/难度）。
@@ -57,7 +57,7 @@
 - "两格"是直线距离还是沿路径：先直线，手感不行再说。
 - 难度到底影响什么（目前只影响 WFC 权重）：做胜负时再定要不要挂更多。
 - 结算/暂停 UI 的具体字段与美术：做到阶段二再定。
-- L_PCG_RuntimeTest 是否删除：阶段一验证后再决定。
+- ~~L_PCG_RuntimeTest 是否删除：阶段一验证后再决定。~~ **已决定：2026-08-03 删除。**
 - GameState vs 直接在 GameMode 里判胜负：阶段三落地时再定要不要独立 GameState。
 
 ## 5. 交接备忘
@@ -68,7 +68,7 @@
 
 ## 6. 进度
 
-### 阶段一：主菜单进游戏（进行中）
+### 阶段一：主菜单进游戏（✅ 已完成）
 - [x] C++ 第1步：`UZeroEscapeGameInstance`（存 Seed/难度）— 已落盘编译通过
 - [x] C++ 第2步：`AZeroEscapeGameMode`（读参数生成PCG+摆人）— 已落盘编译通过
 - [x] C++ 第3步：`AMainMenuGameMode` + `UMainMenuWidget` — 已落盘编译通过
@@ -81,7 +81,10 @@
 - [x] WBP_MainMenu 搭建：C++ 改 BindWidget 模式（NativeConstruct 绑全部事件，零蓝图连线）；官方UMG工具搭28控件树（标题/Seed行/三按钮/设置面板含难度三键+返回），全部编译通过
   - 注：Build.cs 加了 Slate/SlateCore（OnTextCommitted 委托签名用 ETextCommit）
   - 注：C++ 难度高亮/设置面板显隐/随机Seed回填 全在 MainMenuWidget.cpp
-- [ ] PIE 验证：主菜单选参数 → 进游戏 → PCG生成 → 人物就位 ← 下一步
+- [x] PIE 验证：主菜单选参数 → 进游戏 → PCG生成 → 玩家/AI/陷阱/资源就位（用户确认通过，2026-08-03）
+  - 排查记录：玩家未生成根因=`BP_ZeroEscapeGameMode` DefaultPawnClass 指向 C++ 父类而非 `BP_ZeroEscapeCharacter`，已修复（详见 TASK-20260731-002）
+  - 排查记录：陷阱未生成根因=`L_Game` Populator.Generator=None + Generator.TriggerMode=BeginPlay 导致重复生成，已修复（详见 TASK-20260731-003）
+- [x] 清理（2026-08-03）：删除 `L_PCG_RuntimeTest` + `BP_ZeroEscapePrototypeRoundFlow` + C++ `ZeroEscapePrototypeRoundFlow.h/.cpp`；保留 `PrototypeGameMode` 给 Level0；完整构建通过
 
 ### 阶段二：重开/流转/暂停（未开始）
 ### 阶段三：伤害/胜负结算（未开始）
@@ -92,5 +95,5 @@
 - 表现配置 DA：`/Game/ZeroEscape/Generation/Presentation/DA_Presentation_SciFiHydroLab`
 - 布点器蓝图：`/Game/ZeroEscape/Generation/Population/BP_GameplayPopulator`（配 `DA_Population_Default`）
 - 追猎者蓝图：`/Game/ZeroEscape/Enemies/BP_Pursuer`
-- Generator TriggerMode 默认 ExplicitOnly（不会自动跑，靠 GameMode 触发，无双重生成风险）
-- L_PCG_RuntimeTest 实际 Actor：Generator + RoundFlow(不搬) + PlayerStart + NavMeshBoundsVolume + SkyLight_1 + GameplayPopulator + 2个地板占位(不搬)
+- Generator TriggerMode 应设为 Manual/ExplicitOnly（由正式 GameMode 显式触发，避免双重生成）
+- ~~L_PCG_RuntimeTest 实际 Actor~~：**已删除**，此条备忘作废
