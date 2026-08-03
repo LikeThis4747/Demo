@@ -10,7 +10,7 @@
 
 - 全新独立副本按 `01 → 02 → 03a → 03b → 03c` 通过应用前检查、实际应用和 `git diff --check`。
 - UE 5.8 的 UHT 与 Demo 模块编译通过，已生成 `UnrealEditor-Demo.lib/.dll`，没有 Demo 模块编译警告。完整构建命令最终只被当前运行中 Editor 对引擎 `UnrealEditor-NetCore.dll` 的文件锁阻断，发生在 Demo DLL 已生成后。
-- `Demo.PCG` Automation `24/24` 通过；额外的 `Demo.GameFlow.AsyncSetupGate` `1/1` 通过。
+- `Demo.PCG` Automation `24/24` 通过；`Demo.GameFlow.AsyncSetupGate` 与 `Demo.GameFlow.AutomaticRetryPolicy` 合计 `2/2` 通过。
 - 以上不是正式资产、真实运行时 `RecastNavMesh`、PIE、玩家或追猎者验收，Code Review 不应把这些未执行项视为已证明。
 
 ## 不可破坏的合同
@@ -23,14 +23,14 @@
 - `Walkable`、`Solid`、`Clearance` 不能混同。只有可走格进入通行图；实体和净空都投影为该层 WFC 禁用格，但最终 Plan 必须保留差异。
 - 每层继续复用二维 WFC；完整结构先放置，最终只合并一次整栋通行图。
 - 同一 Seed、难度、Profile/Presentation 版本和结构定义必须得到相同 Plan 与规范 Hash。数组输入允许重排的地方必须先用统一比较器规范化，不能依赖 `TMap/TSet` 迭代或 `FName` 进程索引。
-- 所有楼层和整栋重试共享同一组候选/回溯/求解树预算；失败不提交半张地图，不静默换 Seed。
+- 单次 Seed 求解内，所有楼层和最多四次整栋布局尝试共享同一组候选/回溯/求解树预算；失败不提交半张地图，内部尝试不静默换 Seed。GameMode 的跨 World 自动重试是另一层有界故障恢复，每次都记录确定性派生的新 Seed。
 
 ## 首轮技术安全上限
 
 - 整栋布局尝试：最多 4 次。
 - 完整结构候选检查：整栋共享 250000 次。
 - WFC：以正式 Profile 的单层候选 100000、回溯 25000、求解树 10 为基准，乘实际楼层数形成整栋共享上限；重试不刷新。
-- 运行时导航构建等待：10 秒。它只防止异步开局永久锁死，不是性能合格线；超时保留 Seed、清理并返回主菜单。
+- 运行时导航构建等待：10 秒。它只防止异步开局永久锁死，不是性能合格线；超时属于可有限换 Seed 的运行时失败，最多跨 World 重试 3 次，超过上限再清理并返回主菜单。
 - 导航代表点：最多 20 个，最多 19 次 `TestPathSync`。该上限来自四层允许的出生点、Exit、必需/额外双层楼梯及至多一座三层楼梯间的最坏配置，不按难度扩大。
 - 导航查询只记录投射数、路径数、访问节点和耗时，不用未经目标机器实测的固定毫秒门槛判废连通地图。
 - 纯数据批测的 15 秒只是停止后续批次并报告长尾的监控线，不进入 Seed 的算法分支。
@@ -40,6 +40,7 @@
 - 普通格、楼梯/高厅结构和外部共享边必须有唯一生成者；开口、栏杆、地板、墙和天花板不得双份或封死。
 - 楼梯正式使用 Level0 已验证的可见踏步与隐藏坡面配方。可见踏步不负责 Pawn 碰撞或导航；隐藏坡面阻挡 Pawn、忽略 Visibility/Camera，并影响导航。不得加入一次性探针、临时测试 Actor、全局导航 Build 或放宽 `RecastNavMesh` 参数。
 - UE 的导航完成事件只给出导航数据，不给出 PCG 操作编号。拟代码以“每个 Generator Actor 生命周期一局”、实例化前绑定目标导航数据、全部几何提交后的持久等待/终态过滤和最后的真实路径检查收口；OperationId 只用于旧 Timer 与最终报告去重。
+- `ClearGeneratedScene` 不解除 Generator 的一次性请求约束。需要换 Seed 时由 GameMode 重载显式软引用的正式游戏关卡，销毁整个旧 World；不实现同一 Actor 原地重生成。
 - 路径验收先把追猎者、玩家、Exit 和每座楼梯的去重落脚平台投射到目标导航数据，投射高度必须小于半层并校验楼层；随后用真实追猎者代理从追猎者点检查到其他点的完整路径存在性。
 - 纯值门禁测试只能证明状态过滤，不能冒充运行时 `RecastNavMesh` 完成时序或真实上下楼验收。
 
@@ -48,8 +49,15 @@
 - GameMode 请求前绑定 Generator 并锁住移动/视角；主菜单请求与直接运行 `L_Game` 的默认请求走同一流程。
 - 只有 Generator 完成逻辑、实例化、导航等待和路径验收后，GameMode 才摆放玩家/追猎者、生成 Exit、显式调用 Population、绑定死亡/胜负并开放输入。
 - Population 只查询普通玩法候选格。零候选或密度整数计算为零时跳过该规则；非法配置、候选查询失败、类加载失败或实际 Spawn 失败时清掉本轮已生成对象并让开局失败。
-- GameMode 后续任一步失败都解除委托、清理 Population/追猎者/Exit、保持输入锁定并返回显式配置的主菜单；不增加加载界面，不依赖关卡或 Actor 名称。
+- Generator 最终报告中只有布局、搜索、整栋连通、导航构建超时和最终导航路径等换 Seed 可能改变的失败允许自动重试；失败分类同时检查阶段与原因。下一 Seed 和已重试次数由现有 GameInstance 跨 World 保存，最多 3 次。固定配置、实例化、导航准备，以及玩家/追猎者/Exit/Population 装配错误均不重试。
+- GameMode 的任何失败转场都解除委托、清理 Population/追猎者/Exit、保持输入锁定，并重载显式配置的 `GameLevel` 或返回显式配置的主菜单；不增加加载界面，不依赖关卡或 Actor 名称。
 - 当前工作树已有 ResultMenu 功能，正式合并必须保留创建结算界面、暂停、UI 输入、重开/回菜单链路。
+
+## 本轮审查建议的取舍
+
+- 采纳了能直接消除歧义或重复成本的修改：一次性 Generator 注释、共享 Transform 校验、Population 重复扫描删除、两级 Spawn 预算职责注释、Planner 分节注释。
+- 自动重试只采用“有界、确定性、跨 World”这一核心方向，并按现有职责修正：GameMode 负责分类和转场，GameInstance 只保存跨 World 必需的 PendingRequest 与计数；没有新建状态子系统，也没有把所有失败都当成随机失败。
+- 不采纳 Planner 拆文件、原地重生成、加载界面、删除累计 Spawn 预算或仅比较导航投射结果。这些不解决当前阻断，且会增加新状态或削弱验收。
 
 ## Code Review 通过后的资产迁移
 
@@ -61,6 +69,7 @@
   - 录入三类完整结构配方、四向构件、开口收边、栏杆、层高及每跑隐藏坡面。
 - `/Game/ZeroEscape/Generation/Population/DA_Population_Default`
   - 删除 `TargetRegionKind`，继续配置普通候选格的密度、直走过滤和出生/Exit 邻格避让。
+- `BP_ZeroEscapeGameMode` 同时配置 `MainMenuLevel` 和 `GameLevel` 两个软关卡引用，禁止写死 `L_MainMenu`/`L_Game` 路径。
 - 编译并保存正式 Generator、Population、GameMode 蓝图，再只修改 `L_Game` 中相关装配；Level0 只读作为配方证据。
 
 ## 正式落盘后的最低验证顺序
@@ -70,5 +79,5 @@
 3. 用正式 DataAsset 生成第一座双层楼梯，核对 HISM、碰撞、栏杆、隐藏坡面、目标 `RecastNavMesh` 完成事件和真实双向路径。
 4. 扩到其他旋转、三层楼梯间、高厅和四层最坏组合。
 5. Easy/Normal/Hard 各 300 个纯数据 Seed，记录成功率、每层与整栋预算、P50/P95/P99 和失败阶段。
-6. 从 `L_MainMenu` 连续进入 `L_Game`，验证等待期间输入、玩家/追猎者/Exit、Population、胜负和失败回菜单；再用玩家胶囊和真实追猎者做代表 Seed 双向实走。
+6. 从 `L_MainMenu` 连续进入 `L_Game`，验证等待期间输入、玩家/追猎者/Exit、Population、胜负、可恢复失败的有限重试、配置失败直接回菜单；再用玩家胶囊和真实追猎者做代表 Seed 双向实走。
 7. 用户实际行走验收前只能标记为“待用户验收”，不能标记完成。

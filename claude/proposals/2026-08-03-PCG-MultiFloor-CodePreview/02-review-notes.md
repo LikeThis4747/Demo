@@ -3,8 +3,8 @@
 ## 状态与边界
 
 - 本文件夹内容是审查用代码预览；没有把补丁应用到 `Source/`、`Content/` 或 `Config/`。
-- 应用顺序固定为：`01-data-contract-core.patch` → `02-multifloor-layout.patch` → `03a/03b` 及后续整合补丁。
-- 已执行 `01` 与 `02` 同时输入的 `git apply --check --recount --whitespace=error-all`，文本应用检查通过；尚未进行 C++ 编译、Automation、Editor、PIE、导航或玩家行走验收。
+- 应用顺序固定为：`01-data-contract-core.patch` → `02-multifloor-layout.patch` → `03a-presentation.patch` → `03b-runtime-navigation.patch` → `03c-gameflow-population.patch`。
+- 复审版五片补丁已在全新独立副本中顺序通过应用前检查、实际应用和应用后 `git diff --check`；UE 5.8 UHT、Demo 模块编译、`Demo.PCG 24/24` 与 `Demo.GameFlow 2/2` 通过。尚未进行正式 Editor、PIE、真实导航或玩家行走验收。
 - 本补丁不实现或试验 RecastNavMesh，不增加临时导航 Actor/命令，也没有任何固定毫秒导航门槛。导航观测与最多 `20` 个点、`19` 条路径属于后续运行时补丁。
 
 ## 本补丁实际做什么

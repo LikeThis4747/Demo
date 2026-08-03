@@ -21,12 +21,6 @@ namespace ZeroEscapeLevelSetup
 	const FLinearColor NormalColor(0.16f, 0.21f, 0.28f, 1.0f);
 }
 
-ULevelSetupWidget::ULevelSetupWidget()
-{
-	// 默认隐藏；宿主显示时设 Visible。
-	SetVisibility(ESlateVisibility::Collapsed);
-}
-
 void ULevelSetupWidget::NativeConstruct()
 {
 	Super::NativeConstruct();

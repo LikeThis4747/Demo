@@ -1,6 +1,13 @@
 # 2026-08-03 PCG 多层关卡代码预览（Code Preview）审查报告
 
--审查对象：`claude/proposals/2026-08-03-PCG-MultiFloor-CodePreview/` 下5 个补丁（01、02、03a、03b、03c）
+> **处理状态：已完成（2026-08-03）。** 本报告的建议没有被整体接受；下列内容记录负责拟代码的 AI 结合当前源码、范围和验证成本后的独立取舍。复审版仍只在 `claude/proposals/2026-08-03-PCG-MultiFloor-CodePreview/`，未应用到正式 `Source/Content/Config`。
+>
+> - **采纳**：补清 Generator 单 Actor 生命周期只接受一次请求、`ClearGeneratedScene` 不解除该约束；合并两份完全重复的正 Scale Transform 校验；删除 Population 对 Generator 已保证合法的 Transform 再做一次 O(n) 扫描；保留单规则与整局累计两级 Spawn 预算并说明差异；Planner 只补分节注释。
+> - **修正后采纳**：可恢复失败使用“确定性换 Seed + 重载显式游戏关卡”的有限重试。没有采用本文“只动 GameMode”的限定，因为重试次数和 PendingRequest 必须由现有 GameInstance 跨 World 保存；失败分类同时检查 `Stage + Failure`，最多 3 次。正式游戏关卡使用蓝图配置的 `TSoftObjectPtr<UWorld> GameLevel`，没有写死 `L_Game` 路径。`CapacityInsufficient` 会受随机楼层/结构占用影响，允许有限重试；固定配置错误更早以 `InvalidConfiguration` 失败。
+> - **不采纳**：不拆分约 3700 行但职责仍内聚的 Planner；不新增状态子系统、组件、加载界面或同 World 原地重生成；不删除跨规则累计 Spawn 上限；不以端点投射或“导航岛”近似替代实际路径存在性检查。
+> - **验证**：修订后的五片补丁已在全新独立副本中顺序通过应用前检查、实际应用和应用后 `git diff --check`；UE 5.8 UHT 与 Demo 模块编译并生成 `UnrealEditor-Demo.lib/.dll`；`Demo.PCG` `24/24`、`Demo.GameFlow` `2/2` 通过。完整 Build 仍只在 Demo DLL 生成后被运行中 Editor 对引擎 `UnrealEditor-NetCore.dll` 的文件锁阻断。真实资产、PIE、`RecastNavMesh`、玩家和追猎者验收尚未执行。
+
+- 审查对象：`claude/proposals/2026-08-03-PCG-MultiFloor-CodePreview/` 下 5 个补丁（01、02、03a、03b、03c）
 - 审查性质：这是**代码预览补丁（*.patch）**，尚未落盘到 `Source/`；本报告只做静态阅读审查，未编译、未 PIE。
 - 审查视角：独立审查，不完全采信补丁作者自带的 `CODE_REVIEW_PROMPT.md` 结论，重点找冗余/绕过/测试假成功，并质疑方案本身。
 - 结论速览：**整体质量高、职责清晰、确定性处理扎实，几乎没有死代码/调试残留/绕过逻辑。** 主要问题不在"写了脏代码"，而在**方案层面的两个取舍**和**几处轻微冗余**，见下。

@@ -12,7 +12,7 @@
 
 当前 `ZeroEscapeGameMode.h/.cpp` 已包含用户未提交的 ResultMenu 改动。这些改动属于审查基线，不是补丁可以覆盖的旧代码；请专门核对三方合并结果是否完整保留结算界面逻辑。
 
-提交审查前已有以下隔离证据：五片补丁顺序检查、实际应用与 `git diff --check` 通过；UE 5.8 UHT 和 Demo 模块编译通过并生成 DLL；`Demo.PCG` `24/24`、`Demo.GameFlow.AsyncSetupGate` `1/1` 通过。请继续审查逻辑与架构，不要把这些证据误写成正式资产、真实 `RecastNavMesh`、PIE 或玩家验收。
+提交本轮复审前已有以下隔离证据：五片补丁顺序检查、实际应用与应用后 `git diff --check` 通过；UE 5.8 UHT 和 Demo 模块编译通过并生成 DLL；`Demo.PCG` `24/24`、`Demo.GameFlow.AsyncSetupGate` 与 `Demo.GameFlow.AutomaticRetryPolicy` 合计 `2/2` 通过。请继续审查逻辑与架构，不要把这些证据误写成正式资产、真实 `RecastNavMesh`、PIE 或玩家验收。
 
 ## 重点审查
 
@@ -29,7 +29,10 @@
 - 导航完成事件不带 PCG 操作编号。请检查代码是否如实只用 OperationId 防旧 Timer/最终报告，而没有虚构事件归属；提交期间事件、目标导航数据、单 Actor 单局、重复回调、超时、EndPlay 和清理是否 fail-closed。
 - 代表点是否有真实的 20 点/19 路径硬上限，投射高度是否避免吸附到错误楼层，路径查询是否使用真实追猎者代理；代码不得用固定毫秒阈值判废一张连通地图。
 - GameMode 是否请求前绑定并锁输入，只在最终导航成功后依次放置玩家/追猎者、Exit、显式调用 Population、绑定死亡与胜负并开放输入；主菜单请求和直接运行 `L_Game` 是否走同一流程。
+- 自动重试是否只接受换 Seed 可能改变的 `Stage + Failure` 组合；固定配置、实例化和导航准备错误是否仍 fail-closed。GameInstance 中的次数与 PendingRequest 是否原子推进并在新显式请求时归零；最多 3 次后是否停止；下一 Seed 是否可复现且不改变难度。
+- 重试是否始终通过蓝图显式配置的 `TSoftObjectPtr<UWorld> GameLevel` 创建新 World，且没有写死 `L_Game` 路径、同 Actor 原地重生成、新状态子系统或加载界面。`ClearGeneratedScene` 是否如注释所述只清理而不重新开放 Generator。
 - Population 的零候选/零目标是否成功跳过；配置、候选查询、类加载或 Spawn 失败是否清掉本轮全部对象。失败回主菜单、重复回调和 EndPlay 是否不留下半局 Actor 或委托。
+- 请确认被保留的两级 Spawn 预算确实分别约束单条规则和跨规则累计总量；不要仅因常数相同就要求删除其中一层。Planner 目前只增加分节注释，除非发现具体职责错误或无法测试的耦合，不以文件行数本身要求扩张为多文件重构。
 - 自动化是否只证明纯合同，不把纯单元测试冒充真实 `RecastNavMesh`、角色胶囊、追猎者或玩家验收。
 
 ## 报告格式

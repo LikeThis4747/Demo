@@ -33,8 +33,6 @@ class DEMO_API ULevelSetupWidget : public UUserWidget
 	GENERATED_BODY()
 
 public:
-	ULevelSetupWidget();
-
 	virtual void NativeConstruct() override;
 
 	/** 用本局请求初始化种子/难度初值（宿主打开子层时调）。 */

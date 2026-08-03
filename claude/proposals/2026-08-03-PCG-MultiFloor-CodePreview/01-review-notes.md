@@ -5,13 +5,13 @@
 - 补丁：`01-data-contract-core.patch`
 - 范围：多层纯数据类型、逻辑 DataAsset、集中配置校验、解析后的纯值输入、随机子流、规范 Hash，以及两项不依赖 World/WFC 的自动化。
 - 本文件和补丁都只是审查稿。没有修改 `Source/`、`Content/`、`Config/` 或任何 UE 资产。
-- 已在当前工作树执行：
+- 本片最初曾单独执行：
 
 ```text
 git apply --check -- claude/proposals/2026-08-03-PCG-MultiFloor-CodePreview/01-data-contract-core.patch
 ```
 
-结果通过。它只证明 unified diff 能应用到当前源码，不是 C++ 构建或 UE 自动化证据。
+结果通过。随后复审版五片补丁已在全新独立副本中顺序实际应用，并完成 UE 5.8 UHT、Demo 模块编译、`Demo.PCG 24/24` 和 `Demo.GameFlow 2/2`；完整边界见 `README.md`。这些仍不是正式资产、PIE 或真实导航验收。
 
 ## 已冻结的数据含义
 

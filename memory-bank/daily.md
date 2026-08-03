@@ -102,3 +102,14 @@
 - 修正结构开口外普通连接格保护、额外楼梯跨楼层公平分配、高天花板房间按实际 Walkable 占地间距、HISM 分组批量提交、Population 零目标合法跳过及导航事件归属表述。
 - 隔离验证：五片顺序应用与 diff check 通过；UE 5.8 UHT 与 Demo 模块编译/DLL 链接通过；Demo.PCG 24/24、Demo.GameFlow.AsyncSetupGate 1/1 通过。
 - 正式 Source/Content/Config 未应用方案；正式资产迁移、真实 RecastNavMesh、PIE、玩家/追猎者验收等待 Code Review 和用户再次授权。
+
+<!-- written by shiqiqiwang at 2026-08-03 11:59 UTC -->
+
+
+## 2026-08-03 — PCG 代码预览首轮审查处理
+
+- 独立核对首轮审查，没有照单全收。采纳 Generator 一次性契约说明、Transform 校验合并、Population 重复扫描删除、两级 Spawn 预算职责注释和 Planner 分节注释。
+- 将自动重试修正为现有 GameMode + GameInstance 的有限跨 World 恢复：只重试 Seed 可能改变的生成/最终导航失败，下一 Seed 固定派生，最多 3 次；正式游戏关卡由蓝图软引用配置，不写死路径。
+- 拒绝拆分职责内聚的 Planner、新状态子系统/组件、加载界面、同 World 原地重生成、删除累计 Spawn 预算和弱化实际路径验收。
+- 复审版五片补丁顺序应用与 diff check 通过；UE 5.8 UHT、Demo 模块编译/DLL 生成通过；Demo.PCG 24/24、Demo.GameFlow 2/2 通过。完整 Build 仅受运行中 Editor 的引擎 DLL 文件锁影响。
+- 首轮审查已标记完成并归档；正式 Source/Content/Config 未应用该方案，真实资产、PIE、RecastNavMesh、玩家与追猎者验收仍待落盘授权后执行。
