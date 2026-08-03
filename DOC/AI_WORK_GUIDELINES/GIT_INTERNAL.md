@@ -1,6 +1,6 @@
 # 内部 Git 仓库使用指南
 
-本项目使用腾讯内部工蜂（TGit）作为唯一远程仓库，**禁止推送到 GitHub 或其他外部平台**。
+本项目使用腾讯内部工蜂（TGit）作为远程仓库。
 
 ## 仓库信息
 
@@ -31,21 +31,12 @@ git commit -m "你的提交信息"
 git push origin main
 ```
 
-## 迁移旧 GitHub remote（已完成，仅作存档）
-
-若本地仍指向旧 GitHub 地址，执行：
-
-```bash
-git remote set-url origin git@git.woa.com:shiqiqiwang/Demo.git
-git push -u origin main
-```
-
 ## AI 执行 Git 操作须知
 
 - 所有 commit/push 操作默认以 `git@git.woa.com:shiqiqiwang/Demo.git` 为目标。
-- 执行推送前，检查 `git remote get-url origin`，确认指向工蜂，**不得推送到 github.com**。
+- 执行推送前，检查 `git remote get-url origin`，确认指向工蜂。
 - 若 remote 不正确，先执行 `git remote set-url origin git@git.woa.com:shiqiqiwang/Demo.git` 再推送。
-- 如需创建新的远程分支，通过工蜂网页或 UGit 客户端操作，不使用 GitHub API。
+- 如需创建新的远程分支，通过工蜂网页或 UGit 客户端操作。
 
 ## 夜间自动任务
 

@@ -145,7 +145,7 @@ AI 可以清理自己在 `claude/` 内创建且已无用的文件。用户文件
 3. 将 AI 自己的经验压缩为最多三条；只有可复用且已验证的经验才进入 `systemPatterns.md`。
 4. 只读检查代码和可通过 MCP 读取的蓝图/资产，输出按优先级排列的下一步建议。
 5. 考虑三周工期：优先推荐新玩法内容、交付阻塞项和高回报改进；低价值重构放到“可延后”。
-6. 对白天已有改动执行一次 Git commit 和 push；不得为了让提交成功而修改项目文件。推送目标为**内部工蜂**，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。执行前须确认 `git remote get-url origin` 指向 `git@git.woa.com:shiqiqiwang/Demo.git`，**禁止推送到 GitHub**。
+6. 对白天已有改动执行一次 Git commit 和 push；不得为了让提交成功而修改项目文件。推送目标为**内部工蜂**，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。执行前须确认 `git remote get-url origin` 指向 `git@git.woa.com:shiqiqiwang/Demo.git`。
 7. commit/push 失败时，在夜间报告和 daily 中记录准确原因，并在下一次用户会话首先提醒。
 
 ### 夜间报告

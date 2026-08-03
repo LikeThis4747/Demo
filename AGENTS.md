@@ -28,7 +28,7 @@
 - 功能实现遵循"讨论方案 → 确定方案 → 对话中展示拟实现代码 → 用户明确允许后落盘 → 联合验证与用户验收"；未经验收不得标记完成，细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`。
 - 对外交流和正式文档不得把 AI 临时创造的简称或项目内部命名当作 UE 官方概念、标准算法或行业通用术语。术语首次出现时必须说明其来源类别并用直白中文解释；无法确认来源时不用该术语，也不得默认用户已经理解。细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md` 的“术语与表达规范”。
 - 优先采用满足目标的最直接、最小方案。若项目规则或当前授权与该方案冲突，必须先向用户说明冲突、直接方案（包括所需人工操作或许可）、影响与替代方案并询问选择；不得默认用户不愿操作，也不得自行增加非必要的代码、资产副本、映射、脚本或流程来规避。只有用户明确选择复杂替代方案后，才可实施该方案。
-- **Git 推送唯一目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`；禁止推送到 GitHub 或任何外部平台。执行 push 前必须核查 remote，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。**
+- **Git 推送目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`。执行 push 前必须核查 remote，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。**
 - 默认关闭 Tick；优先事件、Delegate、Timer、AnimNotify、碰撞、感知和行为树。
 - 不依赖组件名、Actor 名、Widget 函数名或关卡名格式实现逻辑。
 - 不修改无关文件；未经用户明确许可不修改第三方素材包；不把 Editor-only 依赖加入 Runtime 模块。
