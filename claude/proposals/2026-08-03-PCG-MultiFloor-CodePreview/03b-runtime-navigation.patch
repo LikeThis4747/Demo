@@ -1,0 +1,1791 @@
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeRuntimeNavigationGate.h b/Source/Demo/Private/PCG/ZeroEscapeRuntimeNavigationGate.h
+new file mode 100644
+index 0000000..9f57bef
+--- /dev/null
++++ b/Source/Demo/Private/PCG/ZeroEscapeRuntimeNavigationGate.h
+@@ -0,0 +1,86 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapeRuntimeNavigationGate.h
++ * 职责：用纯值快照判定导航完成事件、Timer 和超时是否属于当前正式生成操作。
++ * 边界：不创建测试几何、不请求导航重建、不持有 World；Generator 仍拥有全部运行时状态。
++ */
++
++#pragma once
++
++#include "CoreMinimal.h"
++#include "UObject/ObjectKey.h"
++
++namespace ZeroEscape::LevelGeneration
++{
++	struct FRuntimeNavigationGateSnapshot
++	{
++		int64 OperationId = 0;
++		FObjectKey ExpectedNavigationDataKey;
++		bool bWaiting = false;
++		bool bGeometryRegistrationStarted = false;
++		bool bGeometrySubmitted = false;
++		bool bObservedNavigationBuild = false;
++		bool bReceivedTargetCompletion = false;
++		bool bTerminal = false;
++	};
++
++	class FRuntimeNavigationGate final
++	{
++	public:
++		/** 目标导航数据的事件只有在本次全部几何提交后才有效。 */
++		static bool AcceptCompletion(
++			const FRuntimeNavigationGateSnapshot& State,
++			int64 CallbackOperationId,
++			const FObjectKey& ReceivedNavigationDataKey)
++		{
++			return State.bWaiting
++				&& !State.bTerminal
++				&& State.OperationId > 0
++				&& CallbackOperationId == State.OperationId
++				&& State.bGeometryRegistrationStarted
++				&& State.bGeometrySubmitted
++				&& ReceivedNavigationDataKey == State.ExpectedNavigationDataKey;
++		}
++
++		/** 目标已经完成后，任意 NavData 的后续完成事件都应再次检查全局构建是否静止。 */
++		static bool ShouldRetryAfterAnyCompletion(
++			const FRuntimeNavigationGateSnapshot& State,
++			int64 CallbackOperationId)
++		{
++			return State.bWaiting
++				&& !State.bTerminal
++				&& State.OperationId > 0
++				&& CallbackOperationId == State.OperationId
++				&& State.bGeometrySubmitted
++				&& State.bReceivedTargetCompletion;
++		}
++
++		/** 仅当前操作、目标完成事件已到达且导航已静止时进入路径验收。 */
++		static bool CanValidate(
++			const FRuntimeNavigationGateSnapshot& State,
++			int64 CallbackOperationId,
++			bool bNavigationStillBuilding)
++		{
++			return State.bWaiting
++				&& !State.bTerminal
++				&& State.OperationId > 0
++				&& CallbackOperationId == State.OperationId
++				&& State.bGeometrySubmitted
++				&& State.bObservedNavigationBuild
++				&& State.bReceivedTargetCompletion
++				&& !bNavigationStillBuilding;
++		}
++
++		/** 超时 Timer 只能终止创建它的当前等待操作，旧 Timer 与重复 Timer 都无效。 */
++		static bool AcceptTimeout(
++			const FRuntimeNavigationGateSnapshot& State,
++			int64 CallbackOperationId)
++		{
++			return State.bWaiting
++				&& !State.bTerminal
++				&& State.OperationId > 0
++				&& CallbackOperationId == State.OperationId;
++		}
++	};
++}
+diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp
+new file mode 100644
+index 0000000..c67e10c
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp
+@@ -0,0 +1,113 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapeRuntimeNavigationTests.cpp
++ * 职责：验证正式导航等待状态对旧操作、错误导航数据、重复回调和超时的过滤合同。
++ * 边界：不生成临时坡面或探针；实际动态 RecastNavMesh 仍由正式楼梯 HISM 的 PIE 验收证明。
++ */
++
++#include "PCG/ZeroEscapeGenerationAssets.h"
++
++#if WITH_DEV_AUTOMATION_TESTS
++
++#include "Misc/AutomationTest.h"
++#include "PCG/ZeroEscapeRuntimeNavigationGate.h"
++#include "UObject/UObjectGlobals.h"
++
++namespace ZeroEscape::LevelGeneration::Tests
++{
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeRuntimeNavigationGateTest,
++		"Demo.PCG.Runtime.NavigationOperationGate",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeRuntimeNavigationGateTest::RunTest(const FString& Parameters)
++	{
++		(void)Parameters;
++		UObject* ExpectedNavigationDataIdentity = NewObject<UObject>();
++		UObject* OtherNavigationDataIdentity = NewObject<UObject>();
++		TestNotNull(TEXT("测试导航身份对象必须存在"), ExpectedNavigationDataIdentity);
++		TestNotNull(TEXT("错误导航身份对象必须存在"), OtherNavigationDataIdentity);
++
++		FRuntimeNavigationGateSnapshot State;
++		State.OperationId = 7;
++		State.ExpectedNavigationDataKey = FObjectKey(ExpectedNavigationDataIdentity);
++		State.bWaiting = true;
++
++		TestFalse(
++			TEXT("本轮几何注册开始前不得接受完成事件"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(ExpectedNavigationDataIdentity)));
++
++		State.bGeometryRegistrationStarted = true;
++		TestFalse(
++			TEXT("最后一组 HISM 提交前到达的目标事件不得被接受"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(ExpectedNavigationDataIdentity)));
++
++		State.bGeometrySubmitted = true;
++		TestTrue(
++			TEXT("全部 HISM 提交后的目标完成事件必须被接受"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(ExpectedNavigationDataIdentity)));
++		State.bReceivedTargetCompletion = true;
++		TestFalse(
++			TEXT("未观察到本轮导航构建时不得执行路径验收"),
++			FRuntimeNavigationGate::CanValidate(State, 7, false));
++		State.bReceivedTargetCompletion = false;
++
++		State.bObservedNavigationBuild = true;
++		TestFalse(
++			TEXT("旧操作编号不得接管当前导航事件"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 6, FObjectKey(ExpectedNavigationDataIdentity)));
++		TestFalse(
++			TEXT("其他导航数据完成不得接管当前操作"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(OtherNavigationDataIdentity)));
++		TestTrue(
++			TEXT("当前操作的目标导航数据完成事件必须被接受"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(ExpectedNavigationDataIdentity)));
++
++		State.bReceivedTargetCompletion = true;
++		TestFalse(
++			TEXT("导航仍在构建时不得执行路径验收"),
++			FRuntimeNavigationGate::CanValidate(State, 7, true));
++		TestTrue(
++			TEXT("目标先完成后，其他 NavData 的完成事件必须触发再次检查"),
++			FRuntimeNavigationGate::ShouldRetryAfterAnyCompletion(State, 7));
++		TestTrue(
++			TEXT("目标事件完成且导航静止后必须执行一次路径验收"),
++			FRuntimeNavigationGate::CanValidate(State, 7, false));
++
++		State.bTerminal = true;
++		TestFalse(
++			TEXT("进入终态后重复完成回调必须被忽略"),
++			FRuntimeNavigationGate::AcceptCompletion(
++				State, 7, FObjectKey(ExpectedNavigationDataIdentity)));
++		TestFalse(
++			TEXT("进入终态后重复路径验收必须被忽略"),
++			FRuntimeNavigationGate::CanValidate(State, 7, false));
++
++		FRuntimeNavigationGateSnapshot TimeoutState;
++		TimeoutState.OperationId = 9;
++		TimeoutState.ExpectedNavigationDataKey = FObjectKey(ExpectedNavigationDataIdentity);
++		TimeoutState.bWaiting = true;
++		TimeoutState.bGeometrySubmitted = true;
++		TestFalse(
++			TEXT("旧操作的超时 Timer 不得终止当前操作"),
++			FRuntimeNavigationGate::AcceptTimeout(TimeoutState, 8));
++		TestTrue(
++			TEXT("当前操作的十秒超时必须被接受"),
++			FRuntimeNavigationGate::AcceptTimeout(TimeoutState, 9));
++		TimeoutState.bTerminal = true;
++		TestFalse(
++			TEXT("重复超时回调必须被忽略"),
++			FRuntimeNavigationGate::AcceptTimeout(TimeoutState, 9));
++
++		return true;
++	}
++}
++
++#endif
+diff --git a/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h b/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
+index 52aaf68..480eb9f 100644
+--- a/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
++++ b/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
+@@ -2,24 +2,28 @@
+ 
+ /**
+  * @file ZeroEscapeRuntimeLevelGenerator.h
+- * 职责：拥有一局实时 Grid/WFC 生成事务、已提交结构/顶灯场景和空间结果查询。
+- * 边界：算法留在 Private/PCG；蓝图只装配 Generation/Profile 两个 DataAsset、触发并读取结果。
++ * 职责：拥有一局多层 PCG 从纯数据、场景事务到正式导航验收的完整生命周期。
++ * 边界：二维/多层求解和表现展开留在 Private/PCG；玩法对象只读取最终 Ready 结果。
+  */
+ 
+ #pragma once
+ 
++#include "AI/Navigation/NavigationTypes.h"
+ #include "CoreMinimal.h"
+ #include "GameFramework/Actor.h"
+ #include "PCG/ZeroEscapeGenerationTypes.h"
++#include "TimerManager.h"
+ 
+ #include "ZeroEscapeRuntimeLevelGenerator.generated.h"
+ 
++class ANavigationData;
+ class UHierarchicalInstancedStaticMeshComponent;
+ class USceneComponent;
+ class UZeroEscapeLevelGenerationProfile;
+ class UZeroEscapePresentationProfile;
++struct FZeroEscapeSharedGenerationBudget;
+ 
+-/** 当前同步生成事务实际使用的公开生命周期。 */
++/** WaitingForNavigation 是跨帧状态；GenerateFromRequest 返回 true 时不代表已经 Ready。 */
+ UENUM(BlueprintType)
+ enum class EZeroEscapeRuntimeGenerationState : uint8
+ {
+@@ -27,11 +31,11 @@ enum class EZeroEscapeRuntimeGenerationState : uint8
+ 	Planning = 1,
+ 	Validating = 2,
+ 	Instantiating = 3,
+-	Ready = 4,
+-	Failed = 5
++	WaitingForNavigation = 4,
++	Ready = 5,
++	Failed = 6
+ };
+ 
+-/** 生成只允许在 BeginPlay 或明确函数调用发生，禁止 Construction Script 隐式改图。 */
+ UENUM(BlueprintType)
+ enum class EZeroEscapeGenerationTrigger : uint8
+ {
+@@ -46,12 +50,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+ 	const FZeroEscapeGenerationReport&,
+ 	Report);
+ 
+-/**
+- * 实时非工具型整关 PCG 的世界边界 Actor。
+- * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM 与顶灯 Actor；
+- * 任一检查点失败都会回滚本次全部表现对象。
+- * 玩法对象、敌人、陷阱和奖励不会在这里生成；其他系统只读取 Ready 后的 Start/Exit/Rooms。
+- */
++/** 正式运行时整关生成器；只有导航路径验收成功才广播成功并进入 Ready。 */
+ UCLASS(Blueprintable)
+ class DEMO_API AZeroEscapeRuntimeLevelGenerator : public AActor
+ {
+@@ -61,123 +60,161 @@ public:
+ 	/** 创建无 Tick 的生成器和统一 GeneratedRoot。 */
+ 	AZeroEscapeRuntimeLevelGenerator();
+ 
+-	/** 使用 DefaultRequest 同步生成；拒绝重入并通过 LastReport/Delegate 提供结果。 */
++	/** 使用 DefaultRequest 发起流程；true 只表示请求被接受。 */
+ 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
+ 	bool Generate();
+ 
+-	/** 使用显式请求同步生成；请求一旦被接受，旧场景立即失效。 */
++	/** 发起显式请求；最终成功/失败只通过 OnGenerationFinished 和 Report.OperationId 判断。 */
+ 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
+ 	bool GenerateFromRequest(const FZeroEscapeGenerationRequest& Request);
+ 
+-	/** 只检查线程、World、Construction Script、重入和 EndPlay 门禁，不预跑算法。 */
++	/** GameMode 在发起请求前提供真实追猎者 CDO 的导航代理尺寸。 */
++	bool ConfigurePursuerNavigationAgent(const FNavAgentProperties& AgentProperties);
++
++	/** 检查线程、World、Construction Script、持久等待、重入和 EndPlay 门禁。 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+ 	bool CanAcceptGenerationRequest() const;
+ 
+-	/** 非生成期间幂等清空 HISM 与 Plan 并回到 Idle；忙碌时不修改状态。 */
++	/** 非生成/等待期间幂等清空场景和 Plan。 */
+ 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
+ 	bool ClearGeneratedScene();
+ 
+-	/** Ready 时返回玩家出生锚点世界 Transform。 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+-	bool GetGeneratedStartWorldTransform(FTransform& OutTransform) const;
++	bool GetGeneratedPlayerSpawnWorldTransform(FTransform& OutTransform) const;
+ 
+-	/** Ready 时返回出口锚点世界 Transform。 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+-	bool GetGeneratedExitWorldTransform(FTransform& OutTransform) const;
++	bool GetGeneratedPursuerSpawnWorldTransform(FTransform& OutTransform) const;
+ 
+-	/** Ready 时按 RegionId 稳定顺序返回全部中立房间世界 Transform。 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+-	bool GetGeneratedRoomWorldTransforms(TArray<FTransform>& OutTransforms) const;
++	bool GetGeneratedExitWorldTransform(FTransform& OutTransform) const;
+ 
+-	/** Ready 时按区域语义返回候选放置点世界 Transform（地板高度）；可排除 Start/Exit 及相邻格、只留直走廊格。 */
++	/**
++	 * 返回普通二维 WFC 格的玩法放置候选；完整结构、实体和净空从不进入此查询。
++	 * 保护区按同层曼哈顿距离计算，Transform 贴当前层地面且 X 轴沿走廊。
++	 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+-	bool GetGeneratedCellWorldTransforms(
+-		EZeroEscapeGridRegionKind RegionKind,
+-		bool bExcludeStartExitAdjacent,
++	bool GetGeneratedOrdinaryGameplayCellWorldTransforms(
++		bool bAvoidSpawnExitNeighbors,
+ 		bool bStraightCorridorOnly,
+ 		TArray<FTransform>& OutTransforms) const;
+ 
+-	/** Ready 时返回本局布局 Seed，供下游放置层复现确定性随机。 */
+ 	UFUNCTION(BlueprintPure, Category = "PCG")
+ 	int32 GetGeneratedSeed() const;
+ 
+-	/** 一次同步请求结束时广播；广播期间仍保持防重入锁。 */
++	UFUNCTION(BlueprintPure, Category = "PCG")
++	int64 GetActiveOperationId() const { return ActiveOperationId; }
++
++	/** 只在最终成功或确定失败时广播一次；导航等待中不广播。 */
+ 	UPROPERTY(BlueprintAssignable, Category = "PCG")
+ 	FZeroEscapeGenerationFinished OnGenerationFinished;
+ 
+-	/** 最近一次已结束请求的结构化报告。 */
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category = "PCG")
+ 	FZeroEscapeGenerationReport LastReport;
+ 
+-	/** 只有完整 Plan 和全部组件成功提交后才进入 Ready。 */
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category = "PCG")
+ 	EZeroEscapeRuntimeGenerationState State = EZeroEscapeRuntimeGenerationState::Idle;
+ 
+ protected:
+-	/** 根据 TriggerMode 可选生成首局。 */
+ 	virtual void BeginPlay() override;
+-
+-	/** EndPlay 时无条件使 Plan、空间查询结果与组件失效。 */
+ 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+ 
+ private:
+-	/** 内部无条件回滚 HISM、顶灯和 Plan；调用者负责合法状态转换。 */
++	/** 销毁全部已登记 HISM/灯，清空 Plan，并取消导航等待。 */
+ 	void ClearGeneratedSceneInternal();
+ 
+-	/** 把已验证逻辑 Plan 展开并事务式提交为五类结构 HISM 与可选顶灯。 */
++	/** 委托 StructureBuilder 提交 HISM，再原样生成普通格顶灯。 */
+ 	bool InstantiateValidatedPlan(
+ 		const FZeroEscapeGeneratedLevelPlan& Plan,
+ 		FZeroEscapeGenerationReport& InOutReport);
+ 
+-	/**
+-	 * 按四方向方格的棋盘奇偶性选择约半数有效格并生成顶灯。
+-	 * 每个成功 Spawn 的 Actor 会立即登记；任一失败由调用者走统一事务回滚。
+-	 */
+ 	bool SpawnCeilingLights(
+ 		const FZeroEscapeGeneratedLevelPlan& Plan,
+ 		FZeroEscapeGenerationReport& InOutReport);
+ 
+-	/** 提交最终状态与单条结构化证据后广播完成事件。 */
+-	void FinishGeneration(
+-		bool bSuccess,
+-		const FZeroEscapeGenerationReport& Report,
+-		const FZeroEscapeGenerationRequest& Request);
++	/** 在实例化前解析本次追猎者对应的 Dynamic RecastNavMesh 并先绑定完成事件。 */
++	bool PrepareNavigationWait(
++		const FZeroEscapeGeneratedLevelPlan& Plan,
++		const FZeroEscapeSharedGenerationBudget& Budget,
++		FZeroEscapeGenerationReport& InOutReport);
++
++	/** HISM 全部提交后启动事件+Timer 等待；AddInstance 自己通知导航系统。 */
++	void StartNavigationWait();
++
++	UFUNCTION()
++	void HandleNavigationGenerationFinished(ANavigationData* NavigationData);
++
++	void HandleNavigationBuildTimeout(int64 CallbackOperationId);
++	void TryCompleteNavigationWait(int64 CallbackOperationId);
++
++	/** 最多 20 个点投射，再从追猎者点执行最多 19 次 Regular TestPathSync。 */
++	bool ValidateNavigationEndpoints(FZeroEscapeGenerationReport& InOutReport);
++
++	bool BuildNavigationValidationAddresses(
++		TArray<FIntVector>& OutAddresses,
++		FZeroEscapeGenerationReport& InOutReport) const;
++
++	/** 清理事件和 Timer；不销毁场景，也不改变最终 State。 */
++	void CancelNavigationWait();
++
++	/** 写最终状态、日志和唯一完成广播；广播期间保持防重入。 */
++	void FinishGeneration(bool bSuccess, const FZeroEscapeGenerationReport& Report);
++
++	FVector AddressToLocalLocation(
++		const FZeroEscapeGeneratedLevelPlan& Plan,
++		const FIntVector& Address,
++		bool bUseAnchorHeight) const;
++	bool AddressToWorldTransform(
++		const FZeroEscapeGeneratedLevelPlan& Plan,
++		const FIntVector& Address,
++		bool bUseAnchorHeight,
++		FTransform& OutTransform) const;
+ 
+-	/** 所有结构 HISM 与空间结果的共同局部空间。 */
+ 	UPROPERTY(VisibleAnywhere, Category = "PCG")
+ 	TObjectPtr<USceneComponent> GeneratedRoot;
+ 
+-	/** BeginPlay 自动生成或仅允许外部显式触发。 */
+ 	UPROPERTY(EditAnywhere, Category = "PCG")
+ 	EZeroEscapeGenerationTrigger TriggerMode = EZeroEscapeGenerationTrigger::ExplicitOnly;
+ 
+-	/** Generate() 每次复制的稳定请求。 */
+ 	UPROPERTY(EditAnywhere, Category = "PCG", meta = (ShowOnlyInnerProperties))
+ 	FZeroEscapeGenerationRequest DefaultRequest;
+ 
+-	/** 格网、房间、路线预算和难度 WFC 权重的唯一权威配置。 */
+ 	UPROPERTY(EditAnywhere, Category = "PCG")
+ 	TObjectPtr<UZeroEscapeLevelGenerationProfile> GenerationProfile;
+ 
+-	/** 五类规范结构与可选顶灯到当前素材的直接表现绑定。 */
+ 	UPROPERTY(EditAnywhere, Category = "PCG")
+ 	TObjectPtr<UZeroEscapePresentationProfile> PresentationProfile;
+ 
+-	/** 最近一次成功提交的纯数据 Plan；失败或 Clear 后为空。 */
+ 	UPROPERTY(VisibleAnywhere, Transient, Category = "PCG")
+ 	FZeroEscapeGeneratedLevelPlan LastPlan;
+ 
+-	/** 本次实例化事务已登记的全部 HISM；创建后立即入数组以保证可回滚。 */
+ 	UPROPERTY(Transient)
+ 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> GeneratedHismComponents;
+ 
+-	/** 本次实例化事务已登记的全部顶灯；由 Generator 写入并在 Clear/失败/EndPlay 清空。 */
+ 	UPROPERTY(Transient)
+ 	TArray<TObjectPtr<AActor>> GeneratedLightActors;
+ 
+-	/** 同步重入锁；完成 Delegate 广播期间也保持为 true。 */
++	/** 本次等待的目标导航数据；仅在 WaitingForNavigation 有效。 */
++	UPROPERTY(Transient)
++	TObjectPtr<ANavigationData> ExpectedNavigationData;
++
++	FNavAgentProperties PursuerNavigationAgentProperties;
++	bool bHasPursuerNavigationAgent = false;
++
++	FZeroEscapeGenerationRequest ActiveRequest;
++	FZeroEscapeGenerationReport PendingReport;
++	double ActiveGenerationStartSeconds = 0.0;
++	double ActiveNavigationTimeoutSeconds = 10.0;
++	int32 ActiveMaxNavigationValidationPoints = 20;
++
++	FTimerHandle NavigationTimeoutTimer;
++	int64 NextOperationId = 1;
++	int64 ActiveOperationId = 0;
++	bool bNavigationWaitActive = false;
++	bool bNavigationGeometryRegistrationStarted = false;
++	bool bNavigationGeometrySubmitted = false;
++	bool bObservedNavigationBuild = false;
++	bool bReceivedTargetNavigationCompletion = false;
++	bool bNavigationWaitTerminal = false;
+ 	bool bGenerationInProgress = false;
+-
+-	/** EndPlay 开始后永久置 true，阻止销毁回调再次生成。 */
+ 	bool bEndingPlay = false;
+ };
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp b/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
+index abae6d9..68c6d4e 100644
+--- a/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
++++ b/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
+@@ -2,8 +2,8 @@
+ 
+ /**
+  * @file ZeroEscapeRuntimeLevelGenerator.cpp
+- * 职责：同步解析空间配置、运行 Grid/WFC、校验结果并事务式提交结构 HISM 与顶灯 Actor。
+- * 边界：不在 Construction Script/Tick 中生成；Actor 只消费纯值 Solver 的原子结果。
++ * 职责：同步求解/装配多层结构，随后用事件和单个超时 Timer 等待并验收正式导航。
++ * 边界：不使用 Tick、不强制全局导航 Build、不自动更换 Seed，也不创建一次性导航探针。
+  */
+ 
+ #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
+@@ -13,18 +13,24 @@
+ #include "Engine/StaticMesh.h"
+ #include "Engine/World.h"
+ #include "HAL/PlatformTime.h"
++#include "Misc/ScopeExit.h"
++#include "NavMesh/RecastNavMesh.h"
++#include "NavigationData.h"
++#include "NavigationSystem.h"
++#include "NavigationSystemTypes.h"
++#include "PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.h"
++#include "PCG/Presentation/ZeroEscapeStructureBuilder.h"
+ #include "PCG/ZeroEscapeGenerationAssets.h"
+ #include "PCG/ZeroEscapeGenerationCore.h"
+-#include "PCG/ZeroEscapeGridLayoutSolver.h"
++#include "PCG/ZeroEscapeRuntimeNavigationGate.h"
++#include "UObject/ObjectKey.h"
+ 
+ namespace LevelGen = ZeroEscape::LevelGeneration;
+ 
+-/** 结果日志是排障证据，不是玩法协议；玩法只能读取 State、Report、Plan 查询或 Delegate。 */
+ DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePCG, Log, All);
+ 
+ namespace
+ {
+-	/** 返回短枚举名并为损坏/未来枚举提供数值回退。 */
+ 	template <typename TEnum>
+ 	FString GetStableEnumName(const TEnum Value)
+ 	{
+@@ -37,7 +43,6 @@ namespace
+ 			: Name;
+ 	}
+ 
+-	/** 保证每次生成只输出一条可由日志工具稳定读取的结果记录。 */
+ 	FString MakeSingleLineLogValue(const FString& Value)
+ 	{
+ 		FString Result = Value;
+@@ -48,7 +53,6 @@ namespace
+ 		return Result;
+ 	}
+ 
+-	/** 把 Solver 输出的局部空间结果转换到 GeneratedRoot 世界空间。 */
+ 	bool ConvertLocalToWorld(
+ 		const USceneComponent& Root,
+ 		const FTransform& LocalTransform,
+@@ -59,58 +63,48 @@ namespace
+ 		{
+ 			return false;
+ 		}
+-
+ 		OutWorldTransform = LocalTransform * Root.GetComponentTransform();
+ 		return LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(OutWorldTransform);
+ 	}
+ 
+-	/** 判断两逻辑格是否重合或四方向相邻（曼哈顿距离 <= 1）。 */
+-	bool IsWithinOneStep(const FIntPoint A, const FIntPoint B)
++	bool IsWithinOneStepOnSameFloor(const FIntVector A, const FIntVector B)
++	{
++		return A.Z == B.Z
++			&& FMath::Abs(A.X - B.X) + FMath::Abs(A.Y - B.Y) <= 1;
++	}
++
++	bool IsAddressInsidePlan(
++		const FIntVector Address,
++		const FZeroEscapeGeneratedLevelPlan& Plan)
+ 	{
+-		return FMath::Abs(A.X - B.X) + FMath::Abs(A.Y - B.Y) <= 1;
++		return Address.Z >= 0
++			&& Address.Z < Plan.FloorCount
++			&& ZeroEscape::Grid::IsInside(FIntPoint(Address.X, Address.Y), Plan.GridSize);
+ 	}
+ 
+-	/** 把实例化失败写成统一报告并保留相关结构类别编号。 */
+-	bool FailInstantiation(
++	bool FailReport(
+ 		FZeroEscapeGenerationReport& Report,
++		const EZeroEscapeGenerationStage Stage,
++		const EZeroEscapeGenerationFailure Failure,
+ 		const int32 RelatedStableId,
+-		const FString& Message)
++		FString Message)
+ 	{
+-		Report.Stage = EZeroEscapeGenerationStage::Instantiation;
+-		Report.Failure = EZeroEscapeGenerationFailure::InstantiationFailed;
++		Report.Stage = Stage;
++		Report.Failure = Failure;
+ 		Report.RelatedStableId = RelatedStableId;
+-		Report.Message = Message;
++		Report.Message = MoveTemp(Message);
+ 		return false;
+ 	}
+ 
+-	/** 将结构类别映射到直接表现绑定；返回 nullptr 只表示枚举损坏。 */
+-	const FZeroEscapeStructureMeshBinding* ResolveBinding(
+-		const UZeroEscapePresentationProfile& Profile,
+-		const LevelGen::EStructurePieceKind Kind)
+-	{
+-		switch (Kind)
+-		{
+-		case LevelGen::EStructurePieceKind::Floor: return &Profile.Floor;
+-		case LevelGen::EStructurePieceKind::Ceiling: return &Profile.Ceiling;
+-		case LevelGen::EStructurePieceKind::Wall: return &Profile.Wall;
+-		case LevelGen::EStructurePieceKind::WallTopTrim: return &Profile.WallTopTrim;
+-		case LevelGen::EStructurePieceKind::Pillar: return &Profile.Pillar;
+-		default: return nullptr;
+-		}
+-	}
+-
+-	/** 每类结构创建一个稳定组件名，便于 PIE Outliner 诊断而不参与生成逻辑。 */
+-	FName GetStructureComponentName(const LevelGen::EStructurePieceKind Kind)
++	const FZeroEscapeGeneratedStructure* FindStructureByStableId(
++		const FZeroEscapeGeneratedLevelPlan& Plan,
++		const int32 StableStructureId)
+ 	{
+-		switch (Kind)
+-		{
+-		case LevelGen::EStructurePieceKind::Floor: return TEXT("GeneratedFloorHISM");
+-		case LevelGen::EStructurePieceKind::Ceiling: return TEXT("GeneratedCeilingHISM");
+-		case LevelGen::EStructurePieceKind::Wall: return TEXT("GeneratedWallHISM");
+-		case LevelGen::EStructurePieceKind::WallTopTrim: return TEXT("GeneratedWallTopTrimHISM");
+-		case LevelGen::EStructurePieceKind::Pillar: return TEXT("GeneratedPillarHISM");
+-		default: return TEXT("GeneratedUnknownHISM");
+-		}
++		return Plan.Structures.FindByPredicate(
++			[StableStructureId](const FZeroEscapeGeneratedStructure& Structure)
++			{
++				return Structure.StableStructureId == StableStructureId;
++			});
+ 	}
+ }
+ 
+@@ -132,6 +126,22 @@ void AZeroEscapeRuntimeLevelGenerator::BeginPlay()
+ 	}
+ }
+ 
++bool AZeroEscapeRuntimeLevelGenerator::ConfigurePursuerNavigationAgent(
++	const FNavAgentProperties& AgentProperties)
++{
++	if (!IsInGameThread()
++		|| bGenerationInProgress
++		|| bNavigationWaitActive
++		|| bEndingPlay
++		|| !AgentProperties.IsValid())
++	{
++		return false;
++	}
++	PursuerNavigationAgentProperties = AgentProperties;
++	bHasPursuerNavigationAgent = true;
++	return true;
++}
++
+ bool AZeroEscapeRuntimeLevelGenerator::Generate()
+ {
+ 	return GenerateFromRequest(DefaultRequest);
+@@ -143,12 +153,12 @@ bool AZeroEscapeRuntimeLevelGenerator::CanAcceptGenerationRequest() const
+ 	{
+ 		return false;
+ 	}
+-
+ 	const UWorld* World = GetWorld();
+ 	return World != nullptr
+ 		&& World->IsGameWorld()
+ 		&& !IsRunningUserConstructionScript()
+ 		&& !bGenerationInProgress
++		&& !bNavigationWaitActive
+ 		&& !bEndingPlay;
+ }
+ 
+@@ -161,33 +171,35 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
+ 	}
+ 
+ 	TGuardValue<bool> GenerationGuard(bGenerationInProgress, true);
+-	const double TotalStartSeconds = FPlatformTime::Seconds();
+ 	ClearGeneratedSceneInternal();
++	if (NextOperationId <= 0)
++	{
++		NextOperationId = 1;
++	}
++	ActiveOperationId = NextOperationId++;
++	ActiveRequest = Request;
++	ActiveGenerationStartSeconds = FPlatformTime::Seconds();
+ 	LastReport = FZeroEscapeGenerationReport();
+ 	State = EZeroEscapeRuntimeGenerationState::Planning;
+ 
+ 	FZeroEscapeGenerationReport Report;
++	Report.OperationId = ActiveOperationId;
+ 	if (!IsValid(GeneratedRoot)
+ 		|| !GeneratedRoot->IsRegistered()
+ 		|| !LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
+-			GeneratedRoot->GetComponentTransform()))
+-	{
+-		Report.Stage = EZeroEscapeGenerationStage::Configuration;
+-		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
+-		Report.Message = TEXT("GeneratedRoot 必须已注册且具有有限 Unit Scale Transform。");
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
+-	}
+-
+-	if (!IsValid(GenerationProfile) || !IsValid(PresentationProfile))
++			GeneratedRoot->GetComponentTransform())
++		|| !IsValid(GenerationProfile)
++		|| !IsValid(PresentationProfile)
++		|| !bHasPursuerNavigationAgent)
+ 	{
+-		Report.Stage = EZeroEscapeGenerationStage::Configuration;
+-		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
+-		Report.Message = TEXT("GenerationProfile 与 PresentationProfile 必须装配。");
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		FailReport(
++			Report,
++			EZeroEscapeGenerationStage::Configuration,
++			EZeroEscapeGenerationFailure::InvalidConfiguration,
++			INDEX_NONE,
++			TEXT("Generator Root、两份 Profile 与追猎者导航代理必须完整有效。"));
++		FinishGeneration(false, Report);
++		return true;
+ 	}
+ 
+ 	const double PlanningStartSeconds = FPlatformTime::Seconds();
+@@ -199,43 +211,55 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
+ 			Input,
+ 			Report))
+ 	{
++		Report.OperationId = ActiveOperationId;
+ 		Report.Metrics.PlanningMilliseconds =
+ 			(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		FinishGeneration(false, Report);
++		return true;
+ 	}
++	Report.OperationId = ActiveOperationId;
+ 
+ 	FString PresentationError;
+ 	if (!PresentationProfile->IsConfigured(
+-		Input.Rules.LogicalTileSizeCm,
+-		PresentationError))
++			Input.SharedRules.LogicalTileSizeCm,
++			PresentationError))
++	{
++		FailReport(
++			Report,
++			EZeroEscapeGenerationStage::Configuration,
++			EZeroEscapeGenerationFailure::InvalidConfiguration,
++			INDEX_NONE,
++			MoveTemp(PresentationError));
++		Report.Metrics.PlanningMilliseconds =
++			(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
++		FinishGeneration(false, Report);
++		return true;
++	}
++	if (!ValidateZeroEscapeStructurePresentationBindings(
++			*GenerationProfile, *PresentationProfile, PresentationError))
+ 	{
+-		Report.Stage = EZeroEscapeGenerationStage::Configuration;
+-		Report.Failure = EZeroEscapeGenerationFailure::InvalidConfiguration;
+-		Report.Message = MoveTemp(PresentationError);
++		FailReport(
++			Report,
++			EZeroEscapeGenerationStage::Configuration,
++			EZeroEscapeGenerationFailure::InvalidConfiguration,
++			INDEX_NONE,
++			MoveTemp(PresentationError));
+ 		Report.Metrics.PlanningMilliseconds =
+ 			(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
+-		Report.Metrics.TotalMilliseconds =
+-			(FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		FinishGeneration(false, Report);
++		return true;
+ 	}
+ 
+ 	FZeroEscapeGeneratedLevelPlan CandidatePlan;
+-	if (!LevelGen::FGridLayoutSolver::Solve(
+-		Input.Signature,
+-		Input.Rules,
+-		Input.WfcShapeWeights,
+-		CandidatePlan,
+-		Report))
++	if (!LevelGen::FMultiFloorLayoutPlanner::Solve(Input, CandidatePlan, Report))
+ 	{
++		Report.OperationId = ActiveOperationId;
+ 		Report.Metrics.PlanningMilliseconds =
+ 			(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		FinishGeneration(false, Report);
++		return true;
+ 	}
++	Report.OperationId = ActiveOperationId;
+ 	Report.Metrics.PlanningMilliseconds =
+ 		(FPlatformTime::Seconds() - PlanningStartSeconds) * 1000.0;
+ 
+@@ -246,31 +270,41 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
+ 		|| CandidatePlan.CanonicalLayoutHash == 0
+ 		|| CandidatePlan.CanonicalLayoutHash != RecomputedLayoutHash)
+ 	{
+-		Report.Stage = EZeroEscapeGenerationStage::GlobalValidation;
+-		Report.Failure = EZeroEscapeGenerationFailure::SolverInvariantViolation;
+-		Report.Message = TEXT("Grid Solver 输出签名或规范 Hash 与本次请求不一致。");
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		FailReport(
++			Report,
++			EZeroEscapeGenerationStage::GlobalValidation,
++			EZeroEscapeGenerationFailure::SolverInvariantViolation,
++			INDEX_NONE,
++			TEXT("多层 Planner 输出签名或规范 Hash 与本次请求不一致。"));
++		FinishGeneration(false, Report);
++		return true;
++	}
++
++	if (!PrepareNavigationWait(CandidatePlan, Input.Budget, Report))
++	{
++		CancelNavigationWait();
++		FinishGeneration(false, Report);
++		return true;
+ 	}
+ 
+ 	State = EZeroEscapeRuntimeGenerationState::Instantiating;
++	bNavigationGeometryRegistrationStarted = true;
+ 	const double InstantiationStartSeconds = FPlatformTime::Seconds();
+ 	if (!InstantiateValidatedPlan(CandidatePlan, Report))
+ 	{
+-		ClearGeneratedSceneInternal();
+ 		Report.Metrics.InstantiationMilliseconds =
+ 			(FPlatformTime::Seconds() - InstantiationStartSeconds) * 1000.0;
+-		Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
+-		FinishGeneration(false, Report, Request);
+-		return false;
++		const FZeroEscapeGenerationReport FailedReport = Report;
++		ClearGeneratedSceneInternal();
++		FinishGeneration(false, FailedReport);
++		return true;
+ 	}
+-
+ 	Report.Metrics.InstantiationMilliseconds =
+ 		(FPlatformTime::Seconds() - InstantiationStartSeconds) * 1000.0;
+-	Report.Metrics.TotalMilliseconds = (FPlatformTime::Seconds() - TotalStartSeconds) * 1000.0;
++
+ 	LastPlan = MoveTemp(CandidatePlan);
+-	FinishGeneration(true, Report, Request);
++	PendingReport = Report;
++	StartNavigationWait();
+ 	return true;
+ }
+ 
+@@ -280,98 +314,33 @@ bool AZeroEscapeRuntimeLevelGenerator::InstantiateValidatedPlan(
+ {
+ 	if (!IsValid(PresentationProfile) || !IsValid(GeneratedRoot))
+ 	{
+-		return FailInstantiation(InOutReport, INDEX_NONE, TEXT("实例化时表现配置或 GeneratedRoot 已失效。"));
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::Instantiation,
++			EZeroEscapeGenerationFailure::InstantiationFailed,
++			INDEX_NONE,
++			TEXT("实例化时 PresentationProfile 或 GeneratedRoot 已失效。"));
+ 	}
+ 
+-	LevelGen::FCanonicalStructureSettings Settings;
+-	Settings.LogicalTileSizeCm = FMath::RoundToInt(Plan.LogicalTileSizeCm);
+-	Settings.StructureUnitSizeCm = FMath::RoundToInt(PresentationProfile->StructureUnitSizeCm);
+-	Settings.FloorTopZCm = PresentationProfile->FloorTopZCm;
+-	Settings.WallBaseZCm = PresentationProfile->WallBaseZCm;
+-	Settings.CeilingPivotZCm = PresentationProfile->CeilingPivotZCm;
+-
+-	TArray<LevelGen::FStructureInstance> StructureInstances;
+-	FString ExpansionError;
+-	if (!LevelGen::BuildCanonicalStructureInstances(
++	LevelGen::FStructureBuildResult BuildResult;
++	const bool bBuilt = LevelGen::FStructureBuilder::Build(
++		*this,
++		*GeneratedRoot,
+ 		Plan,
+-		Settings,
+-		StructureInstances,
+-		ExpansionError))
+-	{
+-		return FailInstantiation(InOutReport, INDEX_NONE, MoveTemp(ExpansionError));
+-	}
+-
+-	TStaticArray<TArray<FTransform>, 5> TransformsByKind;
+-	for (const LevelGen::FStructureInstance& Instance : StructureInstances)
+-	{
+-		const int32 KindIndex = static_cast<int32>(Instance.Kind);
+-		if (KindIndex < 0 || KindIndex >= TransformsByKind.Num()
+-			|| !LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
+-				Instance.CanonicalLocalTransform))
+-		{
+-			return FailInstantiation(
+-				InOutReport,
+-				KindIndex,
+-				TEXT("结构展开产生非法类别或非 Unit Scale Transform。"));
+-		}
+-		TransformsByKind[KindIndex].Add(Instance.CanonicalLocalTransform);
+-	}
+-
+-	for (int32 KindIndex = 0; KindIndex < TransformsByKind.Num(); ++KindIndex)
++		*PresentationProfile,
++		GeneratedHismComponents,
++		BuildResult);
++	InOutReport.Metrics.InstancedMeshCount += BuildResult.InstancedMeshCount;
++	InOutReport.Metrics.HismComponentCount += BuildResult.HismComponentCount;
++	if (!bBuilt)
+ 	{
+-		const LevelGen::EStructurePieceKind Kind =
+-			static_cast<LevelGen::EStructurePieceKind>(KindIndex);
+-		const FZeroEscapeStructureMeshBinding* Binding =
+-			ResolveBinding(*PresentationProfile, Kind);
+-		if (Binding == nullptr)
+-		{
+-			return FailInstantiation(InOutReport, KindIndex, TEXT("无法解析结构表现绑定。"));
+-		}
+-
+-		// Trim/Pillar 是可选表现；绑定为空时跳过这一组，不影响逻辑连通性和玩法 Anchor。
+-		if (!IsValid(Binding->StaticMesh) || TransformsByKind[KindIndex].IsEmpty())
+-		{
+-			continue;
+-		}
+-
+-		UHierarchicalInstancedStaticMeshComponent* Component =
+-			NewObject<UHierarchicalInstancedStaticMeshComponent>(
+-				this,
+-				MakeUniqueObjectName(
+-					this,
+-					UHierarchicalInstancedStaticMeshComponent::StaticClass(),
+-					GetStructureComponentName(Kind)));
+-		if (!IsValid(Component))
+-		{
+-			return FailInstantiation(InOutReport, KindIndex, TEXT("创建结构 HISM 失败。"));
+-		}
+-
+-		// 创建后立即登记，后续任何失败都能由统一回滚路径销毁该组件。
+-		GeneratedHismComponents.Add(Component);
+-		Component->SetupAttachment(GeneratedRoot);
+-		Component->SetMobility(EComponentMobility::Static);
+-		Component->SetStaticMesh(Binding->StaticMesh);
+-		Component->SetCollisionProfileName(Binding->CollisionProfileName);
+-		Component->SetCanEverAffectNavigation(Binding->bCanEverAffectNavigation);
+-		Component->RegisterComponent();
+-
+-		for (const FTransform& CanonicalTransform : TransformsByKind[KindIndex])
+-		{
+-			const FTransform PresentationTransform =
+-				Binding->PivotCorrection * CanonicalTransform;
+-			if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(PresentationTransform)
+-				|| Component->AddInstance(PresentationTransform, false) == INDEX_NONE)
+-			{
+-				return FailInstantiation(
+-					InOutReport,
+-					KindIndex,
+-					TEXT("添加结构 HISM Instance 失败。"));
+-			}
+-			++InOutReport.Metrics.InstancedMeshCount;
+-		}
+-		++InOutReport.Metrics.HismComponentCount;
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::Instantiation,
++			EZeroEscapeGenerationFailure::InstantiationFailed,
++			BuildResult.RelatedStableId,
++			MoveTemp(BuildResult.Error));
+ 	}
+-
+ 	return SpawnCeilingLights(Plan, InOutReport);
+ }
+ 
+@@ -388,37 +357,35 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
+ 	UClass* LightActorClass = PresentationProfile->CeilingLightActorClass.Get();
+ 	if (!IsValid(World) || !IsValid(GeneratedRoot) || !IsValid(LightActorClass))
+ 	{
+-		return FailInstantiation(
++		return FailReport(
+ 			InOutReport,
++			EZeroEscapeGenerationStage::Instantiation,
++			EZeroEscapeGenerationFailure::InstantiationFailed,
+ 			INDEX_NONE,
+-			TEXT("生成顶灯时 World、GeneratedRoot 或灯 Actor 类已失效。"));
++			TEXT("生成顶灯时 World、GeneratedRoot 或灯 Actor 类无效。"));
+ 	}
+ 
+-	/**
+-	 * 四方向方格天然是二分图：任意相邻格的 (X+Y) 奇偶性必然相反。
+-	 * 选择数量较少的一组可把灯数限制在约一半；平局选择 Start 所在组，
+-	 * 若较少组不含 Start 则只额外补一盏，避免引入 BFS、随机数或路线特判。
+-	 */
+ 	int32 ParityCellCounts[2] = {0, 0};
+-	bool bFoundStartCell = false;
+-	for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
++	bool bFoundPlayerSpawn = false;
++	for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+ 	{
+-		const int32 CellParity = (Cell.GridCoordinate.X + Cell.GridCoordinate.Y) & 1;
+-		++ParityCellCounts[CellParity];
+-		bFoundStartCell |= Cell.GridCoordinate == Plan.StartCoordinate;
++		const int32 Parity = (Cell.Coordinate.X + Cell.Coordinate.Y) & 1;
++		++ParityCellCounts[Parity];
++		bFoundPlayerSpawn |= Cell.Coordinate == Plan.PlayerSpawnCoordinate;
+ 	}
+-
+-	if (!bFoundStartCell)
++	if (!bFoundPlayerSpawn)
+ 	{
+-		return FailInstantiation(
++		return FailReport(
+ 			InOutReport,
++			EZeroEscapeGenerationStage::Instantiation,
++			EZeroEscapeGenerationFailure::InstantiationFailed,
+ 			INDEX_NONE,
+-			TEXT("生成顶灯时 Plan.Cells 不包含 StartCoordinate。"));
++			TEXT("普通格中缺少 PlayerSpawnCoordinate，无法稳定选择顶灯奇偶组。"));
+ 	}
+ 
+-	const int32 StartParity =
+-		(Plan.StartCoordinate.X + Plan.StartCoordinate.Y) & 1;
+-	int32 SelectedParity = StartParity;
++	const int32 PlayerParity =
++		(Plan.PlayerSpawnCoordinate.X + Plan.PlayerSpawnCoordinate.Y) & 1;
++	int32 SelectedParity = PlayerParity;
+ 	if (ParityCellCounts[0] < ParityCellCounts[1])
+ 	{
+ 		SelectedParity = 0;
+@@ -432,59 +399,460 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
+ 	SpawnParameters.Owner = this;
+ 	SpawnParameters.SpawnCollisionHandlingOverride =
+ 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+-
+-	for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
++	for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+ 	{
+-		const int32 CellParity = (Cell.GridCoordinate.X + Cell.GridCoordinate.Y) & 1;
+-		const bool bIsStartCell = Cell.GridCoordinate == Plan.StartCoordinate;
+-		if (CellParity != SelectedParity && !bIsStartCell)
++		const int32 Parity = (Cell.Coordinate.X + Cell.Coordinate.Y) & 1;
++		const bool bIsPlayerSpawn = Cell.Coordinate == Plan.PlayerSpawnCoordinate;
++		if (Parity != SelectedParity && !bIsPlayerSpawn)
+ 		{
+ 			continue;
+ 		}
+ 
+-		// 逻辑格坐标表示 600 cm 格中心；灯使用与天花板结构相同的规范 Pivot 高度。
+-		const FVector CellCenterLocation(
+-			static_cast<double>(Cell.GridCoordinate.X) * Plan.LogicalTileSizeCm,
+-			static_cast<double>(Cell.GridCoordinate.Y) * Plan.LogicalTileSizeCm,
+-			PresentationProfile->CeilingPivotZCm);
+-		const FTransform CanonicalCellTransform(
+-			FQuat::Identity,
+-			CellCenterLocation,
+-			FVector::OneVector);
+-		const FTransform LightLocalTransform =
+-			PresentationProfile->CeilingLightCellTransform * CanonicalCellTransform;
+-
+-		FTransform LightWorldTransform;
+-		if (!ConvertLocalToWorld(*GeneratedRoot, LightLocalTransform, LightWorldTransform))
++		const FVector CellCenter(
++			static_cast<double>(Cell.Coordinate.X) * Plan.LogicalTileSizeCm,
++			static_cast<double>(Cell.Coordinate.Y) * Plan.LogicalTileSizeCm,
++			PresentationProfile->FloorTopZCm
++				+ static_cast<double>(Cell.Coordinate.Z) * Plan.FloorHeightCm
++				+ PresentationProfile->CeilingPivotZCm);
++		const FTransform LocalTransform =
++			PresentationProfile->CeilingLightCellTransform * FTransform(CellCenter);
++		FTransform WorldTransform;
++		if (!ConvertLocalToWorld(*GeneratedRoot, LocalTransform, WorldTransform))
+ 		{
+-			return FailInstantiation(
++			return FailReport(
+ 				InOutReport,
+-				Cell.StableCellId,
+-				TEXT("顶灯局部 Transform 无法转换为有限 Unit Scale 世界 Transform。"));
++				EZeroEscapeGenerationStage::Instantiation,
++				EZeroEscapeGenerationFailure::InstantiationFailed,
++				INDEX_NONE,
++				TEXT("顶灯局部 Transform 无法转换到世界空间。"));
+ 		}
+ 
+-		AActor* LightActor = World->SpawnActor<AActor>(
+-			LightActorClass,
+-			LightWorldTransform,
+-			SpawnParameters);
+-		if (!IsValid(LightActor))
++		AActor* Light = World->SpawnActor<AActor>(
++			LightActorClass, WorldTransform, SpawnParameters);
++		if (!IsValid(Light))
+ 		{
+-			return FailInstantiation(
++			return FailReport(
+ 				InOutReport,
+-				Cell.StableCellId,
++				EZeroEscapeGenerationStage::Instantiation,
++				EZeroEscapeGenerationFailure::InstantiationFailed,
++				INDEX_NONE,
+ 				TEXT("生成顶灯 Actor 失败。"));
+ 		}
++		GeneratedLightActors.Add(Light);
++	}
++	return true;
++}
++
++bool AZeroEscapeRuntimeLevelGenerator::PrepareNavigationWait(
++	const FZeroEscapeGeneratedLevelPlan& Plan,
++	const FZeroEscapeSharedGenerationBudget& Budget,
++	FZeroEscapeGenerationReport& InOutReport)
++{
++	UWorld* World = GetWorld();
++	UNavigationSystemV1* NavigationSystem =
++		FNavigationSystem::GetCurrent<UNavigationSystemV1>(World);
++	if (!IsValid(World) || !IsValid(NavigationSystem) || !IsValid(GeneratedRoot))
++	{
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::NavigationBuild,
++			EZeroEscapeGenerationFailure::NavigationValidationFailed,
++			INDEX_NONE,
++			TEXT("正式 NavigationSystem 或 GeneratedRoot 不可用。"));
++	}
++
++	const FVector PursuerLocal =
++		AddressToLocalLocation(Plan, Plan.PursuerSpawnCoordinate, true);
++	const FVector PursuerWorld =
++		GeneratedRoot->GetComponentTransform().TransformPosition(PursuerLocal);
++	ANavigationData* NavigationData = NavigationSystem->GetNavDataForProps(
++		PursuerNavigationAgentProperties, PursuerWorld);
++	if (!IsValid(NavigationData)
++		|| !NavigationData->IsA<ARecastNavMesh>()
++		|| NavigationData->GetRuntimeGenerationMode() != ERuntimeGenerationType::Dynamic)
++	{
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::NavigationBuild,
++			EZeroEscapeGenerationFailure::NavigationValidationFailed,
++			INDEX_NONE,
++			TEXT("追猎者对应导航数据必须是运行时 Dynamic RecastNavMesh。"));
++	}
++
++	ExpectedNavigationData = NavigationData;
++	ActiveNavigationTimeoutSeconds = Budget.NavigationBuildTimeoutSeconds;
++	ActiveMaxNavigationValidationPoints = Budget.MaxNavigationValidationPoints;
++	bNavigationWaitActive = true;
++	bNavigationGeometryRegistrationStarted = false;
++	bNavigationGeometrySubmitted = false;
++	bObservedNavigationBuild = false;
++	bReceivedTargetNavigationCompletion = false;
++	bNavigationWaitTerminal = false;
++	NavigationSystem->OnNavigationGenerationFinishedDelegate.AddUniqueDynamic(
++		this,
++		&AZeroEscapeRuntimeLevelGenerator::HandleNavigationGenerationFinished);
++	return true;
++}
++
++void AZeroEscapeRuntimeLevelGenerator::StartNavigationWait()
++{
++	if (!bNavigationWaitActive || !IsValid(ExpectedNavigationData))
++	{
++		FZeroEscapeGenerationReport FailedReport = PendingReport;
++		FailReport(
++			FailedReport,
++			EZeroEscapeGenerationStage::NavigationBuild,
++			EZeroEscapeGenerationFailure::NavigationValidationFailed,
++			INDEX_NONE,
++			TEXT("导航等待状态在结构提交后失效。"));
++		ClearGeneratedSceneInternal();
++		FinishGeneration(false, FailedReport);
++		return;
++	}
++
++	bNavigationGeometrySubmitted = true;
++	State = EZeroEscapeRuntimeGenerationState::WaitingForNavigation;
++	bObservedNavigationBuild |= UNavigationSystemV1::IsNavigationBeingBuiltOrLocked(this);
++	GetWorldTimerManager().SetTimer(
++		NavigationTimeoutTimer,
++		FTimerDelegate::CreateUObject(
++			this,
++			&AZeroEscapeRuntimeLevelGenerator::HandleNavigationBuildTimeout,
++			ActiveOperationId),
++		ActiveNavigationTimeoutSeconds,
++		false);
++}
++
++void AZeroEscapeRuntimeLevelGenerator::HandleNavigationGenerationFinished(
++	ANavigationData* NavigationData)
++{
++	LevelGen::FRuntimeNavigationGateSnapshot Snapshot;
++	Snapshot.OperationId = ActiveOperationId;
++	Snapshot.ExpectedNavigationDataKey = FObjectKey(ExpectedNavigationData);
++	Snapshot.bWaiting = bNavigationWaitActive;
++	Snapshot.bGeometryRegistrationStarted = bNavigationGeometryRegistrationStarted;
++	Snapshot.bGeometrySubmitted = bNavigationGeometrySubmitted;
++	Snapshot.bObservedNavigationBuild = bObservedNavigationBuild;
++	Snapshot.bReceivedTargetCompletion = bReceivedTargetNavigationCompletion;
++	Snapshot.bTerminal = bNavigationWaitTerminal;
++	const bool bAcceptedTargetCompletion =
++		LevelGen::FRuntimeNavigationGate::AcceptCompletion(
++			Snapshot, ActiveOperationId, FObjectKey(NavigationData));
++	if (bAcceptedTargetCompletion)
++	{
++		// 只有目标 RecastNavMesh 的事件能置位；其他 NavData 只唤醒静止复核。
++		bObservedNavigationBuild = true;
++		bReceivedTargetNavigationCompletion = true;
++	}
++
++	Snapshot.bObservedNavigationBuild = bObservedNavigationBuild;
++	Snapshot.bReceivedTargetCompletion = bReceivedTargetNavigationCompletion;
++	if (bAcceptedTargetCompletion
++		|| LevelGen::FRuntimeNavigationGate::ShouldRetryAfterAnyCompletion(
++			Snapshot, ActiveOperationId))
++	{
++		TryCompleteNavigationWait(ActiveOperationId);
++	}
++}
++
++void AZeroEscapeRuntimeLevelGenerator::TryCompleteNavigationWait(
++	const int64 CallbackOperationId)
++{
++	UNavigationSystemV1* NavigationSystem =
++		FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
++	if (!IsValid(NavigationSystem))
++	{
++		return;
++	}
++
++	const bool bStillBuilding = NavigationSystem->IsNavigationBuildInProgress();
++	LevelGen::FRuntimeNavigationGateSnapshot Snapshot;
++	Snapshot.OperationId = ActiveOperationId;
++	Snapshot.ExpectedNavigationDataKey = FObjectKey(ExpectedNavigationData);
++	Snapshot.bWaiting = bNavigationWaitActive;
++	Snapshot.bGeometryRegistrationStarted = bNavigationGeometryRegistrationStarted;
++	Snapshot.bGeometrySubmitted = bNavigationGeometrySubmitted;
++	Snapshot.bObservedNavigationBuild = bObservedNavigationBuild;
++	Snapshot.bReceivedTargetCompletion = bReceivedTargetNavigationCompletion;
++	Snapshot.bTerminal = bNavigationWaitTerminal;
++	if (!LevelGen::FRuntimeNavigationGate::CanValidate(
++			Snapshot, CallbackOperationId, bStillBuilding))
++	{
++		return;
++	}
++
++	bNavigationWaitTerminal = true;
++	GetWorldTimerManager().ClearTimer(NavigationTimeoutTimer);
++	NavigationSystem->OnNavigationGenerationFinishedDelegate.RemoveDynamic(
++		this,
++		&AZeroEscapeRuntimeLevelGenerator::HandleNavigationGenerationFinished);
++	bNavigationWaitActive = false;
++
++	FZeroEscapeGenerationReport FinalReport = PendingReport;
++	if (!ValidateNavigationEndpoints(FinalReport))
++	{
++		ClearGeneratedSceneInternal();
++		FinishGeneration(false, FinalReport);
++		return;
++	}
++	FinishGeneration(true, FinalReport);
++}
++
++void AZeroEscapeRuntimeLevelGenerator::HandleNavigationBuildTimeout(
++	const int64 CallbackOperationId)
++{
++	LevelGen::FRuntimeNavigationGateSnapshot Snapshot;
++	Snapshot.OperationId = ActiveOperationId;
++	Snapshot.ExpectedNavigationDataKey = FObjectKey(ExpectedNavigationData);
++	Snapshot.bWaiting = bNavigationWaitActive;
++	Snapshot.bGeometryRegistrationStarted = bNavigationGeometryRegistrationStarted;
++	Snapshot.bGeometrySubmitted = bNavigationGeometrySubmitted;
++	Snapshot.bObservedNavigationBuild = bObservedNavigationBuild;
++	Snapshot.bReceivedTargetCompletion = bReceivedTargetNavigationCompletion;
++	Snapshot.bTerminal = bNavigationWaitTerminal;
++	if (!LevelGen::FRuntimeNavigationGate::AcceptTimeout(Snapshot, CallbackOperationId))
++	{
++		return;
++	}
++
++	bNavigationWaitTerminal = true;
++	FZeroEscapeGenerationReport FailedReport = PendingReport;
++	FailReport(
++		FailedReport,
++		EZeroEscapeGenerationStage::NavigationBuild,
++		EZeroEscapeGenerationFailure::NavigationBuildTimeout,
++		INDEX_NONE,
++		FString::Printf(
++			TEXT("等待目标 RecastNavMesh 更新超过 %.2f 秒。"),
++			ActiveNavigationTimeoutSeconds));
++	ClearGeneratedSceneInternal();
++	FinishGeneration(false, FailedReport);
++}
++
++bool AZeroEscapeRuntimeLevelGenerator::BuildNavigationValidationAddresses(
++	TArray<FIntVector>& OutAddresses,
++	FZeroEscapeGenerationReport& InOutReport) const
++{
++	OutAddresses.Reset();
++	TSet<FIntVector> Seen;
++	auto AddAddress = [&OutAddresses, &Seen](const FIntVector Address)
++	{
++		if (!Seen.Contains(Address))
++		{
++			Seen.Add(Address);
++			OutAddresses.Add(Address);
++		}
++	};
++
++	// 第一个地址固定为追猎者，是所有 TestPathSync 的共同起点。
++	AddAddress(LastPlan.PursuerSpawnCoordinate);
++	AddAddress(LastPlan.PlayerSpawnCoordinate);
++	AddAddress(LastPlan.ExitCoordinate);
++
++	TSet<int32> RequiredStableIds;
++	for (const int32 StableId : LastPlan.RequiredTwoFloorStairStableIdByLowerFloor)
++	{
++		RequiredStableIds.Add(StableId);
++		const FZeroEscapeGeneratedStructure* Structure =
++			FindStructureByStableId(LastPlan, StableId);
++		if (Structure == nullptr || Structure->Kind != EZeroEscapeStructureKind::TwoFloorStair)
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				StableId,
++				TEXT("必需楼梯 StableId 无法解析为双层楼梯。"));
++		}
++		for (const FZeroEscapeGeneratedStructureLanding& Landing : Structure->Landings)
++		{
++			AddAddress(Landing.Coordinate);
++		}
++	}
++
++	for (const FZeroEscapeGeneratedStructure& Structure : LastPlan.Structures)
++	{
++		if (RequiredStableIds.Contains(Structure.StableStructureId)
++			|| Structure.Kind == EZeroEscapeStructureKind::HighCeilingRoom)
++		{
++			continue;
++		}
++		for (const FZeroEscapeGeneratedStructureLanding& Landing : Structure.Landings)
++		{
++			AddAddress(Landing.Coordinate);
++		}
++	}
++
++	if (OutAddresses.Num() < 3
++		|| OutAddresses.Num() > ActiveMaxNavigationValidationPoints)
++	{
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::NavigationValidation,
++			EZeroEscapeGenerationFailure::NavigationValidationFailed,
++			INDEX_NONE,
++			FString::Printf(
++				TEXT("导航代表点数量 %d 超出 [3,%d]。"),
++				OutAddresses.Num(),
++				ActiveMaxNavigationValidationPoints));
++	}
++	for (const FIntVector Address : OutAddresses)
++	{
++		if (!IsAddressInsidePlan(Address, LastPlan))
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				INDEX_NONE,
++				TEXT("导航代表点地址超出本局真实楼层或 Grid。"));
++		}
++	}
++	return true;
++}
++
++bool AZeroEscapeRuntimeLevelGenerator::ValidateNavigationEndpoints(
++	FZeroEscapeGenerationReport& InOutReport)
++{
++	const double StartSeconds = FPlatformTime::Seconds();
++	ON_SCOPE_EXIT
++	{
++		InOutReport.Metrics.NavigationValidationMilliseconds =
++			(FPlatformTime::Seconds() - StartSeconds) * 1000.0;
++	};
++
++	UNavigationSystemV1* NavigationSystem =
++		FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
++	if (!IsValid(NavigationSystem)
++		|| !IsValid(ExpectedNavigationData)
++		|| !IsValid(GeneratedRoot))
++	{
++		return FailReport(
++			InOutReport,
++			EZeroEscapeGenerationStage::NavigationValidation,
++			EZeroEscapeGenerationFailure::NavigationValidationFailed,
++			INDEX_NONE,
++			TEXT("导航验收所需系统、目标数据或 Root 已失效。"));
++	}
++
++	TArray<FIntVector> Addresses;
++	if (!BuildNavigationValidationAddresses(Addresses, InOutReport))
++	{
++		return false;
++	}
++
++	const float HorizontalExtent = FMath::Max(
++		PursuerNavigationAgentProperties.AgentRadius * 2.0f, 50.0f);
++	const float VerticalExtent = FMath::Min(
++		FMath::Max(PursuerNavigationAgentProperties.AgentHeight, 50.0f),
++		static_cast<float>(LastPlan.FloorHeightCm * 0.49));
++	const FVector ProjectionExtent(HorizontalExtent, HorizontalExtent, VerticalExtent);
++	const FSharedConstNavQueryFilter QueryFilter =
++		ExpectedNavigationData->GetDefaultQueryFilter();
++
++	TArray<FNavLocation> ProjectedLocations;
++	ProjectedLocations.Reserve(Addresses.Num());
++	for (const FIntVector Address : Addresses)
++	{
++		FTransform WorldTransform;
++		if (!AddressToWorldTransform(LastPlan, Address, true, WorldTransform))
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				INDEX_NONE,
++				TEXT("导航代表点无法转换到世界空间。"));
++		}
+ 
+-		// Spawn 后立即登记，后续任一灯失败时现有事务路径可销毁此前全部灯。
+-		GeneratedLightActors.Add(LightActor);
++		FNavLocation Projected;
++		++InOutReport.Metrics.NavigationProjectionCount;
++		if (!NavigationSystem->ProjectPointToNavigation(
++				WorldTransform.GetLocation(),
++				Projected,
++				ProjectionExtent,
++				ExpectedNavigationData,
++				QueryFilter))
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				INDEX_NONE,
++				FString::Printf(
++					TEXT("导航代表点 (%d,%d,%d) 无法投射到目标 RecastNavMesh。"),
++					Address.X, Address.Y, Address.Z));
++		}
++		const FVector ProjectedLocal =
++			GeneratedRoot->GetComponentTransform().InverseTransformPosition(Projected.Location);
++		const double ExpectedFloorZ = PresentationProfile->FloorTopZCm
++			+ Address.Z * LastPlan.FloorHeightCm;
++		if (FMath::Abs(ProjectedLocal.Z - ExpectedFloorZ) >= LastPlan.FloorHeightCm * 0.5)
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				INDEX_NONE,
++				TEXT("导航投射结果落到了另一楼层。"));
++		}
++		ProjectedLocations.Add(Projected);
+ 	}
+ 
++	for (int32 Index = 1; Index < ProjectedLocations.Num(); ++Index)
++	{
++		FPathFindingQuery Query(
++			this,
++			*ExpectedNavigationData,
++			ProjectedLocations[0].Location,
++			ProjectedLocations[Index].Location,
++			QueryFilter);
++		Query.SetAllowPartialPaths(false);
++		Query.SetRequireNavigableEndLocation(true);
++		Query.SetNavAgentProperties(PursuerNavigationAgentProperties);
++		int32 VisitedNodes = 0;
++		++InOutReport.Metrics.NavigationPathTestCount;
++		const bool bPathExists = NavigationSystem->TestPathSync(
++			Query, EPathFindingMode::Regular, &VisitedNodes);
++		InOutReport.Metrics.NavigationVisitedNodeCount += VisitedNodes;
++		if (!bPathExists)
++		{
++			return FailReport(
++				InOutReport,
++				EZeroEscapeGenerationStage::NavigationValidation,
++				EZeroEscapeGenerationFailure::NavigationValidationFailed,
++				INDEX_NONE,
++				FString::Printf(TEXT("追猎者到导航代表点 %d 不存在完整路径。"), Index));
++		}
++	}
+ 	return true;
+ }
+ 
++void AZeroEscapeRuntimeLevelGenerator::CancelNavigationWait()
++{
++	if (UWorld* World = GetWorld())
++	{
++		World->GetTimerManager().ClearTimer(NavigationTimeoutTimer);
++	}
++	if (UNavigationSystemV1* NavigationSystem =
++		FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))
++	{
++		NavigationSystem->OnNavigationGenerationFinishedDelegate.RemoveDynamic(
++			this,
++			&AZeroEscapeRuntimeLevelGenerator::HandleNavigationGenerationFinished);
++	}
++	ExpectedNavigationData = nullptr;
++	bNavigationWaitActive = false;
++	bNavigationGeometryRegistrationStarted = false;
++	bNavigationGeometrySubmitted = false;
++	bObservedNavigationBuild = false;
++	bReceivedTargetNavigationCompletion = false;
++	bNavigationWaitTerminal = false;
++}
++
+ bool AZeroEscapeRuntimeLevelGenerator::ClearGeneratedScene()
+ {
+-	if (bGenerationInProgress || bEndingPlay || !IsInGameThread())
++	if (bGenerationInProgress || bNavigationWaitActive || bEndingPlay || !IsInGameThread())
+ 	{
+ 		return false;
+ 	}
+@@ -494,6 +862,7 @@ bool AZeroEscapeRuntimeLevelGenerator::ClearGeneratedScene()
+ 
+ void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
+ {
++	CancelNavigationWait();
+ 	for (AActor* LightActor : GeneratedLightActors)
+ 	{
+ 		if (IsValid(LightActor))
+@@ -502,7 +871,6 @@ void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
+ 		}
+ 	}
+ 	GeneratedLightActors.Reset();
+-
+ 	for (UHierarchicalInstancedStaticMeshComponent* Component : GeneratedHismComponents)
+ 	{
+ 		if (IsValid(Component))
+@@ -517,10 +885,14 @@ void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
+ 
+ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
+ 	const bool bSuccess,
+-	const FZeroEscapeGenerationReport& Report,
+-	const FZeroEscapeGenerationRequest& Request)
++	const FZeroEscapeGenerationReport& Report)
+ {
++	TGuardValue<bool> FinishGuard(bGenerationInProgress, true);
++	CancelNavigationWait();
+ 	LastReport = Report;
++	LastReport.OperationId = ActiveOperationId;
++	LastReport.Metrics.TotalMilliseconds =
++		(FPlatformTime::Seconds() - ActiveGenerationStartSeconds) * 1000.0;
+ 	State = bSuccess
+ 		? EZeroEscapeRuntimeGenerationState::Ready
+ 		: EZeroEscapeRuntimeGenerationState::Failed;
+@@ -528,33 +900,30 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
+ 	UE_LOG(
+ 		LogZeroEscapePCG,
+ 		Display,
+-		// schema=5 记录空间输入、求解成本、房间数量和唯一 Layout Hash。
+-		TEXT("ZE_PCG_RESULT schema=5 success=%d seed=%d difficulty=%s stage=%s failure=%s cells=%d rooms=%d walkable=%d solve_attempts=%d observations=%d candidate_attempts=%d propagations=%d contradictions=%d contradiction_local=%d contradiction_count=%d contradiction_max_straight=%d contradiction_connected=%d contradiction_global_ban=%d backtracks=%d leaf_rejections=%d instances=%d hism=%d layout_hash=%lld total_ms=%.3f message=\"%s\""),
++		TEXT("ZE_PCG_RESULT schema=6 operation=%lld success=%d seed=%d difficulty=%s stage=%s failure=%s floors=%d ordinary=%d structures=%d walkable=%d whole_attempts=%d structure_candidates=%d wfc_candidates=%d backtracks=%d instances=%d hism=%d nav_projects=%d nav_paths=%d nav_nodes=%d nav_ms=%.3f layout_hash=%lld total_ms=%.3f message=\"%s\""),
++		static_cast<long long>(ActiveOperationId),
+ 		bSuccess ? 1 : 0,
+-		Request.Seed,
+-		*GetStableEnumName(Request.Difficulty),
+-		*GetStableEnumName(Report.Stage),
+-		*GetStableEnumName(Report.Failure),
+-		LastPlan.Cells.Num(),
+-		LastPlan.Rooms.Num(),
+-		Report.Metrics.WalkableCellCount,
+-		Report.Metrics.WfcSolveAttemptCount,
+-		Report.Metrics.WfcObservationCount,
+-		Report.Metrics.WfcCandidateAttemptCount,
+-		Report.Metrics.WfcPropagationCount,
+-		Report.Metrics.WfcContradictionCount,
+-		Report.Metrics.WfcLocalAdjacencyContradictionCount,
+-		Report.Metrics.WfcCountContradictionCount,
+-		Report.Metrics.WfcMaxConsecutiveContradictionCount,
+-		Report.Metrics.WfcConnectedContradictionCount,
+-		Report.Metrics.WfcGlobalBanContradictionCount,
+-		Report.Metrics.WfcBacktrackCount,
+-		Report.Metrics.WfcCollapsedCandidateRejectionCount,
+-		Report.Metrics.InstancedMeshCount,
+-		Report.Metrics.HismComponentCount,
++		ActiveRequest.Seed,
++		*GetStableEnumName(ActiveRequest.Difficulty),
++		*GetStableEnumName(LastReport.Stage),
++		*GetStableEnumName(LastReport.Failure),
++		LastReport.Metrics.GeneratedFloorCount,
++		LastPlan.OrdinaryCells.Num(),
++		LastPlan.Structures.Num(),
++		LastReport.Metrics.WalkableCellCount,
++		LastReport.Metrics.WholeLayoutAttemptCount,
++		LastReport.Metrics.StructureCandidateEvaluationCount,
++		LastReport.Metrics.WfcCandidateAttemptCount,
++		LastReport.Metrics.WfcBacktrackCount,
++		LastReport.Metrics.InstancedMeshCount,
++		LastReport.Metrics.HismComponentCount,
++		LastReport.Metrics.NavigationProjectionCount,
++		LastReport.Metrics.NavigationPathTestCount,
++		LastReport.Metrics.NavigationVisitedNodeCount,
++		LastReport.Metrics.NavigationValidationMilliseconds,
+ 		static_cast<long long>(LastPlan.CanonicalLayoutHash),
+-		Report.Metrics.TotalMilliseconds,
+-		*MakeSingleLineLogValue(Report.Message));
++		LastReport.Metrics.TotalMilliseconds,
++		*MakeSingleLineLogValue(LastReport.Message));
+ 
+ 	if (!bEndingPlay)
+ 	{
+@@ -562,110 +931,99 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
+ 	}
+ }
+ 
+-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedStartWorldTransform(
++FVector AZeroEscapeRuntimeLevelGenerator::AddressToLocalLocation(
++	const FZeroEscapeGeneratedLevelPlan& Plan,
++	const FIntVector& Address,
++	const bool bUseAnchorHeight) const
++{
++	const double FloorTopZCm = IsValid(PresentationProfile)
++		? PresentationProfile->FloorTopZCm
++		: 0.0;
++	return FVector(
++		static_cast<double>(Address.X) * Plan.LogicalTileSizeCm,
++		static_cast<double>(Address.Y) * Plan.LogicalTileSizeCm,
++		FloorTopZCm + static_cast<double>(Address.Z) * Plan.FloorHeightCm
++			+ (bUseAnchorHeight ? Plan.AnchorHeightCm : 0.0));
++}
++
++bool AZeroEscapeRuntimeLevelGenerator::AddressToWorldTransform(
++	const FZeroEscapeGeneratedLevelPlan& Plan,
++	const FIntVector& Address,
++	const bool bUseAnchorHeight,
+ 	FTransform& OutTransform) const
+ {
+ 	OutTransform = FTransform::Identity;
+-	return State == EZeroEscapeRuntimeGenerationState::Ready
+-		&& IsValid(GeneratedRoot)
+-		&& ConvertLocalToWorld(
+-			*GeneratedRoot,
+-			LastPlan.PlayerStartLocalTransform,
+-			OutTransform);
++	if (!IsValid(GeneratedRoot)
++		|| !IsValid(PresentationProfile)
++		|| !IsAddressInsidePlan(Address, Plan))
++	{
++		return false;
++	}
++	return ConvertLocalToWorld(
++		*GeneratedRoot,
++		FTransform(AddressToLocalLocation(Plan, Address, bUseAnchorHeight)),
++		OutTransform);
+ }
+ 
+-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedExitWorldTransform(
++bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedPlayerSpawnWorldTransform(
+ 	FTransform& OutTransform) const
+ {
+-	OutTransform = FTransform::Identity;
+ 	return State == EZeroEscapeRuntimeGenerationState::Ready
+-		&& IsValid(GeneratedRoot)
+-		&& ConvertLocalToWorld(
+-			*GeneratedRoot,
+-			LastPlan.ExitLocalTransform,
+-			OutTransform);
++		&& AddressToWorldTransform(
++			LastPlan, LastPlan.PlayerSpawnCoordinate, true, OutTransform);
+ }
+ 
+-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedRoomWorldTransforms(
+-	TArray<FTransform>& OutTransforms) const
++bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedPursuerSpawnWorldTransform(
++	FTransform& OutTransform) const
+ {
+-	OutTransforms.Reset();
+-	if (State != EZeroEscapeRuntimeGenerationState::Ready || !IsValid(GeneratedRoot))
+-	{
+-		return false;
+-	}
++	return State == EZeroEscapeRuntimeGenerationState::Ready
++		&& AddressToWorldTransform(
++			LastPlan, LastPlan.PursuerSpawnCoordinate, true, OutTransform);
++}
+ 
+-	OutTransforms.Reserve(LastPlan.Rooms.Num());
+-	for (const FZeroEscapeGeneratedRoom& Room : LastPlan.Rooms)
+-	{
+-		FTransform WorldTransform;
+-		if (!ConvertLocalToWorld(
+-				*GeneratedRoot,
+-				Room.LocalTransform,
+-				WorldTransform))
+-		{
+-			OutTransforms.Reset();
+-			return false;
+-		}
+-		OutTransforms.Add(WorldTransform);
+-	}
+-	return true;
++bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedExitWorldTransform(
++	FTransform& OutTransform) const
++{
++	return State == EZeroEscapeRuntimeGenerationState::Ready
++		&& AddressToWorldTransform(LastPlan, LastPlan.ExitCoordinate, true, OutTransform);
+ }
+ 
+-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedCellWorldTransforms(
+-	EZeroEscapeGridRegionKind RegionKind,
+-	bool bExcludeStartExitAdjacent,
+-	bool bStraightCorridorOnly,
++bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedOrdinaryGameplayCellWorldTransforms(
++	const bool bAvoidSpawnExitNeighbors,
++	const bool bStraightCorridorOnly,
+ 	TArray<FTransform>& OutTransforms) const
+ {
+ 	OutTransforms.Reset();
+-	if (State != EZeroEscapeRuntimeGenerationState::Ready
+-		|| !IsValid(GeneratedRoot)
+-		|| !IsValid(PresentationProfile))
++	if (State != EZeroEscapeRuntimeGenerationState::Ready || !IsValid(GeneratedRoot))
+ 	{
+ 		return false;
+ 	}
+ 
+-	const double FloorTopZCm = PresentationProfile->FloorTopZCm;
+-	for (const FZeroEscapeCollapsedTile& Cell : LastPlan.Cells)
++	const uint8 StraightNS = static_cast<uint8>(EZeroEscapeOpenEdge::North)
++		| static_cast<uint8>(EZeroEscapeOpenEdge::South);
++	const uint8 StraightEW = static_cast<uint8>(EZeroEscapeOpenEdge::East)
++		| static_cast<uint8>(EZeroEscapeOpenEdge::West);
++	for (const FZeroEscapeGeneratedOrdinaryCell& Cell : LastPlan.OrdinaryCells)
+ 	{
+-		if (Cell.RegionKind != RegionKind)
+-		{
+-			continue;
+-		}
+-		if (bExcludeStartExitAdjacent
+-			&& (IsWithinOneStep(Cell.GridCoordinate, LastPlan.StartCoordinate)
+-				|| IsWithinOneStep(Cell.GridCoordinate, LastPlan.ExitCoordinate)))
++		if (bAvoidSpawnExitNeighbors
++			&& (IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.PlayerSpawnCoordinate)
++				|| IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.PursuerSpawnCoordinate)
++				|| IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.ExitCoordinate)))
+ 		{
+ 			continue;
+ 		}
+-
+-		// 直路走廊判定：开口严格为南北相对或东西相对；其余形态（拐角/T/十字/死胡同）按需排除。
+-		const uint8 StraightNS = static_cast<uint8>(EZeroEscapeOpenEdge::North)
+-			| static_cast<uint8>(EZeroEscapeOpenEdge::South);
+-		const uint8 StraightEW = static_cast<uint8>(EZeroEscapeOpenEdge::East)
+-			| static_cast<uint8>(EZeroEscapeOpenEdge::West);
+-		const bool bIsStraightNS = (Cell.OpeningMask == StraightNS);
+-		const bool bIsStraightEW = (Cell.OpeningMask == StraightEW);
+-		if (bStraightCorridorOnly && !bIsStraightNS && !bIsStraightEW)
++		const bool bStraightNS = Cell.OpeningMask == StraightNS;
++		const bool bStraightEW = Cell.OpeningMask == StraightEW;
++		if (bStraightCorridorOnly && !bStraightNS && !bStraightEW)
+ 		{
+ 			continue;
+ 		}
+ 
+-		// 逻辑格坐标为格中心；放置点使用地板顶面高度，Actor 自身 pivot 贴地。
+-		const FVector CellCenterLocation(
+-			static_cast<double>(Cell.GridCoordinate.X) * LastPlan.LogicalTileSizeCm,
+-			static_cast<double>(Cell.GridCoordinate.Y) * LastPlan.LogicalTileSizeCm,
+-			FloorTopZCm);
+-
+-		// 直路南北走向→yaw=90 使 Transform 的 X 轴对齐走向；东西走向→yaw=0。横向恒为 Y 轴。
+-		const FQuat CellRotation = FRotator(0.0f, bIsStraightNS ? 90.0f : 0.0f, 0.0f).Quaternion();
+-
+-		const FTransform CellLocalTransform(
+-			CellRotation, CellCenterLocation, FVector::OneVector);
+-
++		const FTransform LocalTransform(
++			FRotator(0.0, bStraightNS ? 90.0 : 0.0, 0.0),
++			AddressToLocalLocation(LastPlan, Cell.Coordinate, false));
+ 		FTransform WorldTransform;
+-		if (!ConvertLocalToWorld(*GeneratedRoot, CellLocalTransform, WorldTransform))
++		if (!ConvertLocalToWorld(*GeneratedRoot, LocalTransform, WorldTransform))
+ 		{
+ 			OutTransforms.Reset();
+ 			return false;
+@@ -680,7 +1038,8 @@ int32 AZeroEscapeRuntimeLevelGenerator::GetGeneratedSeed() const
+ 	return LastPlan.Signature.Seed;
+ }
+ 
+-void AZeroEscapeRuntimeLevelGenerator::EndPlay(const EEndPlayReason::Type EndPlayReason)
++void AZeroEscapeRuntimeLevelGenerator::EndPlay(
++	const EEndPlayReason::Type EndPlayReason)
+ {
+ 	bEndingPlay = true;
+ 	ClearGeneratedSceneInternal();

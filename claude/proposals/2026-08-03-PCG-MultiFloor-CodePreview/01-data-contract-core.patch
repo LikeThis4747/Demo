@@ -1,0 +1,2559 @@
+diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationTypes.h b/Source/Demo/Public/PCG/ZeroEscapeGenerationTypes.h
+--- a/Source/Demo/Public/PCG/ZeroEscapeGenerationTypes.h
++++ b/Source/Demo/Public/PCG/ZeroEscapeGenerationTypes.h
+@@ -2,8 +2,8 @@
+ 
+ /**
+  * @file ZeroEscapeGenerationTypes.h
+- * 职责：定义运行时空间 PCG 的请求、逻辑网格、房间锚点、结果与失败报告。
+- * 边界：这里只保存纯值；不引用具体素材，不执行 WFC，也不表达尚未确定的玩法目标。
++ * 职责：定义运行时空间 PCG 的请求、三维逻辑地址、完整结构、最终 Plan 与失败报告。
++ * 边界：这里只保存纯值；不引用具体素材，不执行 WFC，也不访问 World 或导航系统。
+  */
+ 
+ #pragma once
+@@ -15,10 +15,18 @@
+ /** 运行时安全上限用于拒绝误配置，不是策划调参项。 */
+ namespace ZeroEscape::GenerationLimits
+ {
+-	inline constexpr int32 MaxRoomCount = 6;
+ 	inline constexpr int32 MaxGridCells = 1024;
+ 	inline constexpr int32 MinGridAxis = 6;
+ 	inline constexpr int32 MaxGridAxis = 64;
++	inline constexpr int32 MinFloorCount = 2;
++	inline constexpr int32 MaxFloorCount = 4;
++	inline constexpr int32 MaxWholeLayoutAttempts = 4;
++	inline constexpr int32 MaxStructureCandidateEvaluations = 250000;
++	inline constexpr int32 MaxWfcCandidateAttemptsPerFloor = 100000;
++	inline constexpr int32 MaxWfcBacktrackCountPerFloor = 25000;
++	inline constexpr int32 MaxWfcSolveAttemptsPerFloor = 10;
++	inline constexpr int32 MaxNavigationValidationPoints = 20;
++	inline constexpr double MaxNavigationBuildTimeoutSeconds = 10.0;
+ }
+ 
+ /** 一局开始时固定的难度；当前只选择 WFC 形态权重。 */
+@@ -42,26 +50,18 @@
+ };
+ ENUM_CLASS_FLAGS(EZeroEscapeOpenEdge);
+ 
+-/** 一个有效逻辑格在最终空间布局中的职责。 */
+-UENUM(BlueprintType)
+-enum class EZeroEscapeGridRegionKind : uint8
+-{
+-	Corridor = 0,
+-	Room = 1,
+-	Start = 2,
+-	Exit = 3
+-};
+-
+ /** 失败发生的生成阶段；自动化应断言枚举而不是解析日志文本。 */
+ UENUM(BlueprintType)
+ enum class EZeroEscapeGenerationStage : uint8
+ {
+ 	None = 0,
+ 	Configuration = 1,
+-	GridLayout = 2,
++	StructurePlacement = 2,
+ 	WfcLayout = 3,
+ 	GlobalValidation = 4,
+-	Instantiation = 5
++	Instantiation = 5,
++	NavigationBuild = 6,
++	NavigationValidation = 7
+ };
+ 
+ /** 空间生成公开入口的结构化失败原因。 */
+@@ -71,11 +71,25 @@
+ 	None = 0,
+ 	InvalidConfiguration = 1,
+ 	CapacityInsufficient = 2,
+-	SolverInvariantViolation = 3,
+-	RequiredRouteTooLong = 4,
+-	InstantiationFailed = 5,
+-	NoValidWfcSolution = 6,
+-	SolverBudgetExhausted = 7
++	StructurePlacementFailed = 3,
++	SolverInvariantViolation = 4,
++	RequiredRouteTooLong = 5,
++	RequiredRouteTooShort = 6,
++	NoValidWfcSolution = 7,
++	SolverBudgetExhausted = 8,
++	GlobalConnectivityFailed = 9,
++	InstantiationFailed = 10,
++	NavigationBuildTimeout = 11,
++	NavigationValidationFailed = 12
++};
++
++/** 首版能够整体放置的三种项目结构；不是 UE 或 WFC 官方类型。 */
++UENUM(BlueprintType)
++enum class EZeroEscapeStructureKind : uint8
++{
++	TwoFloorStair = 0,
++	ThreeFloorStairwell = 1,
++	HighCeilingRoom = 2
+ };
+ 
+ /** 四方向帮助函数的唯一实现，WFC、Grid、结构展开和测试必须复用。 */
+@@ -170,48 +184,111 @@
+ 	}
+ };
+ 
+-/** WFC 坍缩后的单格结果；Cells 按完整 Grid 稠密下标顺序导出非空格。 */
+-USTRUCT(BlueprintType)
+-struct DEMO_API FZeroEscapeCollapsedTile
+-{
+-	GENERATED_BODY()
+-
+-	/** 仅对当前 Plan 稳定，等于该格在 Cells 数组中的下标。 */
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	int32 StableCellId = INDEX_NONE;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FIntPoint GridCoordinate = FIntPoint::ZeroValue;
+-
++/** 普通二维 WFC 生成的可走格；结构自带的格子保存在结构记录中。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedOrdinaryCell
++{
++	GENERATED_BODY()
++
++	/** X/Y 是层内坐标，Z 是从 0 开始的楼层序号。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector Coordinate = FIntVector::ZeroValue;
++
++	/** 只表示同层 North/East/South/West；跨层连接单独保存。 */
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated",
+ 		meta = (Bitmask, BitmaskEnum = "/Script/Demo.EZeroEscapeOpenEdge"))
+ 	uint8 OpeningMask = 0;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	int32 RegionId = INDEX_NONE;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	EZeroEscapeGridRegionKind RegionKind = EZeroEscapeGridRegionKind::Corridor;
+-};
+-
+-/** 玩法层以后可选择的中立房间；PCG 不决定房间里放什么。 */
+-USTRUCT(BlueprintType)
+-struct DEMO_API FZeroEscapeGeneratedRoom
+-{
+-	GENERATED_BODY()
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	int32 RegionId = INDEX_NONE;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FIntPoint AnchorCoordinate = FIntPoint::ZeroValue;
+-
+-	/** 相对 Generator.GeneratedRoot 的有限 Unit Scale Transform。 */
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FTransform LocalTransform = FTransform::Identity;
+-};
+-
+-/** 最终有效格中各种路口形态的观测计数，不是硬性配额。 */
++};
++
++/** 楼梯或房间内部的一条无向通行连接。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedCellConnection
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector FirstCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector SecondCoordinate = FIntVector::ZeroValue;
++};
++
++/** 一座已放置结构实际开放的连接口。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedStructureOpening
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FName OpeningId = NAME_None;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector StructureCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector ConnectedOrdinaryCoordinate = FIntVector::ZeroValue;
++};
++
++/** 每个楼梯落脚平台用于距离、表现和导航检查的唯一代表点。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedStructureLanding
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FName LandingId = NAME_None;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector Coordinate = FIntVector::ZeroValue;
++};
++
++/** 一座不可拆开的双层楼梯、三层楼梯间或高天花板房间。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedStructure
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 StableStructureId = INDEX_NONE;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FName DefinitionId = NAME_None;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	EZeroEscapeStructureKind Kind = EZeroEscapeStructureKind::TwoFloorStair;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector BaseCoordinate = FIntVector::ZeroValue;
++
++	/** 绕 Z 轴顺时针旋转 0、1、2、3 个 90 度。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	uint8 QuarterTurnCount = 0;
++
++	/** 使用稳定 FName，而不是依赖 AllowedOpeningSets 的数组下标。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FName ActiveOpeningSetId = NAME_None;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FIntVector> WalkableCells;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FIntVector> SolidCells;
++
++	/** 只包含本局真实存在楼层内的净空地址，不保存顶层以上的虚构地址。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FIntVector> ClearanceCells;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedCellConnection> InternalConnections;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedStructureOpening> Openings;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedStructureLanding> Landings;
++};
++
++/** 可走图中各类平面开口形态的观测计数，不是硬配额。 */
+ USTRUCT(BlueprintType)
+ struct DEMO_API FZeroEscapeJunctionMetrics
+ {
+@@ -233,6 +310,47 @@
+ 	int32 CrossJunctionCount = 0;
+ };
+ 
++/** 每层保证通关的进入点、离开点和验收结果。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeGeneratedFloorSummary
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 FloorIndex = INDEX_NONE;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector RequiredEnterCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector RequiredLeaveCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 OrdinaryWalkableCellCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 TotalWalkableCellCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 RequiredRouteLengthTiles = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 FarthestRouteLengthTiles = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	double SpatialSeparationRatio = 0.0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	double RouteCoverageRatio = 0.0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FZeroEscapeJunctionMetrics JunctionMetrics;
++
++	/** 连通无向图使用 E-V+1；0 表示无循环。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 CycleRank = 0;
++};
++
+ /** 一次成功求解的纯空间结果，不包含 UObject、组件或第三方资源路径。 */
+ USTRUCT(BlueprintType)
+ struct DEMO_API FZeroEscapeGeneratedLevelPlan
+@@ -246,31 +364,83 @@
+ 	int64 CanonicalLayoutHash = 0;
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 FloorCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+ 	FIntPoint GridSize = FIntPoint::ZeroValue;
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+ 	double LogicalTileSizeCm = 0.0;
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	TArray<FZeroEscapeCollapsedTile> Cells;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FIntPoint StartCoordinate = FIntPoint::ZeroValue;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FIntPoint ExitCoordinate = FIntPoint::ZeroValue;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FTransform PlayerStartLocalTransform = FTransform::Identity;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	FTransform ExitLocalTransform = FTransform::Identity;
+-
+-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+-	TArray<FZeroEscapeGeneratedRoom> Rooms;
++	double FloorHeightCm = 0.0;
++
++	/** 地址转局部位置所需高度；生成后不得重新回读可变 DataAsset。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	double AnchorHeightCm = 0.0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedOrdinaryCell> OrdinaryCells;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedStructure> Structures;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector PlayerSpawnCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector PursuerSpawnCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	FIntVector ExitCoordinate = FIntVector::ZeroValue;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<FZeroEscapeGeneratedFloorSummary> Floors;
++
++	/** 下标是较低楼层，值是该相邻楼层对的必需双层楼梯 StableStructureId。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	TArray<int32> RequiredTwoFloorStairStableIdByLowerFloor;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 PlayerToExitRouteLengthTiles = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 VerticalTransitionCountOnShortestRoute = 0;
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+ 	FZeroEscapeJunctionMetrics JunctionMetrics;
++
++	/** 整栋三维通行图的 E-V+1；成功 Plan 必须是单一连通分量。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
++	int32 CycleRank = 0;
++};
++
++/** 单层二维 WFC 的搜索统计；只进入生成报告，不属于 Plan 或规范 Hash。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeFloorWfcMetrics
++{
++	GENERATED_BODY()
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 FloorIndex = INDEX_NONE;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcObservationCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcSolveAttemptCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcCandidateAttemptCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcPropagationCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcContradictionCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WfcBacktrackCount = 0;
+ };
+ 
+ /** 搜索、实例化和耗时指标；回溯恢复 Domain 时不得回滚这些累计值。 */
+@@ -280,8 +450,33 @@
+ 	GENERATED_BODY()
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 WholeLayoutAttemptCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 StructureCandidateEvaluationCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 GeneratedFloorCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 RequiredTwoFloorStairCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 AdditionalTwoFloorStairCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 ThreeFloorStairwellCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 HighCeilingRoomCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+ 	int32 WalkableCellCount = 0;
+ 
++	/** 按 FloorIndex 升序保存；整栋累计字段仍保留，方便运行时快速读取。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	TArray<FZeroEscapeFloorWfcMetrics> FloorWfcMetrics;
++
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+ 	int32 WfcObservationCount = 0;
+ 
+@@ -336,6 +531,18 @@
+ 
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+ 	double TotalMilliseconds = 0.0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 NavigationProjectionCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 NavigationPathTestCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int32 NavigationVisitedNodeCount = 0;
++
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	double NavigationValidationMilliseconds = 0.0;
+ };
+ 
+ /** 公开生成入口的报告；失败必须保留首个不可恢复检查点。 */
+@@ -344,6 +551,10 @@
+ {
+ 	GENERATED_BODY()
+ 
++	/** Runtime Generator 分配的请求编号；纯数据求解测试保持为 0。 */
++	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
++	int64 OperationId = 0;
++
+ 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+ 	EZeroEscapeGenerationStage Stage = EZeroEscapeGenerationStage::None;
+ 
+diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h b/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
+--- a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
++++ b/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
+@@ -2,8 +2,8 @@
+ 
+ /**
+  * @file ZeroEscapeGenerationAssets.h
+- * 职责：定义空间 Grid/WFC 参数与可替换的结构、顶灯表现绑定。
+- * 边界：Generation Profile 不保存玩法目标；Presentation 只选择表现资源，不参与拓扑决策。
++ * 职责：定义多层 Grid/WFC、完整结构、难度调参与可替换表现绑定。
++ * 边界：Generation Profile 不引用表现素材；Presentation 不参与结构放置或拓扑决策。
+  */
+ 
+ #pragma once
+@@ -17,59 +17,156 @@
+ class AActor;
+ class UStaticMesh;
+ 
+-/** 所有难度共同遵守的地图规模、房间、路线和求解预算。 */
++/** 所有难度共同遵守的网格、层高和层内直线约束。 */
+ USTRUCT(BlueprintType)
+ struct DEMO_API FZeroEscapeSharedRouteConstraints
+ {
+ 	GENERATED_BODY()
+ 
+-	/** 二维逻辑网格尺寸；当前不生成多层垂直地图。 */
++	/** 每层尺寸完全来自当前 DataAsset，不在代码或测试中固定某个长宽。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+ 	FIntPoint GridSize = FIntPoint(18, 12);
+ 
+-	/** WFC 一个逻辑格的边长；HydroLab 当前结构契约为 600 cm。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1.0"))
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1.0", Units = "cm"))
+ 	double LogicalTileSizeCm = 600.0;
+ 
+-	/** 中立正方形房间的边长；当前 2 表示 2x2 逻辑格。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rooms", meta = (ClampMin = "1", ClampMax = "4"))
+-	int32 RoomSizeTiles = 2;
+-
+-	/** 所有难度共享的中立房间数量；房间内容由未来玩法层决定。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Rooms", meta = (ClampMin = "0", ClampMax = "6"))
+-	int32 RoomCount = 3;
+-
+-	/** 最终非空逻辑格数量下限。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+-	int32 MinWalkableCellCount = 48;
+-
+-	/** 最终非空逻辑格数量上限；所有难度共享，避免困难局显著变长。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+-	int32 MaxWalkableCellCount = 72;
+-
+-	/** 同一轴连续贯通格上限；Straight、T 和 Cross 都计入。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1.0", Units = "cm"))
++	double FloorHeightCm = 450.0;
++
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
+ 	int32 MaxConsecutiveStraightTiles = 4;
+ 
+-	/** Start 到 Exit 的逻辑最短距离上限；不等同于 NavMesh 或实际玩家路线。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Route", meta = (ClampMin = "1"))
+-	int32 MaxRequiredRouteLengthTiles = 40;
+-
+-	/** 全部确定性 WFC 尝试合计允许的 singleton 候选次数。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1"))
+-	int32 MaxWfcCandidateAttempts = 100000;
+-
+-	/** 全部尝试合计允许恢复决策帧的次数。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1"))
+-	int32 MaxWfcBacktrackCount = 25000;
+-
+-	/** 最多建立的确定性搜索树数；总候选/回溯预算不会随此值放大。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Solver", meta = (ClampMin = "1", ClampMax = "16"))
+-	int32 MaxWfcSolveAttempts = 10;
+-
+-	/** Start、Exit 和房间 Anchor 相对地板顶面的高度。 */
+-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Anchors", meta = (ClampMin = "0.0"))
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Anchors", meta = (ClampMin = "0.0", Units = "cm"))
+ 	double AnchorHeightCm = 100.0;
++};
++
++/** 结构定义中的一条局部无向连接。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeLocalCellConnection
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FIntVector FirstCell = FIntVector::ZeroValue;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FIntVector SecondCell = FIntVector::ZeroValue;
++};
++
++/** 一个可由合法组合选择开放或封闭的结构连接口。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeStructureOpeningDefinition
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FName OpeningId = NAME_None;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FIntVector LocalWalkableCell = FIntVector::ZeroValue;
++
++	/** 必须恰好是 North、East、South、West 中的一个。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	EZeroEscapeOpenEdge OutwardEdge = EZeroEscapeOpenEdge::North;
++};
++
++/** 楼梯每层落脚平台用于距离、表现和导航检查的代表格。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeStructureLandingDefinition
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FName LandingId = NAME_None;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FIntVector LocalCoordinate = FIntVector::ZeroValue;
++};
++
++/** 一种结构实际允许开放的连接口组合。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeStructureOpeningSetDefinition
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FName SetId = NAME_None;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FName> OpenOpeningIds;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure", meta = (ClampMin = "1"))
++	int32 SelectionWeight = 1;
++};
++
++/** 一座楼梯或高天花板房间的纯逻辑配方，不引用任何表现资源。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeStructureDefinition
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	FName DefinitionId = NAME_None;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	EZeroEscapeStructureKind Kind = EZeroEscapeStructureKind::TwoFloorStair;
++
++	/** 放置该结构必须真实存在的楼层数：双层楼梯 2、三层楼梯间 3、高厅 1。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure", meta = (ClampMin = "1", ClampMax = "3"))
++	int32 RequiredFloorCount = 2;
++
++	/** 只允许高厅开启；顶层放置时可裁掉真实顶层以上的 Clearance。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	bool bAllowClearanceAboveGeneratedTopFloor = false;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FIntVector> WalkableCells;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FIntVector> SolidCells;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FIntVector> ClearanceCells;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FZeroEscapeLocalCellConnection> InternalConnections;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FZeroEscapeStructureOpeningDefinition> Openings;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FZeroEscapeStructureLandingDefinition> Landings;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure")
++	TArray<FZeroEscapeStructureOpeningSetDefinition> AllowedOpeningSets;
++};
++
++/** 所有难度共享且只能在 C++ 硬上限内调低的生成与导航预算。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeSharedGenerationBudget
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "4"))
++	int32 MaxWholeLayoutAttempts = 4;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "250000"))
++	int32 MaxStructureCandidateEvaluations = 250000;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "100000"))
++	int32 MaxWfcCandidateAttemptsPerFloor = 100000;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "25000"))
++	int32 MaxWfcBacktrackCountPerFloor = 25000;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "10"))
++	int32 MaxWfcSolveAttemptsPerFloor = 10;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Navigation", meta = (ClampMin = "0.1", ClampMax = "10.0", Units = "s"))
++	double NavigationBuildTimeoutSeconds = 10.0;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Navigation", meta = (ClampMin = "3", ClampMax = "20"))
++	int32 MaxNavigationValidationPoints = 20;
+ };
+ 
+ /** WFC 对 0..15 OpeningMask 的形态权重；路口是可能结果，不是硬配额。 */
+@@ -102,7 +199,88 @@
+ 	bool IsConfigured(FString& OutError) const;
+ };
+ 
+-/** 难度当前只重分配非空形态比例，不改变地图规模和房间数量。 */
++/** 一个非负整数目标及其抽取权重。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeWeightedCount
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Count", meta = (ClampMin = "0"))
++	int32 Count = 0;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Count", meta = (ClampMin = "0"))
++	int32 Weight = 0;
++};
++
++/** 每对相邻楼层额外生成 0、1、2 座双层楼梯的权重。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeAdditionalTwoFloorStairWeights
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stairs", meta = (ClampMin = "0"))
++	int32 ZeroAdditionalWeight = 50;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stairs", meta = (ClampMin = "0"))
++	int32 OneAdditionalWeight = 40;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stairs", meta = (ClampMin = "0"))
++	int32 TwoAdditionalWeight = 10;
++};
++
++/** 高天花板房间对整栋和单层的数量、间距约束。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeHighCeilingRoomSettings
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "0"))
++	int32 MinimumTotalCount = 0;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "0"))
++	int32 MaxCountPerFloor = 2;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "0.0", ClampMax = "1.0"))
++	double MinimumSeparationRatio = 0.0;
++};
++
++/** 某一实际楼层数下的规模、路线和额外结构上限。 */
++USTRUCT(BlueprintType)
++struct DEMO_API FZeroEscapeFloorCountOption
++{
++	GENERATED_BODY()
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Floors", meta = (ClampMin = "2", ClampMax = "4"))
++	int32 FloorCount = 3;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Floors", meta = (ClampMin = "0"))
++	int32 SelectionWeight = 1;
++
++	/** 整栋总可走格下限，包含所有楼层的普通格和结构自带 Walkable Cell。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
++	int32 MinTotalWalkableCellCount = 1;
++
++	/** 整栋总可走格上限，包含所有楼层的普通格和结构自带 Walkable Cell。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
++	int32 MaxTotalWalkableCellCount = 1;
++
++	/** 每层由普通二维 WFC 提供的最低内容量，不被楼梯或高厅替代。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
++	int32 MinOrdinaryWalkableCellCountPerFloor = 1;
++
++	/** 玩家出生点到顶层 Exit 的整栋逻辑最短路上限。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Route", meta = (ClampMin = "1"))
++	int32 MaxPlayerToExitRouteLengthTiles = 1;
++
++	/** 整栋额外双层楼梯上限，不包含每对相邻楼层必需的一座。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stairs", meta = (ClampMin = "0"))
++	int32 MaxAdditionalTwoFloorStairCount = 0;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms")
++	TArray<FZeroEscapeWeightedCount> HighCeilingRoomTargetCounts;
++};
++
++/** 一档难度的楼层、规模、额外楼梯和高厅概率；安全预算不在这里。 */
+ USTRUCT(BlueprintType)
+ struct DEMO_API FZeroEscapeDifficultyDefinition
+ {
+@@ -113,6 +291,31 @@
+ 
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|WFC")
+ 	FZeroEscapeWfcShapeWeights WfcShapeWeights;
++
++	/** 必须包含互不重复的 2、3、4 层选项；权重允许为 0。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Floors")
++	TArray<FZeroEscapeFloorCountOption> FloorCountOptions;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Stairs")
++	FZeroEscapeAdditionalTwoFloorStairWeights AdditionalTwoFloorStairsPerFloorPair;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Stairs", meta = (ClampMin = "0", ClampMax = "100", Units = "Percent"))
++	int32 ThreeFloorStairwellChancePercent = 10;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0.0", ClampMax = "1.0"))
++	double MinRequiredEndpointSpatialSeparationRatio = 0.65;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0.0", ClampMax = "1.0"))
++	double MinRequiredRouteCoverageRatio = 0.75;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Stairs", meta = (ClampMin = "0.0", ClampMax = "1.0"))
++	double MinAdditionalStairSeparationRatio = 0.25;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Spawn", meta = (ClampMin = "0.0", Units = "cm"))
++	double MinPlayerPursuerRouteDistanceCm = 1200.0;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|High Ceiling Rooms")
++	FZeroEscapeHighCeilingRoomSettings HighCeilingRooms;
+ };
+ 
+ /** 空间规则和难度权重的唯一权威 DataAsset。 */
+@@ -128,6 +331,13 @@
+ 
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
+ 	FZeroEscapeSharedRouteConstraints SharedRouteConstraints;
++
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
++	FZeroEscapeSharedGenerationBudget SharedBudget;
++
++	/** DefinitionId 全局唯一；同一种 Kind 可以配置多个候选定义。 */
++	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structures")
++	TArray<FZeroEscapeStructureDefinition> StructureDefinitions;
+ 
+ 	/** 必须恰好包含 Easy、Normal、Hard 各一条；数组顺序不参与确定性。 */
+ 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty")
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
+--- a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
++++ b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
+@@ -127,136 +127,415 @@
+ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
+ {
+ 	OutError.Reset();
++	auto Fail = [&OutError](FString Message)
++	{
++		OutError = MoveTemp(Message);
++		return false;
++	};
++
+ 	if (ProfileVersion <= 0)
+ 	{
+-		OutError = TEXT("GenerationProfile.ProfileVersion 必须大于 0。");
+-		return false;
++		return Fail(TEXT("GenerationProfile.ProfileVersion 必须大于 0。"));
+ 	}
+ 
+ 	const FZeroEscapeSharedRouteConstraints& Route = SharedRouteConstraints;
+ 	const FIntPoint GridSize = Route.GridSize;
++	const int64 GridCellCount = static_cast<int64>(GridSize.X) * GridSize.Y;
+ 	if (GridSize.X < ZeroEscape::GenerationLimits::MinGridAxis
+ 		|| GridSize.Y < ZeroEscape::GenerationLimits::MinGridAxis
+ 		|| GridSize.X > ZeroEscape::GenerationLimits::MaxGridAxis
+ 		|| GridSize.Y > ZeroEscape::GenerationLimits::MaxGridAxis
+-		|| GridSize.X * GridSize.Y > ZeroEscape::GenerationLimits::MaxGridCells)
+-	{
+-		OutError = TEXT("SharedRouteConstraints.GridSize 超出运行时安全范围。");
+-		return false;
+-	}
+-	const int32 GridCellCount = GridSize.X * GridSize.Y;
+-
+-	// 房间槽需要在左右为 Start/Exit 留出连接空间，并在中线两侧保留外部入口缓冲。
+-	if (GridSize.X < 14 || GridSize.Y < 10)
+-	{
+-		OutError = TEXT("Start/Exit 与中立房间槽要求 GridSize 至少为 14x10。");
+-		return false;
+-	}
+-
+-	// 当前表现层只接受已经测量并验证的 600/300 双层网格。
+-	if (!FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0)
+-		|| Route.RoomSizeTiles != 2)
+-	{
+-		OutError = TEXT("当前结构契约要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
+-		return false;
+-	}
+-
+-	if (Route.RoomCount < 0
+-		|| Route.RoomCount > ZeroEscape::GenerationLimits::MaxRoomCount
+-		|| Route.MaxRequiredRouteLengthTiles <= 0
+-		|| !FMath::IsFinite(Route.AnchorHeightCm)
+-		|| Route.AnchorHeightCm < 0.0)
+-	{
+-		OutError = TEXT("SharedRouteConstraints 包含非法房间、路线或 Anchor 参数。");
+-		return false;
+-	}
+-
+-	if (Route.MinWalkableCellCount <= 0
+-		|| Route.MaxWalkableCellCount < Route.MinWalkableCellCount
+-		|| Route.MaxWalkableCellCount > GridCellCount)
+-	{
+-		OutError = TEXT("非空 Cell 数量必须满足 0 < MinWalkable <= MaxWalkable <= GridCells。");
+-		return false;
+-	}
+-
+-	if (Route.MaxConsecutiveStraightTiles <= 0
+-		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y)
+-		|| Route.MaxWfcCandidateAttempts <= 0
+-		|| Route.MaxWfcBacktrackCount <= 0
+-		|| Route.MaxWfcSolveAttempts <= 0
+-		|| Route.MaxWfcSolveAttempts > 16
+-		|| Route.MaxWfcCandidateAttempts < Route.MaxWfcSolveAttempts
+-		|| Route.MaxWfcBacktrackCount < Route.MaxWfcSolveAttempts)
+-	{
+-		OutError = TEXT(
+-			"连续轴向贯通上限或 WFC 尝试/候选/回溯预算配置非法；"
+-			"总候选与总回溯预算必须至少能为每次尝试分配 1 次。");
+-		return false;
+-	}
+-
+-	// 中立房间沿 X 轴均匀分布；相邻房间至少留一格，房间外部连接完全交给 WFC。
+-	const int32 MinRoomX = 4;
+-	const int32 MaxRoomX = GridSize.X - Route.RoomSizeTiles - 5;
+-	const int32 RoomSpan = MaxRoomX - MinRoomX;
+-	const int32 MinimumRoomSpacing = Route.RoomSizeTiles + 1;
+-	if (Route.RoomCount > 0
+-		&& (MaxRoomX < MinRoomX
+-			|| (Route.RoomCount > 1
+-				&& RoomSpan < (Route.RoomCount - 1) * MinimumRoomSpacing)))
+-	{
+-		OutError = TEXT("GridSize.X 无法容纳 RoomCount、2x2 房间与安全间距。");
+-		return false;
+-	}
+-
+-	// 上下 Lane 分列在中线两侧，并为地图外圈保留一格封闭边界。
+-	const int32 CenterY = GridSize.Y / 2;
+-	const int32 LowerLaneMinY = CenterY - Route.RoomSizeTiles;
+-	const int32 UpperLaneMinY = CenterY + 1;
+-	if (LowerLaneMinY < 1
+-		|| UpperLaneMinY + Route.RoomSizeTiles > GridSize.Y - 1)
+-	{
+-		OutError = TEXT("GridSize.Y 无法在中线两侧容纳上下 2x2 房间 Lane 与外圈边界。");
+-		return false;
+-	}
+-
+-	const int64 FixedNonEmptyCellCount = 2LL
+-		+ static_cast<int64>(Route.RoomCount)
+-			* Route.RoomSizeTiles * Route.RoomSizeTiles;
+-	if (FixedNonEmptyCellCount > Route.MaxWalkableCellCount)
+-	{
+-		OutError = FString::Printf(
+-			TEXT("Start/Exit/Rooms 至少需要 %lld 个非空格，超过 MaxWalkable=%d。"),
+-			static_cast<long long>(FixedNonEmptyCellCount),
+-			Route.MaxWalkableCellCount);
+-		return false;
+-	}
+-
++		|| GridCellCount > ZeroEscape::GenerationLimits::MaxGridCells)
++	{
++		return Fail(TEXT("SharedRouteConstraints.GridSize 超出每层运行时安全范围。"));
++	}
++	if (!FMath::IsFinite(Route.LogicalTileSizeCm)
++		|| !FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0))
++	{
++		return Fail(TEXT("当前 HydroLab 结构合同要求 LogicalTileSizeCm=600。"));
++	}
++	if (!FMath::IsFinite(Route.FloorHeightCm) || Route.FloorHeightCm <= 0.0
++		|| !FMath::IsFinite(Route.AnchorHeightCm) || Route.AnchorHeightCm < 0.0
++		|| Route.MaxConsecutiveStraightTiles <= 0
++		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y))
++	{
++		return Fail(TEXT("SharedRouteConstraints 包含非法层高、锚点高度或连续直线限制。"));
++	}
++
++	const FZeroEscapeSharedGenerationBudget& Budget = SharedBudget;
++	if (Budget.MaxWholeLayoutAttempts <= 0
++		|| Budget.MaxWholeLayoutAttempts > ZeroEscape::GenerationLimits::MaxWholeLayoutAttempts
++		|| Budget.MaxStructureCandidateEvaluations <= 0
++		|| Budget.MaxStructureCandidateEvaluations
++			> ZeroEscape::GenerationLimits::MaxStructureCandidateEvaluations
++		|| Budget.MaxWfcCandidateAttemptsPerFloor <= 0
++		|| Budget.MaxWfcCandidateAttemptsPerFloor
++			> ZeroEscape::GenerationLimits::MaxWfcCandidateAttemptsPerFloor
++		|| Budget.MaxWfcBacktrackCountPerFloor <= 0
++		|| Budget.MaxWfcBacktrackCountPerFloor
++			> ZeroEscape::GenerationLimits::MaxWfcBacktrackCountPerFloor
++		|| Budget.MaxWfcSolveAttemptsPerFloor <= 0
++		|| Budget.MaxWfcSolveAttemptsPerFloor
++			> ZeroEscape::GenerationLimits::MaxWfcSolveAttemptsPerFloor
++		|| Budget.MaxWfcCandidateAttemptsPerFloor < Budget.MaxWfcSolveAttemptsPerFloor
++		|| Budget.MaxWfcBacktrackCountPerFloor < Budget.MaxWfcSolveAttemptsPerFloor)
++	{
++		return Fail(TEXT("SharedBudget 的结构候选或逐层 WFC 预算非法。"));
++	}
++	if (!FMath::IsFinite(Budget.NavigationBuildTimeoutSeconds)
++		|| Budget.NavigationBuildTimeoutSeconds <= 0.0
++		|| Budget.NavigationBuildTimeoutSeconds
++			> ZeroEscape::GenerationLimits::MaxNavigationBuildTimeoutSeconds
++		|| Budget.MaxNavigationValidationPoints < 3
++		|| Budget.MaxNavigationValidationPoints
++			> ZeroEscape::GenerationLimits::MaxNavigationValidationPoints)
++	{
++		return Fail(TEXT("SharedBudget 的导航等待或验证点上限非法。"));
++	}
++
++	if (StructureDefinitions.IsEmpty())
++	{
++		return Fail(TEXT("StructureDefinitions 不能为空。"));
++	}
++	bool SeenStructureKinds[3] = {false, false, false};
++	TSet<FName> SeenDefinitionIds;
++	for (const FZeroEscapeStructureDefinition& Definition : StructureDefinitions)
++	{
++		const int32 KindIndex = static_cast<int32>(Definition.Kind);
++		if (Definition.DefinitionId.IsNone()
++			|| SeenDefinitionIds.Contains(Definition.DefinitionId)
++			|| KindIndex < 0 || KindIndex >= UE_ARRAY_COUNT(SeenStructureKinds))
++		{
++			return Fail(TEXT("StructureDefinitions 的 DefinitionId 缺失或重复，或 Kind 非法。"));
++		}
++		SeenDefinitionIds.Add(Definition.DefinitionId);
++		SeenStructureKinds[KindIndex] = true;
++
++		const int32 ExpectedRequiredFloorCount =
++			Definition.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 3
++			: Definition.Kind == EZeroEscapeStructureKind::TwoFloorStair ? 2
++			: 1;
++		if (Definition.RequiredFloorCount != ExpectedRequiredFloorCount)
++		{
++			return Fail(FString::Printf(
++				TEXT("结构 %s 的 RequiredFloorCount 与 Kind 不一致。"),
++				*Definition.DefinitionId.ToString()));
++		}
++		const bool bIsHighCeilingRoom =
++			Definition.Kind == EZeroEscapeStructureKind::HighCeilingRoom;
++		if (Definition.bAllowClearanceAboveGeneratedTopFloor != bIsHighCeilingRoom)
++		{
++			return Fail(FString::Printf(
++				TEXT("只有高天花板房间 %s 可以裁掉真实顶层以上的 Clearance。"),
++				*Definition.DefinitionId.ToString()));
++		}
++		if (Definition.WalkableCells.IsEmpty())
++		{
++			return Fail(FString::Printf(
++				TEXT("结构 %s 必须至少包含一个 Walkable Cell。"),
++				*Definition.DefinitionId.ToString()));
++		}
++
++		TSet<FIntVector> WalkableCells;
++		TSet<FIntVector> AllReservedCells;
++		auto AddCellArray = [
++			&Definition,
++			&WalkableCells,
++			&AllReservedCells,
++			&Fail](
++			const TArray<FIntVector>& Cells,
++			const bool bWalkable,
++			const bool bClearance)
++		{
++			for (const FIntVector Cell : Cells)
++			{
++				const bool bInsideRequiredFloors =
++					Cell.Z >= 0 && Cell.Z < Definition.RequiredFloorCount;
++				const bool bAllowedTopClearance = bClearance
++					&& Definition.bAllowClearanceAboveGeneratedTopFloor
++					&& Cell.Z == Definition.RequiredFloorCount;
++				if ((!bInsideRequiredFloors && !bAllowedTopClearance)
++					|| AllReservedCells.Contains(Cell))
++				{
++					return Fail(FString::Printf(
++						TEXT("结构 %s 的 Cell 越界、重复或跨占用类别。"),
++						*Definition.DefinitionId.ToString()));
++				}
++				AllReservedCells.Add(Cell);
++				if (bWalkable)
++				{
++					WalkableCells.Add(Cell);
++				}
++			}
++			return true;
++		};
++		if (!AddCellArray(Definition.WalkableCells, true, false)
++			|| !AddCellArray(Definition.SolidCells, false, false)
++			|| !AddCellArray(Definition.ClearanceCells, false, true))
++		{
++			return false;
++		}
++
++		TArray<bool> HasConnectionToNextFloor;
++		HasConnectionToNextFloor.Init(false, Definition.RequiredFloorCount - 1);
++		TMap<FIntVector, TSet<FIntVector>> NormalizedInternalConnections;
++		auto IsCoordinateLess = [](const FIntVector& Left, const FIntVector& Right)
++		{
++			return Left.X != Right.X ? Left.X < Right.X
++				: Left.Y != Right.Y ? Left.Y < Right.Y
++				: Left.Z < Right.Z;
++		};
++		for (const FZeroEscapeLocalCellConnection& Connection :
++			Definition.InternalConnections)
++		{
++			if (Connection.FirstCell == Connection.SecondCell
++				|| !WalkableCells.Contains(Connection.FirstCell)
++				|| !WalkableCells.Contains(Connection.SecondCell))
++			{
++				return Fail(FString::Printf(
++					TEXT("结构 %s 的内部连接必须连接两个不同 Walkable Cell。"),
++					*Definition.DefinitionId.ToString()));
++			}
++			FIntVector NormalizedFirst = Connection.FirstCell;
++			FIntVector NormalizedSecond = Connection.SecondCell;
++			if (IsCoordinateLess(NormalizedSecond, NormalizedFirst))
++			{
++				Swap(NormalizedFirst, NormalizedSecond);
++			}
++			TSet<FIntVector>& Neighbors =
++				NormalizedInternalConnections.FindOrAdd(NormalizedFirst);
++			if (Neighbors.Contains(NormalizedSecond))
++			{
++				return Fail(FString::Printf(
++					TEXT("结构 %s 的 InternalConnections 不得重复；反向记录视为同一条无向边。"),
++					*Definition.DefinitionId.ToString()));
++			}
++			Neighbors.Add(NormalizedSecond);
++			const int32 FloorDelta =
++				FMath::Abs(Connection.FirstCell.Z - Connection.SecondCell.Z);
++			if (FloorDelta == 0)
++			{
++				const int32 PlanarDistance =
++					FMath::Abs(Connection.FirstCell.X - Connection.SecondCell.X)
++					+ FMath::Abs(Connection.FirstCell.Y - Connection.SecondCell.Y);
++				if (PlanarDistance != 1)
++				{
++					return Fail(TEXT("结构同层内部连接必须是四邻域相邻格。"));
++				}
++			}
++			else if (FloorDelta == 1)
++			{
++				const int32 LowerFloor =
++					FMath::Min(Connection.FirstCell.Z, Connection.SecondCell.Z);
++				if (!HasConnectionToNextFloor.IsValidIndex(LowerFloor))
++				{
++					return Fail(TEXT("结构跨层连接落在 RequiredFloorCount 之外。"));
++				}
++				HasConnectionToNextFloor[LowerFloor] = true;
++			}
++			else
++			{
++				return Fail(TEXT("结构内部连接不得跨过中间楼层。"));
++			}
++		}
++		TSet<FIntVector> ReachableWalkableCells;
++		TArray<FIntVector> WalkableQueue;
++		WalkableQueue.Add(Definition.WalkableCells[0]);
++		ReachableWalkableCells.Add(Definition.WalkableCells[0]);
++		for (int32 QueueIndex = 0; QueueIndex < WalkableQueue.Num(); ++QueueIndex)
++		{
++			const FIntVector Current = WalkableQueue[QueueIndex];
++			for (const FZeroEscapeLocalCellConnection& Connection :
++				Definition.InternalConnections)
++			{
++				FIntVector Neighbor;
++				bool bHasNeighbor = false;
++				if (Connection.FirstCell == Current)
++				{
++					Neighbor = Connection.SecondCell;
++					bHasNeighbor = true;
++				}
++				else if (Connection.SecondCell == Current)
++				{
++					Neighbor = Connection.FirstCell;
++					bHasNeighbor = true;
++				}
++				if (bHasNeighbor && !ReachableWalkableCells.Contains(Neighbor))
++				{
++					ReachableWalkableCells.Add(Neighbor);
++					WalkableQueue.Add(Neighbor);
++				}
++			}
++		}
++		if (ReachableWalkableCells.Num() != WalkableCells.Num())
++		{
++			return Fail(FString::Printf(
++				TEXT("结构 %s 的 WalkableCells 未被 InternalConnections 全部连通。"),
++				*Definition.DefinitionId.ToString()));
++		}
++		if (!bIsHighCeilingRoom)
++		{
++			for (const bool bConnected : HasConnectionToNextFloor)
++			{
++				if (!bConnected)
++				{
++					return Fail(TEXT("楼梯必须逐层包含内部跨层连接。"));
++				}
++			}
++		}
++
++		TSet<FName> LandingIds;
++		TSet<int32> LandingFloors;
++		for (const FZeroEscapeStructureLandingDefinition& Landing : Definition.Landings)
++		{
++			if (Landing.LandingId.IsNone()
++				|| LandingIds.Contains(Landing.LandingId)
++				|| !WalkableCells.Contains(Landing.LocalCoordinate)
++				|| LandingFloors.Contains(Landing.LocalCoordinate.Z))
++			{
++				return Fail(TEXT("结构 Landing 必须 ID 唯一、位于 Walkable Cell 且每层一个。"));
++			}
++			LandingIds.Add(Landing.LandingId);
++			LandingFloors.Add(Landing.LocalCoordinate.Z);
++		}
++		if ((!bIsHighCeilingRoom
++				&& Definition.Landings.Num() != Definition.RequiredFloorCount)
++			|| (bIsHighCeilingRoom && !Definition.Landings.IsEmpty()))
++		{
++			return Fail(TEXT("楼梯每层必须有一个 Landing；高天花板房间不得伪造 Landing。"));
++		}
++
++		TSet<FName> OpeningIds;
++		TMap<FName, int32> OpeningFloorById;
++		for (const FZeroEscapeStructureOpeningDefinition& Opening : Definition.Openings)
++		{
++			const uint8 Edge = static_cast<uint8>(Opening.OutwardEdge);
++			if (Opening.OpeningId.IsNone()
++				|| OpeningIds.Contains(Opening.OpeningId)
++				|| !WalkableCells.Contains(Opening.LocalWalkableCell)
++				|| Edge == 0
++				|| (Edge & ~ZeroEscape::Grid::AllOpenEdges) != 0
++				|| FMath::CountBits(static_cast<uint32>(Edge)) != 1)
++			{
++				return Fail(TEXT("结构 Opening 必须 ID 唯一、位于 Walkable Cell 且只有一个朝向。"));
++			}
++			uint8 DirectionIndex = ZeroEscape::Grid::DirectionCount;
++			for (uint8 CandidateDirection = 0;
++				CandidateDirection < ZeroEscape::Grid::DirectionCount;
++				++CandidateDirection)
++			{
++				if (Edge == ZeroEscape::Grid::DirectionBit(CandidateDirection))
++				{
++					DirectionIndex = CandidateDirection;
++					break;
++				}
++			}
++			const FIntPoint OutsidePlanar = ZeroEscape::Grid::Step(
++				FIntPoint(Opening.LocalWalkableCell.X, Opening.LocalWalkableCell.Y),
++				DirectionIndex);
++			const FIntVector OutsideCell(
++				OutsidePlanar.X,
++				OutsidePlanar.Y,
++				Opening.LocalWalkableCell.Z);
++			if (AllReservedCells.Contains(OutsideCell))
++			{
++				return Fail(FString::Printf(
++					TEXT("结构 %s 的 Opening 指向了本结构内部占用。"),
++					*Definition.DefinitionId.ToString()));
++			}
++			OpeningIds.Add(Opening.OpeningId);
++			OpeningFloorById.Add(Opening.OpeningId, Opening.LocalWalkableCell.Z);
++		}
++		if (Definition.Openings.IsEmpty() || Definition.AllowedOpeningSets.IsEmpty())
++		{
++			return Fail(TEXT("每种结构必须配置连接口和至少一个合法开放组合。"));
++		}
++
++		TSet<FName> OpeningSetIds;
++		for (const FZeroEscapeStructureOpeningSetDefinition& Set :
++			Definition.AllowedOpeningSets)
++		{
++			if (Set.SetId.IsNone() || OpeningSetIds.Contains(Set.SetId)
++				|| Set.SelectionWeight <= 0 || Set.OpenOpeningIds.IsEmpty())
++			{
++				return Fail(TEXT("结构 Opening Set 必须 ID 唯一、权重为正且至少开一个口。"));
++			}
++			OpeningSetIds.Add(Set.SetId);
++			TSet<FName> SeenOpeningsInSet;
++			TArray<int32> OpenCountByFloor;
++			OpenCountByFloor.Init(0, Definition.RequiredFloorCount);
++			for (const FName OpeningId : Set.OpenOpeningIds)
++			{
++				const int32* Floor = OpeningFloorById.Find(OpeningId);
++				if (Floor == nullptr || SeenOpeningsInSet.Contains(OpeningId)
++					|| !OpenCountByFloor.IsValidIndex(*Floor))
++				{
++					return Fail(TEXT("Opening Set 引用了缺失、重复或越层的 OpeningId。"));
++				}
++				SeenOpeningsInSet.Add(OpeningId);
++				++OpenCountByFloor[*Floor];
++			}
++			for (const int32 OpenCount : OpenCountByFloor)
++			{
++				if (OpenCount > 3 || (!bIsHighCeilingRoom && OpenCount < 1))
++				{
++					return Fail(TEXT("楼梯每层必须开放 1 至 3 个连接口。"));
++				}
++			}
++		}
++
++		if (bIsHighCeilingRoom)
++		{
++			if (Definition.WalkableCells.Num() != 2
++				|| Definition.ClearanceCells.Num() != 2
++				|| Definition.WalkableCells[0].Z != 0
++				|| Definition.WalkableCells[1].Z != 0)
++			{
++				return Fail(TEXT("首版高天花板房间必须是本层 1x2 Walkable 和上一层对应净空。"));
++			}
++			const int32 RoomCellDistance =
++				FMath::Abs(Definition.WalkableCells[0].X - Definition.WalkableCells[1].X)
++				+ FMath::Abs(Definition.WalkableCells[0].Y - Definition.WalkableCells[1].Y);
++			if (RoomCellDistance != 1)
++			{
++				return Fail(TEXT("首版高天花板房间的两个 Walkable Cell 必须相邻。"));
++			}
++			for (const FIntVector Walkable : Definition.WalkableCells)
++			{
++				if (!Definition.ClearanceCells.Contains(FIntVector(Walkable.X, Walkable.Y, 1)))
++				{
++					return Fail(TEXT("高天花板房间的 Clearance 必须与 1x2 Walkable 垂直对应。"));
++				}
++			}
++		}
++	}
++
++	if (Difficulties.Num() != 3)
++	{
++		return Fail(TEXT("Difficulties 必须恰好包含 Easy、Normal、Hard 各一条。"));
++	}
+ 	bool SeenDifficulties[3] = {false, false, false};
+ 	int32 SharedEmptyWeight = INDEX_NONE;
+ 	int64 SharedNonEmptyWeight = INDEX_NONE;
++	bool bAnyThreeFloorStairwellRequested = false;
++	bool bAnyHighCeilingRoomRequested = false;
+ 	for (const FZeroEscapeDifficultyDefinition& Definition : Difficulties)
+ 	{
+ 		const int32 DifficultyIndex = static_cast<int32>(Definition.Difficulty);
+ 		if (DifficultyIndex < 0 || DifficultyIndex >= UE_ARRAY_COUNT(SeenDifficulties)
+ 			|| SeenDifficulties[DifficultyIndex])
+ 		{
+-			OutError = TEXT("Difficulties 必须恰好包含三个互不重复的难度。");
+-			return false;
++			return Fail(TEXT("Difficulties 包含非法或重复难度。"));
+ 		}
+ 		SeenDifficulties[DifficultyIndex] = true;
+ 
+ 		FString WeightError;
+ 		if (!Definition.WfcShapeWeights.IsConfigured(WeightError))
+ 		{
+-			OutError = FString::Printf(
+-				TEXT("难度 %d 的 WFC 权重非法：%s"),
+-				DifficultyIndex,
+-				*WeightError);
+-			return false;
+-		}
+-
+-		const int64 NonEmptyWeight =
+-			Definition.WfcShapeWeights.GetTotalNonEmptyVariantWeight();
++			return Fail(FString::Printf(
++				TEXT("难度 %d 的 WFC 权重非法：%s"), DifficultyIndex, *WeightError));
++		}
++		const int64 NonEmptyWeight = Definition.WfcShapeWeights.GetTotalNonEmptyVariantWeight();
+ 		if (SharedEmptyWeight == INDEX_NONE)
+ 		{
+ 			SharedEmptyWeight = Definition.WfcShapeWeights.EmptyWeight;
+@@ -265,20 +544,138 @@
+ 		else if (SharedEmptyWeight != Definition.WfcShapeWeights.EmptyWeight
+ 			|| SharedNonEmptyWeight != NonEmptyWeight)
+ 		{
+-			OutError = TEXT(
+-				"Easy、Normal、Hard 必须保持相同 EmptyWeight 与非空 Variant 总权重；"
+-				"难度只能重新分配 DeadEnd/Straight/Corner/T/Cross 的形态比例。");
+-			return false;
++			return Fail(TEXT("三档难度必须保持相同 EmptyWeight 与非空 Variant 总权重。"));
++		}
++
++		const FZeroEscapeAdditionalTwoFloorStairWeights& ExtraWeights =
++			Definition.AdditionalTwoFloorStairsPerFloorPair;
++		if (ExtraWeights.ZeroAdditionalWeight < 0
++			|| ExtraWeights.OneAdditionalWeight < 0
++			|| ExtraWeights.TwoAdditionalWeight < 0
++			|| static_cast<int64>(ExtraWeights.ZeroAdditionalWeight)
++				+ ExtraWeights.OneAdditionalWeight + ExtraWeights.TwoAdditionalWeight <= 0)
++		{
++			return Fail(TEXT("额外双层楼梯 0/1/2 数量权重必须非负且总和大于 0。"));
++		}
++		auto IsRatio = [](const double Value)
++		{
++			return FMath::IsFinite(Value) && Value >= 0.0 && Value <= 1.0;
++		};
++		if (Definition.ThreeFloorStairwellChancePercent < 0
++			|| Definition.ThreeFloorStairwellChancePercent > 100
++			|| !IsRatio(Definition.MinRequiredEndpointSpatialSeparationRatio)
++			|| !IsRatio(Definition.MinRequiredRouteCoverageRatio)
++			|| !IsRatio(Definition.MinAdditionalStairSeparationRatio)
++			|| !FMath::IsFinite(Definition.MinPlayerPursuerRouteDistanceCm)
++			|| Definition.MinPlayerPursuerRouteDistanceCm < 0.0)
++		{
++			return Fail(TEXT("难度的三层楼梯间概率、距离比例或出生路线距离非法。"));
++		}
++		bAnyThreeFloorStairwellRequested |=
++			Definition.ThreeFloorStairwellChancePercent > 0;
++		const FZeroEscapeHighCeilingRoomSettings& HighRooms = Definition.HighCeilingRooms;
++		if (HighRooms.MinimumTotalCount < 0 || HighRooms.MaxCountPerFloor < 0
++			|| !IsRatio(HighRooms.MinimumSeparationRatio))
++		{
++			return Fail(TEXT("高天花板房间的最低数量、每层上限或间距比例非法。"));
++		}
++		bAnyHighCeilingRoomRequested |= HighRooms.MinimumTotalCount > 0;
++
++		if (Definition.FloorCountOptions.Num() != 3)
++		{
++			return Fail(TEXT("每档难度必须恰好配置 2、3、4 层三个选项。"));
++		}
++		bool SeenFloorCounts[3] = {false, false, false};
++		int64 TotalFloorSelectionWeight = 0;
++		for (const FZeroEscapeFloorCountOption& Option : Definition.FloorCountOptions)
++		{
++			const int32 FloorOptionIndex =
++				Option.FloorCount - ZeroEscape::GenerationLimits::MinFloorCount;
++			if (FloorOptionIndex < 0 || FloorOptionIndex >= UE_ARRAY_COUNT(SeenFloorCounts)
++				|| SeenFloorCounts[FloorOptionIndex] || Option.SelectionWeight < 0)
++			{
++				return Fail(TEXT("FloorCountOptions 必须包含互不重复的 2、3、4 层。"));
++			}
++			SeenFloorCounts[FloorOptionIndex] = true;
++			TotalFloorSelectionWeight += Option.SelectionWeight;
++
++			const int64 BuildingCellCapacity =
++				GridCellCount * static_cast<int64>(Option.FloorCount);
++			const int64 RequiredOrdinaryMinimum =
++				static_cast<int64>(Option.MinOrdinaryWalkableCellCountPerFloor)
++					* Option.FloorCount;
++			if (Option.MinTotalWalkableCellCount <= 0
++				|| Option.MaxTotalWalkableCellCount
++					< Option.MinTotalWalkableCellCount
++				|| Option.MaxTotalWalkableCellCount > BuildingCellCapacity
++				|| Option.MinOrdinaryWalkableCellCountPerFloor <= 0
++				|| Option.MinOrdinaryWalkableCellCountPerFloor > GridCellCount
++				|| Option.MinTotalWalkableCellCount < RequiredOrdinaryMinimum
++				|| Option.MaxPlayerToExitRouteLengthTiles <= 0
++				|| Option.MaxAdditionalTwoFloorStairCount < 0
++				|| Option.MaxAdditionalTwoFloorStairCount > 2 * (Option.FloorCount - 1))
++			{
++				return Fail(TEXT("FloorCountOption 的整栋总量、每层普通内容或额外楼梯上限非法。"));
++			}
++
++			const int32 RequiredTwoFloorStairs = Option.FloorCount - 1;
++			const int32 MaxNavigationPoints = 3
++				+ 2 * (RequiredTwoFloorStairs + Option.MaxAdditionalTwoFloorStairCount)
++				+ (Option.FloorCount >= 3
++					&& Definition.ThreeFloorStairwellChancePercent > 0 ? 3 : 0);
++			if (MaxNavigationPoints > Budget.MaxNavigationValidationPoints)
++			{
++				return Fail(TEXT("楼梯上限产生的导航验证点超过 SharedBudget。"));
++			}
++
++			if (HighRooms.MinimumTotalCount > HighRooms.MaxCountPerFloor * Option.FloorCount
++				|| Option.HighCeilingRoomTargetCounts.IsEmpty())
++			{
++				return Fail(TEXT("高天花板房间整栋最低数量或目标权重无法适配该楼层数。"));
++			}
++			TSet<int32> SeenHighRoomCounts;
++			int64 TotalHighRoomWeight = 0;
++			for (const FZeroEscapeWeightedCount& CountOption :
++				Option.HighCeilingRoomTargetCounts)
++			{
++				if (CountOption.Count < HighRooms.MinimumTotalCount
++					|| CountOption.Count > HighRooms.MaxCountPerFloor * Option.FloorCount
++					|| CountOption.Weight < 0
++					|| SeenHighRoomCounts.Contains(CountOption.Count))
++				{
++					return Fail(TEXT("高天花板房间目标数量必须唯一、可容纳且权重非负。"));
++				}
++				SeenHighRoomCounts.Add(CountOption.Count);
++				TotalHighRoomWeight += CountOption.Weight;
++				bAnyHighCeilingRoomRequested |=
++					CountOption.Count > 0 && CountOption.Weight > 0;
++			}
++			if (TotalHighRoomWeight <= 0)
++			{
++				return Fail(TEXT("高天花板房间目标数量权重总和必须大于 0。"));
++			}
++		}
++		if (!SeenFloorCounts[0] || !SeenFloorCounts[1] || !SeenFloorCounts[2]
++			|| TotalFloorSelectionWeight <= 0)
++		{
++			return Fail(TEXT("每档难度的 2、3、4 层权重必须齐全且总和大于 0。"));
+ 		}
+ 	}
+ 
+ 	if (!SeenDifficulties[0] || !SeenDifficulties[1] || !SeenDifficulties[2])
+ 	{
+-		OutError = TEXT("Difficulties 缺少 Easy、Normal 或 Hard。");
+-		return false;
+-	}
+-
+-	// Profile 只声明共享上限；路线长度由完整 WFC 候选的最终 BFS 验收。
++		return Fail(TEXT("Difficulties 缺少 Easy、Normal 或 Hard。"));
++	}
++	if (!SeenStructureKinds[static_cast<int32>(EZeroEscapeStructureKind::TwoFloorStair)]
++		|| (bAnyThreeFloorStairwellRequested
++			&& !SeenStructureKinds[
++				static_cast<int32>(EZeroEscapeStructureKind::ThreeFloorStairwell)])
++		|| (bAnyHighCeilingRoomRequested
++			&& !SeenStructureKinds[
++				static_cast<int32>(EZeroEscapeStructureKind::HighCeilingRoom)]))
++	{
++		return Fail(TEXT("StructureDefinitions 缺少当前难度配置实际需要的结构 Kind。"));
++	}
+ 	return true;
+ }
+ 
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.h b/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.h
+--- a/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.h
++++ b/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.h
+@@ -2,8 +2,8 @@
+ 
+ /**
+  * @file ZeroEscapeGenerationCore.h
+- * 职责：把 Request 与 Generation Profile 解析为一次不可变纯值输入，并提供确定性随机域和 Hash。
+- * 边界：除解析入口外不访问 UObject；不保存玩法规则、World、Mesh 或求解状态。
++ * 职责：把 Request 与多层 Generation Profile 解析为不可变纯值输入，并提供随机子流和规范 Hash。
++ * 边界：除解析入口外不访问 UObject；不访问 World、Mesh、导航或求解状态。
+  */
+ 
+ #pragma once
+@@ -15,12 +15,19 @@
+ namespace ZeroEscape::LevelGeneration
+ {
+ 	/** V5 移除玩法流程链，空间结果的确定性版本随之递增。 */
+-	inline constexpr int32 GAlgorithmVersion = 5;
++	inline constexpr int32 GAlgorithmVersion = 6;
+ 
+ 	/** 相互隔离的随机子流；房间抽样变化不会扰动 WFC 的随机序列。 */
+ 	enum class ERandomDomain : uint32
+ 	{
+-		RoomPlacement = 0x20B8A51Du,
++		FloorCount = 0x1F5A57C3u,
++		RequiredTwoFloorStairPlacement = 0x20B8A51Du,
++		AdditionalTwoFloorStairCount = 0x39A781E5u,
++		AdditionalTwoFloorStairPlacement = 0x4C267A91u,
++		ThreeFloorStairwellPlacement = 0x55E1B3A7u,
++		HighCeilingRoomCount = 0x6A943D2Bu,
++		HighCeilingRoomPlacement = 0x73C80E4Fu,
++		PlayerPursuerSpawn = 0x84D26B19u,
+ 		WfcLayout = 0x95E27B43u
+ 	};
+ 
+@@ -28,7 +35,10 @@
+ 	struct FResolvedGenerationInput
+ 	{
+ 		FZeroEscapeGenerationSignature Signature;
+-		FZeroEscapeSharedRouteConstraints Rules;
++		FZeroEscapeSharedRouteConstraints SharedRules;
++		FZeroEscapeSharedGenerationBudget Budget;
++		FZeroEscapeDifficultyDefinition Difficulty;
++		TArray<FZeroEscapeStructureDefinition> StructureDefinitions;
+ 		FZeroEscapeWfcShapeWeights WfcShapeWeights;
+ 	};
+ 
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.cpp b/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.cpp
+--- a/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.cpp
++++ b/Source/Demo/Private/PCG/ZeroEscapeGenerationCore.cpp
+@@ -7,6 +7,8 @@
+  */
+ 
+ #include "PCG/ZeroEscapeGenerationCore.h"
++
++#include "Containers/StringConv.h"
+ 
+ namespace ZeroEscape::LevelGeneration
+ {
+@@ -23,6 +25,79 @@
+ 				Hash ^= (Value >> (ByteIndex * 8)) & 0xFFu;
+ 				Hash *= HashPrime;
+ 			}
++		}
++
++		/** FName 必须按字符串内容写入 Hash，不能使用本进程的 Name 索引。 */
++		void HashName(uint64& Hash, const FName Name)
++		{
++			const FString Text = Name.ToString();
++			const FTCHARToUTF8 Utf8(*Text);
++			HashUInt64(Hash, static_cast<uint64>(Utf8.Length()));
++			for (int32 Index = 0; Index < Utf8.Length(); ++Index)
++			{
++				Hash ^= static_cast<uint8>(Utf8.Get()[Index]);
++				Hash *= HashPrime;
++			}
++		}
++
++		void HashCoordinate(uint64& Hash, const FIntVector Coordinate)
++		{
++			HashUInt64(Hash, static_cast<uint64>(Coordinate.X));
++			HashUInt64(Hash, static_cast<uint64>(Coordinate.Y));
++			HashUInt64(Hash, static_cast<uint64>(Coordinate.Z));
++		}
++
++		/** 精确写入 IEEE 754 bit，避免不同配置因十进制定点舍入得到同一 Hash。 */
++		void HashDouble(uint64& Hash, const double Value)
++		{
++			static_assert(sizeof(double) == sizeof(uint64));
++			uint64 Bits = 0;
++			FMemory::Memcpy(&Bits, &Value, sizeof(Bits));
++			HashUInt64(Hash, Bits);
++		}
++
++		bool IsInsideBuilding(
++			const FIntVector Coordinate,
++			const FIntPoint GridSize,
++			const int32 FloorCount)
++		{
++			return Coordinate.Z >= 0 && Coordinate.Z < FloorCount
++				&& Grid::IsInside(FIntPoint(Coordinate.X, Coordinate.Y), GridSize);
++		}
++
++		bool CoordinateLess(const FIntVector A, const FIntVector B)
++		{
++			return A.Z != B.Z ? A.Z < B.Z
++				: A.Y != B.Y ? A.Y < B.Y
++				: A.X < B.X;
++		}
++
++		bool NameLess(const FName A, const FName B)
++		{
++			return A.ToString().Compare(B.ToString()) < 0;
++		}
++
++		bool HashCoordinateArray(
++			uint64& Hash,
++			const TArray<FIntVector>& Coordinates,
++			const FIntPoint GridSize,
++			const int32 FloorCount)
++		{
++			HashUInt64(Hash, Coordinates.Num());
++			FIntVector Previous;
++			bool bHasPrevious = false;
++			for (const FIntVector Coordinate : Coordinates)
++			{
++				if (!IsInsideBuilding(Coordinate, GridSize, FloorCount)
++					|| (bHasPrevious && !CoordinateLess(Previous, Coordinate)))
++				{
++					return false;
++				}
++				HashCoordinate(Hash, Coordinate);
++				Previous = Coordinate;
++				bHasPrevious = true;
++			}
++			return true;
+ 		}
+ 
+ 		/** 文件专属失败入口，避免 Unity Build 中匿名命名空间的同名函数冲突。 */
+@@ -77,7 +152,81 @@
+ 				TEXT("Request.Difficulty 无法从 Generation Profile 解析。"));
+ 		}
+ 
+-		OutInput.Rules = Profile.SharedRouteConstraints;
++		OutInput.SharedRules = Profile.SharedRouteConstraints;
++		OutInput.Budget = Profile.SharedBudget;
++		OutInput.Difficulty = *Difficulty;
++		OutInput.Difficulty.FloorCountOptions.Sort(
++			[](const FZeroEscapeFloorCountOption& A, const FZeroEscapeFloorCountOption& B)
++			{
++				return A.FloorCount < B.FloorCount;
++			});
++		for (FZeroEscapeFloorCountOption& Option : OutInput.Difficulty.FloorCountOptions)
++		{
++			Option.HighCeilingRoomTargetCounts.Sort(
++				[](const FZeroEscapeWeightedCount& A, const FZeroEscapeWeightedCount& B)
++				{
++					return A.Count < B.Count;
++				});
++		}
++		OutInput.StructureDefinitions = Profile.StructureDefinitions;
++		OutInput.StructureDefinitions.Sort(
++			[](const FZeroEscapeStructureDefinition& A, const FZeroEscapeStructureDefinition& B)
++			{
++				if (A.Kind != B.Kind)
++				{
++					return static_cast<uint8>(A.Kind) < static_cast<uint8>(B.Kind);
++				}
++				return A.DefinitionId.ToString().Compare(B.DefinitionId.ToString()) < 0;
++			});
++		for (FZeroEscapeStructureDefinition& Definition : OutInput.StructureDefinitions)
++		{
++			Definition.WalkableCells.Sort(GenerationCorePrivate::CoordinateLess);
++			Definition.SolidCells.Sort(GenerationCorePrivate::CoordinateLess);
++			Definition.ClearanceCells.Sort(GenerationCorePrivate::CoordinateLess);
++			for (FZeroEscapeLocalCellConnection& Connection : Definition.InternalConnections)
++			{
++				if (GenerationCorePrivate::CoordinateLess(
++					Connection.SecondCell, Connection.FirstCell))
++				{
++					Swap(Connection.FirstCell, Connection.SecondCell);
++				}
++			}
++			Definition.InternalConnections.Sort(
++				[](const FZeroEscapeLocalCellConnection& A,
++					const FZeroEscapeLocalCellConnection& B)
++				{
++					if (A.FirstCell != B.FirstCell)
++					{
++						return GenerationCorePrivate::CoordinateLess(
++							A.FirstCell, B.FirstCell);
++					}
++					return GenerationCorePrivate::CoordinateLess(
++						A.SecondCell, B.SecondCell);
++				});
++			Definition.Openings.Sort(
++				[](const FZeroEscapeStructureOpeningDefinition& A,
++					const FZeroEscapeStructureOpeningDefinition& B)
++				{
++					return GenerationCorePrivate::NameLess(A.OpeningId, B.OpeningId);
++				});
++			Definition.Landings.Sort(
++				[](const FZeroEscapeStructureLandingDefinition& A,
++					const FZeroEscapeStructureLandingDefinition& B)
++				{
++					return GenerationCorePrivate::NameLess(A.LandingId, B.LandingId);
++				});
++			for (FZeroEscapeStructureOpeningSetDefinition& OpeningSet :
++				Definition.AllowedOpeningSets)
++			{
++				OpeningSet.OpenOpeningIds.Sort(GenerationCorePrivate::NameLess);
++			}
++			Definition.AllowedOpeningSets.Sort(
++				[](const FZeroEscapeStructureOpeningSetDefinition& A,
++					const FZeroEscapeStructureOpeningSetDefinition& B)
++				{
++					return GenerationCorePrivate::NameLess(A.SetId, B.SetId);
++				});
++		}
+ 		OutInput.WfcShapeWeights = Difficulty->WfcShapeWeights;
+ 		OutInput.Signature.Seed = Request.Seed;
+ 		OutInput.Signature.Difficulty = Request.Difficulty;
+@@ -111,63 +260,240 @@
+ 	{
+ 		if (Plan.Signature.AlgorithmVersion <= 0
+ 			|| Plan.Signature.GenerationProfileVersion <= 0
+-			|| Plan.GridSize.X <= 0
+-			|| Plan.GridSize.Y <= 0
++			|| Plan.FloorCount < GenerationLimits::MinFloorCount
++			|| Plan.FloorCount > GenerationLimits::MaxFloorCount
++			|| Plan.GridSize.X <= 0 || Plan.GridSize.Y <= 0
+ 			|| !FMath::IsFinite(Plan.LogicalTileSizeCm)
+ 			|| Plan.LogicalTileSizeCm <= 0.0
+-			|| Plan.Cells.IsEmpty())
++			|| !FMath::IsFinite(Plan.FloorHeightCm)
++			|| Plan.FloorHeightCm <= 0.0
++			|| !FMath::IsFinite(Plan.AnchorHeightCm)
++			|| Plan.AnchorHeightCm < 0.0
++			|| Plan.OrdinaryCells.IsEmpty()
++			|| Plan.Floors.Num() != Plan.FloorCount
++			|| Plan.RequiredTwoFloorStairStableIdByLowerFloor.Num()
++				!= Plan.FloorCount - 1
++			|| Plan.PlayerToExitRouteLengthTiles <= 0
++			|| Plan.VerticalTransitionCountOnShortestRoute < Plan.FloorCount - 1
++			|| Plan.PlayerSpawnCoordinate.Z != 0
++			|| Plan.PursuerSpawnCoordinate.Z != 0
++			|| Plan.ExitCoordinate.Z != Plan.FloorCount - 1
++			|| !GenerationCorePrivate::IsInsideBuilding(
++				Plan.PlayerSpawnCoordinate, Plan.GridSize, Plan.FloorCount)
++			|| !GenerationCorePrivate::IsInsideBuilding(
++				Plan.PursuerSpawnCoordinate, Plan.GridSize, Plan.FloorCount)
++			|| !GenerationCorePrivate::IsInsideBuilding(
++				Plan.ExitCoordinate, Plan.GridSize, Plan.FloorCount))
+ 		{
+ 			return 0;
+ 		}
+ 
++		using GenerationCorePrivate::HashCoordinate;
++		using GenerationCorePrivate::HashCoordinateArray;
++		using GenerationCorePrivate::HashDouble;
++		using GenerationCorePrivate::HashName;
+ 		using GenerationCorePrivate::HashUInt64;
++		using GenerationCorePrivate::IsInsideBuilding;
++
+ 		uint64 Hash = GenerationCorePrivate::HashOffset;
+ 		HashUInt64(Hash, Plan.Signature.Seed);
+ 		HashUInt64(Hash, static_cast<uint8>(Plan.Signature.Difficulty));
+ 		HashUInt64(Hash, Plan.Signature.AlgorithmVersion);
+ 		HashUInt64(Hash, Plan.Signature.GenerationProfileVersion);
++		HashUInt64(Hash, Plan.FloorCount);
+ 		HashUInt64(Hash, Plan.GridSize.X);
+ 		HashUInt64(Hash, Plan.GridSize.Y);
+-		HashUInt64(Hash, static_cast<uint64>(FMath::RoundToInt64(Plan.LogicalTileSizeCm * 100.0)));
+-		HashUInt64(Hash, Plan.StartCoordinate.X);
+-		HashUInt64(Hash, Plan.StartCoordinate.Y);
+-		HashUInt64(Hash, Plan.ExitCoordinate.X);
+-		HashUInt64(Hash, Plan.ExitCoordinate.Y);
+-		HashUInt64(Hash, Plan.Cells.Num());
+-		HashUInt64(Hash, Plan.Rooms.Num());
+-
+-		int32 PreviousCellId = INDEX_NONE;
+-		for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
+-		{
+-			if (Cell.StableCellId <= PreviousCellId
+-				|| !Grid::IsInside(Cell.GridCoordinate, Plan.GridSize)
++		HashDouble(Hash, Plan.LogicalTileSizeCm);
++		HashDouble(Hash, Plan.FloorHeightCm);
++		HashDouble(Hash, Plan.AnchorHeightCm);
++		HashCoordinate(Hash, Plan.PlayerSpawnCoordinate);
++		HashCoordinate(Hash, Plan.PursuerSpawnCoordinate);
++		HashCoordinate(Hash, Plan.ExitCoordinate);
++		HashUInt64(Hash, Plan.PlayerToExitRouteLengthTiles);
++		HashUInt64(Hash, Plan.VerticalTransitionCountOnShortestRoute);
++
++		HashUInt64(Hash, Plan.OrdinaryCells.Num());
++		FIntVector PreviousOrdinaryCoordinate;
++		bool bHasPreviousOrdinaryCoordinate = false;
++		for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
++		{
++			if (!IsInsideBuilding(Cell.Coordinate, Plan.GridSize, Plan.FloorCount)
+ 				|| Cell.OpeningMask == 0
+-				|| (Cell.OpeningMask & ~Grid::AllOpenEdges) != 0)
++				|| (Cell.OpeningMask & ~Grid::AllOpenEdges) != 0
++				|| (bHasPreviousOrdinaryCoordinate
++					&& !GenerationCorePrivate::CoordinateLess(
++						PreviousOrdinaryCoordinate, Cell.Coordinate)))
+ 			{
+ 				return 0;
+ 			}
+-			PreviousCellId = Cell.StableCellId;
+-			HashUInt64(Hash, Cell.StableCellId);
+-			HashUInt64(Hash, Cell.GridCoordinate.X);
+-			HashUInt64(Hash, Cell.GridCoordinate.Y);
++			HashCoordinate(Hash, Cell.Coordinate);
+ 			HashUInt64(Hash, Cell.OpeningMask);
+-			HashUInt64(Hash, Cell.RegionId);
+-			HashUInt64(Hash, static_cast<uint8>(Cell.RegionKind));
+-		}
+-
+-		int32 PreviousRegionId = INDEX_NONE;
+-		for (const FZeroEscapeGeneratedRoom& Room : Plan.Rooms)
+-		{
+-			if (Room.RegionId <= PreviousRegionId
+-				|| !Grid::IsInside(Room.AnchorCoordinate, Plan.GridSize))
++			PreviousOrdinaryCoordinate = Cell.Coordinate;
++			bHasPreviousOrdinaryCoordinate = true;
++		}
++
++		HashUInt64(Hash, Plan.Structures.Num());
++		TMap<int32, const FZeroEscapeGeneratedStructure*> StructureByStableId;
++		int32 PreviousStructureId = INDEX_NONE;
++		int32 ThreeFloorStairwellCount = 0;
++		for (const FZeroEscapeGeneratedStructure& Structure : Plan.Structures)
++		{
++			const int32 StructureKindIndex = static_cast<int32>(Structure.Kind);
++			if (Structure.StableStructureId <= PreviousStructureId
++				|| Structure.DefinitionId.IsNone()
++				|| Structure.ActiveOpeningSetId.IsNone()
++				|| StructureKindIndex < 0 || StructureKindIndex > 2
++				|| Structure.QuarterTurnCount > 3
++				|| !IsInsideBuilding(Structure.BaseCoordinate, Plan.GridSize, Plan.FloorCount)
++				|| !HashCoordinateArray(
++					Hash, Structure.WalkableCells, Plan.GridSize, Plan.FloorCount)
++				|| !HashCoordinateArray(
++					Hash, Structure.SolidCells, Plan.GridSize, Plan.FloorCount)
++				|| !HashCoordinateArray(
++					Hash, Structure.ClearanceCells, Plan.GridSize, Plan.FloorCount))
+ 			{
+ 				return 0;
+ 			}
+-			PreviousRegionId = Room.RegionId;
+-			HashUInt64(Hash, Room.RegionId);
+-			HashUInt64(Hash, Room.AnchorCoordinate.X);
+-			HashUInt64(Hash, Room.AnchorCoordinate.Y);
+-		}
++
++			HashUInt64(Hash, Structure.StableStructureId);
++			HashName(Hash, Structure.DefinitionId);
++			HashUInt64(Hash, static_cast<uint8>(Structure.Kind));
++			HashCoordinate(Hash, Structure.BaseCoordinate);
++			HashUInt64(Hash, Structure.QuarterTurnCount);
++			HashName(Hash, Structure.ActiveOpeningSetId);
++
++			HashUInt64(Hash, Structure.InternalConnections.Num());
++			for (const FZeroEscapeGeneratedCellConnection& Connection :
++				Structure.InternalConnections)
++			{
++				if (!IsInsideBuilding(Connection.FirstCoordinate, Plan.GridSize, Plan.FloorCount)
++					|| !IsInsideBuilding(Connection.SecondCoordinate, Plan.GridSize, Plan.FloorCount))
++				{
++					return 0;
++				}
++				HashCoordinate(Hash, Connection.FirstCoordinate);
++				HashCoordinate(Hash, Connection.SecondCoordinate);
++			}
++
++			HashUInt64(Hash, Structure.Openings.Num());
++			for (const FZeroEscapeGeneratedStructureOpening& Opening : Structure.Openings)
++			{
++				if (Opening.OpeningId.IsNone()
++					|| !IsInsideBuilding(Opening.StructureCoordinate, Plan.GridSize, Plan.FloorCount)
++					|| !IsInsideBuilding(
++						Opening.ConnectedOrdinaryCoordinate, Plan.GridSize, Plan.FloorCount))
++				{
++					return 0;
++				}
++				HashName(Hash, Opening.OpeningId);
++				HashCoordinate(Hash, Opening.StructureCoordinate);
++				HashCoordinate(Hash, Opening.ConnectedOrdinaryCoordinate);
++			}
++
++			HashUInt64(Hash, Structure.Landings.Num());
++			for (const FZeroEscapeGeneratedStructureLanding& Landing : Structure.Landings)
++			{
++				if (Landing.LandingId.IsNone()
++					|| !IsInsideBuilding(Landing.Coordinate, Plan.GridSize, Plan.FloorCount))
++				{
++					return 0;
++				}
++				HashName(Hash, Landing.LandingId);
++				HashCoordinate(Hash, Landing.Coordinate);
++			}
++
++			ThreeFloorStairwellCount +=
++				Structure.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 1 : 0;
++			StructureByStableId.Add(Structure.StableStructureId, &Structure);
++			PreviousStructureId = Structure.StableStructureId;
++		}
++		if (ThreeFloorStairwellCount > 1)
++		{
++			return 0;
++		}
++
++		HashUInt64(Hash, Plan.RequiredTwoFloorStairStableIdByLowerFloor.Num());
++		TSet<int32> RequiredStairIds;
++		for (int32 LowerFloor = 0;
++			LowerFloor < Plan.RequiredTwoFloorStairStableIdByLowerFloor.Num();
++			++LowerFloor)
++		{
++			const int32 StableId =
++				Plan.RequiredTwoFloorStairStableIdByLowerFloor[LowerFloor];
++			const FZeroEscapeGeneratedStructure* const* Structure =
++				StructureByStableId.Find(StableId);
++			if (Structure == nullptr
++				|| (*Structure)->Kind != EZeroEscapeStructureKind::TwoFloorStair
++				|| (*Structure)->BaseCoordinate.Z != LowerFloor
++				|| RequiredStairIds.Contains(StableId))
++			{
++				return 0;
++			}
++			RequiredStairIds.Add(StableId);
++			HashUInt64(Hash, StableId);
++		}
++
++		HashUInt64(Hash, Plan.Floors.Num());
++		for (int32 FloorIndex = 0; FloorIndex < Plan.Floors.Num(); ++FloorIndex)
++		{
++			const FZeroEscapeGeneratedFloorSummary& Floor = Plan.Floors[FloorIndex];
++			if (Floor.FloorIndex != FloorIndex
++				|| Floor.RequiredEnterCoordinate.Z != FloorIndex
++				|| Floor.RequiredLeaveCoordinate.Z != FloorIndex
++				|| !IsInsideBuilding(
++					Floor.RequiredEnterCoordinate, Plan.GridSize, Plan.FloorCount)
++				|| !IsInsideBuilding(
++					Floor.RequiredLeaveCoordinate, Plan.GridSize, Plan.FloorCount)
++				|| Floor.OrdinaryWalkableCellCount <= 0
++				|| Floor.TotalWalkableCellCount < Floor.OrdinaryWalkableCellCount
++				|| Floor.RequiredRouteLengthTiles <= 0
++				|| Floor.FarthestRouteLengthTiles < Floor.RequiredRouteLengthTiles
++				|| !FMath::IsFinite(Floor.SpatialSeparationRatio)
++				|| Floor.SpatialSeparationRatio < 0.0
++				|| Floor.SpatialSeparationRatio > 1.0
++				|| !FMath::IsFinite(Floor.RouteCoverageRatio)
++				|| Floor.RouteCoverageRatio < 0.0
++				|| Floor.RouteCoverageRatio > 1.0
++				|| Floor.JunctionMetrics.DeadEndCount < 0
++				|| Floor.JunctionMetrics.StraightCount < 0
++				|| Floor.JunctionMetrics.CornerCount < 0
++				|| Floor.JunctionMetrics.TJunctionCount < 0
++				|| Floor.JunctionMetrics.CrossJunctionCount < 0
++				|| Floor.CycleRank < 0)
++			{
++				return 0;
++			}
++			HashUInt64(Hash, Floor.FloorIndex);
++			HashCoordinate(Hash, Floor.RequiredEnterCoordinate);
++			HashCoordinate(Hash, Floor.RequiredLeaveCoordinate);
++			HashUInt64(Hash, Floor.OrdinaryWalkableCellCount);
++			HashUInt64(Hash, Floor.TotalWalkableCellCount);
++			HashUInt64(Hash, Floor.RequiredRouteLengthTiles);
++			HashUInt64(Hash, Floor.FarthestRouteLengthTiles);
++			HashDouble(Hash, Floor.SpatialSeparationRatio);
++			HashDouble(Hash, Floor.RouteCoverageRatio);
++			HashUInt64(Hash, Floor.JunctionMetrics.DeadEndCount);
++			HashUInt64(Hash, Floor.JunctionMetrics.StraightCount);
++			HashUInt64(Hash, Floor.JunctionMetrics.CornerCount);
++			HashUInt64(Hash, Floor.JunctionMetrics.TJunctionCount);
++			HashUInt64(Hash, Floor.JunctionMetrics.CrossJunctionCount);
++			HashUInt64(Hash, Floor.CycleRank);
++		}
++		if (Plan.CycleRank < 0
++			|| Plan.JunctionMetrics.DeadEndCount < 0
++			|| Plan.JunctionMetrics.StraightCount < 0
++			|| Plan.JunctionMetrics.CornerCount < 0
++			|| Plan.JunctionMetrics.TJunctionCount < 0
++			|| Plan.JunctionMetrics.CrossJunctionCount < 0)
++		{
++			return 0;
++		}
++		HashUInt64(Hash, Plan.JunctionMetrics.DeadEndCount);
++		HashUInt64(Hash, Plan.JunctionMetrics.StraightCount);
++		HashUInt64(Hash, Plan.JunctionMetrics.CornerCount);
++		HashUInt64(Hash, Plan.JunctionMetrics.TJunctionCount);
++		HashUInt64(Hash, Plan.JunctionMetrics.CrossJunctionCount);
++		HashUInt64(Hash, Plan.CycleRank);
+ 		return static_cast<int64>(Hash & MAX_int64);
+ 	}
+ 
+diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapeMultiFloorDataContractTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapeMultiFloorDataContractTests.cpp
+new file mode 100644
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Tests/ZeroEscapeMultiFloorDataContractTests.cpp
+@@ -0,0 +1,578 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapeMultiFloorDataContractTests.cpp
++ * 职责：验证多层 Profile、完整结构定义、共享预算和规范 Hash 的纯数据合同。
++ * 边界：不调用 WFC、不创建 World/Actor/组件；结构放置与逐层约束由后续测试覆盖。
++ */
++
++#include "PCG/ZeroEscapeGenerationAssets.h"
++
++#if WITH_DEV_AUTOMATION_TESTS
++
++#include "Misc/AutomationTest.h"
++#include "UObject/UObjectGlobals.h"
++
++#include "PCG/ZeroEscapeGenerationCore.h"
++
++namespace ZeroEscape::LevelGeneration::Tests
++{
++	namespace MultiFloorDataContractTestsPrivate
++	{
++		FZeroEscapeStructureOpeningDefinition MakeOpening(
++			const FName OpeningId,
++			const FIntVector LocalCell,
++			const EZeroEscapeOpenEdge Edge)
++		{
++			FZeroEscapeStructureOpeningDefinition Opening;
++			Opening.OpeningId = OpeningId;
++			Opening.LocalWalkableCell = LocalCell;
++			Opening.OutwardEdge = Edge;
++			return Opening;
++		}
++
++		FZeroEscapeStructureLandingDefinition MakeLanding(
++			const FName LandingId,
++			const FIntVector LocalCell)
++		{
++			FZeroEscapeStructureLandingDefinition Landing;
++			Landing.LandingId = LandingId;
++			Landing.LocalCoordinate = LocalCell;
++			return Landing;
++		}
++
++		FZeroEscapeLocalCellConnection MakeConnection(
++			const FIntVector A,
++			const FIntVector B)
++		{
++			FZeroEscapeLocalCellConnection Connection;
++			Connection.FirstCell = A;
++			Connection.SecondCell = B;
++			return Connection;
++		}
++
++		FZeroEscapeStructureDefinition MakeTwoFloorStairDefinition(
++			const FName DefinitionId = TEXT("TwoFloorStair_Default"))
++		{
++			FZeroEscapeStructureDefinition Definition;
++			Definition.DefinitionId = DefinitionId;
++			Definition.Kind = EZeroEscapeStructureKind::TwoFloorStair;
++			Definition.RequiredFloorCount = 2;
++			Definition.WalkableCells = {
++				FIntVector(0, 0, 0),
++				FIntVector(0, 0, 1)};
++			Definition.InternalConnections.Add(MakeConnection(
++				Definition.WalkableCells[0], Definition.WalkableCells[1]));
++			Definition.Openings = {
++				MakeOpening(TEXT("LowerNorth"), FIntVector(0, 0, 0), EZeroEscapeOpenEdge::North),
++				MakeOpening(TEXT("UpperSouth"), FIntVector(0, 0, 1), EZeroEscapeOpenEdge::South)};
++			Definition.Landings = {
++				MakeLanding(TEXT("Lower"), FIntVector(0, 0, 0)),
++				MakeLanding(TEXT("Upper"), FIntVector(0, 0, 1))};
++			FZeroEscapeStructureOpeningSetDefinition OpeningSet;
++			OpeningSet.SetId = TEXT("BothFloors");
++			OpeningSet.OpenOpeningIds = {TEXT("LowerNorth"), TEXT("UpperSouth")};
++			Definition.AllowedOpeningSets.Add(OpeningSet);
++			return Definition;
++		}
++
++		FZeroEscapeStructureDefinition MakeThreeFloorStairwellDefinition()
++		{
++			FZeroEscapeStructureDefinition Definition;
++			Definition.DefinitionId = TEXT("ThreeFloorStairwell_Default");
++			Definition.Kind = EZeroEscapeStructureKind::ThreeFloorStairwell;
++			Definition.RequiredFloorCount = 3;
++			Definition.WalkableCells = {
++				FIntVector(0, 0, 0),
++				FIntVector(0, 0, 1),
++				FIntVector(0, 0, 2)};
++			Definition.InternalConnections = {
++				MakeConnection(Definition.WalkableCells[0], Definition.WalkableCells[1]),
++				MakeConnection(Definition.WalkableCells[1], Definition.WalkableCells[2])};
++			Definition.Openings = {
++				MakeOpening(TEXT("Floor0North"), FIntVector(0, 0, 0), EZeroEscapeOpenEdge::North),
++				MakeOpening(TEXT("Floor1East"), FIntVector(0, 0, 1), EZeroEscapeOpenEdge::East),
++				MakeOpening(TEXT("Floor2South"), FIntVector(0, 0, 2), EZeroEscapeOpenEdge::South)};
++			Definition.Landings = {
++				MakeLanding(TEXT("Floor0"), FIntVector(0, 0, 0)),
++				MakeLanding(TEXT("Floor1"), FIntVector(0, 0, 1)),
++				MakeLanding(TEXT("Floor2"), FIntVector(0, 0, 2))};
++			FZeroEscapeStructureOpeningSetDefinition OpeningSet;
++			OpeningSet.SetId = TEXT("AllFloors");
++			OpeningSet.OpenOpeningIds = {
++				TEXT("Floor0North"), TEXT("Floor1East"), TEXT("Floor2South")};
++			Definition.AllowedOpeningSets.Add(OpeningSet);
++			return Definition;
++		}
++
++		FZeroEscapeStructureDefinition MakeHighCeilingRoomDefinition()
++		{
++			FZeroEscapeStructureDefinition Definition;
++			Definition.DefinitionId = TEXT("HighCeilingRoom_1x2");
++			Definition.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
++			Definition.RequiredFloorCount = 1;
++			Definition.bAllowClearanceAboveGeneratedTopFloor = true;
++			Definition.WalkableCells = {
++				FIntVector(0, 0, 0), FIntVector(1, 0, 0)};
++			Definition.ClearanceCells = {
++				FIntVector(0, 0, 1), FIntVector(1, 0, 1)};
++			Definition.InternalConnections.Add(MakeConnection(
++				Definition.WalkableCells[0], Definition.WalkableCells[1]));
++			Definition.Openings = {
++				MakeOpening(TEXT("West"), FIntVector(0, 0, 0), EZeroEscapeOpenEdge::West),
++				MakeOpening(TEXT("East"), FIntVector(1, 0, 0), EZeroEscapeOpenEdge::East)};
++			FZeroEscapeStructureOpeningSetDefinition OpeningSet;
++			OpeningSet.SetId = TEXT("ThroughRoom");
++			OpeningSet.OpenOpeningIds = {TEXT("West"), TEXT("East")};
++			Definition.AllowedOpeningSets.Add(OpeningSet);
++			return Definition;
++		}
++
++		FZeroEscapeFloorCountOption MakeFloorOption(
++			const int32 FloorCount,
++			const int32 SelectionWeight,
++			const int32 MaxAdditionalStairs)
++		{
++			FZeroEscapeFloorCountOption Option;
++			Option.FloorCount = FloorCount;
++			Option.SelectionWeight = SelectionWeight;
++			Option.MinTotalWalkableCellCount = FloorCount * 24;
++			Option.MaxTotalWalkableCellCount = FloorCount * 80;
++			Option.MinOrdinaryWalkableCellCountPerFloor = 20;
++			Option.MaxPlayerToExitRouteLengthTiles = 160;
++			Option.MaxAdditionalTwoFloorStairCount = MaxAdditionalStairs;
++			FZeroEscapeWeightedCount NoRoom;
++			NoRoom.Count = 0;
++			NoRoom.Weight = 1;
++			FZeroEscapeWeightedCount OneRoom;
++			OneRoom.Count = 1;
++			OneRoom.Weight = 1;
++			Option.HighCeilingRoomTargetCounts = {NoRoom, OneRoom};
++			return Option;
++		}
++
++		FZeroEscapeDifficultyDefinition MakeDifficulty(
++			const EZeroEscapeDifficulty Difficulty)
++		{
++			FZeroEscapeDifficultyDefinition Definition;
++			Definition.Difficulty = Difficulty;
++			Definition.WfcShapeWeights = FZeroEscapeWfcShapeWeights();
++			Definition.FloorCountOptions = {
++				MakeFloorOption(2, 20, 2),
++				MakeFloorOption(3, 60, 3),
++				MakeFloorOption(4, 20, 4)};
++			Definition.ThreeFloorStairwellChancePercent = 10;
++			Definition.HighCeilingRooms.MinimumTotalCount = 0;
++			Definition.HighCeilingRooms.MaxCountPerFloor = 2;
++			Definition.HighCeilingRooms.MinimumSeparationRatio = 0.2;
++			return Definition;
++		}
++
++		void BuildValidProfile(UZeroEscapeLevelGenerationProfile& Profile)
++		{
++			Profile.ProfileVersion = 6;
++			Profile.SharedRouteConstraints = FZeroEscapeSharedRouteConstraints();
++			Profile.SharedRouteConstraints.GridSize = FIntPoint(20, 12);
++			Profile.SharedRouteConstraints.LogicalTileSizeCm = 600.0;
++			Profile.SharedRouteConstraints.FloorHeightCm = 450.0;
++			Profile.SharedRouteConstraints.MaxConsecutiveStraightTiles = 4;
++			Profile.SharedRouteConstraints.AnchorHeightCm = 100.0;
++			Profile.SharedBudget = FZeroEscapeSharedGenerationBudget();
++			Profile.StructureDefinitions = {
++				MakeTwoFloorStairDefinition(),
++				MakeThreeFloorStairwellDefinition(),
++				MakeHighCeilingRoomDefinition()};
++			Profile.Difficulties = {
++				MakeDifficulty(EZeroEscapeDifficulty::Easy),
++				MakeDifficulty(EZeroEscapeDifficulty::Normal),
++				MakeDifficulty(EZeroEscapeDifficulty::Hard)};
++		}
++
++		template <typename ElementType>
++		void ReverseArray(TArray<ElementType>& Values)
++		{
++			for (int32 Left = 0, Right = Values.Num() - 1; Left < Right; ++Left, --Right)
++			{
++				Values.Swap(Left, Right);
++			}
++		}
++
++		void AddNormalizationCoverage(UZeroEscapeLevelGenerationProfile& Profile)
++		{
++			FZeroEscapeStructureDefinition& Stair = Profile.StructureDefinitions[0];
++			Stair.SolidCells = {FIntVector(3, 4, 0), FIntVector(2, 4, 0)};
++			FZeroEscapeStructureOpeningSetDefinition AlternativeSet;
++			AlternativeSet.SetId = TEXT("Alternative");
++			AlternativeSet.SelectionWeight = 2;
++			AlternativeSet.OpenOpeningIds = {TEXT("UpperSouth"), TEXT("LowerNorth")};
++			Stair.AllowedOpeningSets.Add(AlternativeSet);
++		}
++
++		void ReverseProfileArrayOrder(UZeroEscapeLevelGenerationProfile& Profile)
++		{
++			for (FZeroEscapeDifficultyDefinition& Difficulty : Profile.Difficulties)
++			{
++				ReverseArray(Difficulty.FloorCountOptions);
++				for (FZeroEscapeFloorCountOption& Option : Difficulty.FloorCountOptions)
++				{
++					ReverseArray(Option.HighCeilingRoomTargetCounts);
++				}
++			}
++			for (FZeroEscapeStructureDefinition& Definition : Profile.StructureDefinitions)
++			{
++				ReverseArray(Definition.WalkableCells);
++				ReverseArray(Definition.SolidCells);
++				ReverseArray(Definition.ClearanceCells);
++				for (FZeroEscapeLocalCellConnection& Connection : Definition.InternalConnections)
++				{
++					Swap(Connection.FirstCell, Connection.SecondCell);
++				}
++				ReverseArray(Definition.InternalConnections);
++				ReverseArray(Definition.Openings);
++				ReverseArray(Definition.Landings);
++				for (FZeroEscapeStructureOpeningSetDefinition& Set :
++					Definition.AllowedOpeningSets)
++				{
++					ReverseArray(Set.OpenOpeningIds);
++				}
++				ReverseArray(Definition.AllowedOpeningSets);
++			}
++			ReverseArray(Profile.StructureDefinitions);
++			ReverseArray(Profile.Difficulties);
++		}
++
++		FString BuildResolvedInputOrderFingerprint(const FResolvedGenerationInput& Input)
++		{
++			FString Result;
++			for (const FZeroEscapeFloorCountOption& Option :
++				Input.Difficulty.FloorCountOptions)
++			{
++				Result += FString::Printf(
++					TEXT("Floor:%d:%d:%d:%d{"),
++					Option.FloorCount,
++					Option.MinTotalWalkableCellCount,
++					Option.MaxTotalWalkableCellCount,
++					Option.MinOrdinaryWalkableCellCountPerFloor);
++				for (const FZeroEscapeWeightedCount& Target :
++					Option.HighCeilingRoomTargetCounts)
++				{
++					Result += FString::Printf(TEXT("%d=%d,"), Target.Count, Target.Weight);
++				}
++				Result += TEXT("}");
++			}
++			for (const FZeroEscapeStructureDefinition& Definition : Input.StructureDefinitions)
++			{
++				Result += FString::Printf(
++					TEXT("Definition:%d:%s|"),
++					static_cast<int32>(Definition.Kind),
++					*Definition.DefinitionId.ToString());
++				auto AppendCells = [&Result](
++					const TCHAR* Label,
++					const TArray<FIntVector>& Cells)
++				{
++					Result += Label;
++					for (const FIntVector Cell : Cells)
++					{
++						Result += FString::Printf(
++							TEXT("(%d,%d,%d)"), Cell.X, Cell.Y, Cell.Z);
++					}
++				};
++				AppendCells(TEXT("W"), Definition.WalkableCells);
++				AppendCells(TEXT("S"), Definition.SolidCells);
++				AppendCells(TEXT("C"), Definition.ClearanceCells);
++				for (const FZeroEscapeLocalCellConnection& Connection :
++					Definition.InternalConnections)
++				{
++					Result += FString::Printf(
++						TEXT("E(%d,%d,%d)-(%d,%d,%d)"),
++						Connection.FirstCell.X,
++						Connection.FirstCell.Y,
++						Connection.FirstCell.Z,
++						Connection.SecondCell.X,
++						Connection.SecondCell.Y,
++						Connection.SecondCell.Z);
++				}
++				for (const FZeroEscapeStructureOpeningDefinition& Opening :
++					Definition.Openings)
++				{
++					Result += FString::Printf(
++						TEXT("O%s(%d,%d,%d):%d"),
++						*Opening.OpeningId.ToString(),
++						Opening.LocalWalkableCell.X,
++						Opening.LocalWalkableCell.Y,
++						Opening.LocalWalkableCell.Z,
++						static_cast<int32>(Opening.OutwardEdge));
++				}
++				for (const FZeroEscapeStructureLandingDefinition& Landing :
++					Definition.Landings)
++				{
++					Result += FString::Printf(
++						TEXT("L%s(%d,%d,%d)"),
++						*Landing.LandingId.ToString(),
++						Landing.LocalCoordinate.X,
++						Landing.LocalCoordinate.Y,
++						Landing.LocalCoordinate.Z);
++				}
++				for (const FZeroEscapeStructureOpeningSetDefinition& Set :
++					Definition.AllowedOpeningSets)
++				{
++					Result += FString::Printf(
++						TEXT("A%s=%d["), *Set.SetId.ToString(), Set.SelectionWeight);
++					for (const FName OpeningId : Set.OpenOpeningIds)
++					{
++						Result += OpeningId.ToString();
++						Result += TEXT(",");
++					}
++					Result += TEXT("]");
++				}
++			}
++			return Result;
++		}
++
++		FZeroEscapeGeneratedLevelPlan MakeHashFixturePlan()
++		{
++			FZeroEscapeGeneratedLevelPlan Plan;
++			Plan.Signature.Seed = 24680;
++			Plan.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
++			Plan.Signature.AlgorithmVersion = GAlgorithmVersion;
++			Plan.Signature.GenerationProfileVersion = 6;
++			Plan.Signature.PresentationVersion = 1;
++			Plan.FloorCount = 2;
++			Plan.GridSize = FIntPoint(6, 6);
++			Plan.LogicalTileSizeCm = 600.0;
++			Plan.FloorHeightCm = 450.0;
++			Plan.AnchorHeightCm = 100.0;
++			Plan.PlayerSpawnCoordinate = FIntVector(0, 0, 0);
++			Plan.PursuerSpawnCoordinate = FIntVector(1, 0, 0);
++			Plan.ExitCoordinate = FIntVector(1, 0, 1);
++			Plan.PlayerToExitRouteLengthTiles = 5;
++			Plan.VerticalTransitionCountOnShortestRoute = 1;
++
++			for (const FIntVector Coordinate : {
++				FIntVector(0, 0, 0), FIntVector(1, 0, 0),
++				FIntVector(0, 0, 1), FIntVector(1, 0, 1)})
++			{
++				FZeroEscapeGeneratedOrdinaryCell& Cell =
++					Plan.OrdinaryCells.AddDefaulted_GetRef();
++				Cell.Coordinate = Coordinate;
++				Cell.OpeningMask = Coordinate.X == 0
++					? Grid::DirectionBit(1) : Grid::DirectionBit(3);
++			}
++
++			FZeroEscapeGeneratedStructure& Stair = Plan.Structures.AddDefaulted_GetRef();
++			Stair.StableStructureId = 0;
++			Stair.DefinitionId = TEXT("TwoFloorStair_Default");
++			Stair.Kind = EZeroEscapeStructureKind::TwoFloorStair;
++			Stair.BaseCoordinate = FIntVector(2, 2, 0);
++			Stair.ActiveOpeningSetId = TEXT("BothFloors");
++			Stair.WalkableCells = {FIntVector(2, 2, 0), FIntVector(2, 2, 1)};
++			FZeroEscapeGeneratedCellConnection Connection;
++			Connection.FirstCoordinate = Stair.WalkableCells[0];
++			Connection.SecondCoordinate = Stair.WalkableCells[1];
++			Stair.InternalConnections.Add(Connection);
++			for (int32 FloorIndex = 0; FloorIndex < 2; ++FloorIndex)
++			{
++				FZeroEscapeGeneratedStructureOpening& Opening =
++					Stair.Openings.AddDefaulted_GetRef();
++				Opening.OpeningId = FloorIndex == 0 ? TEXT("LowerNorth") : TEXT("UpperSouth");
++				Opening.StructureCoordinate = FIntVector(2, 2, FloorIndex);
++				Opening.ConnectedOrdinaryCoordinate = FIntVector(2, 1, FloorIndex);
++				FZeroEscapeGeneratedStructureLanding& Landing =
++					Stair.Landings.AddDefaulted_GetRef();
++				Landing.LandingId = FloorIndex == 0 ? TEXT("Lower") : TEXT("Upper");
++				Landing.Coordinate = FIntVector(2, 2, FloorIndex);
++			}
++			Plan.RequiredTwoFloorStairStableIdByLowerFloor.Add(0);
++
++			for (int32 FloorIndex = 0; FloorIndex < 2; ++FloorIndex)
++			{
++				FZeroEscapeGeneratedFloorSummary& Floor = Plan.Floors.AddDefaulted_GetRef();
++				Floor.FloorIndex = FloorIndex;
++				Floor.RequiredEnterCoordinate = FloorIndex == 0
++					? Plan.PlayerSpawnCoordinate : FIntVector(2, 2, 1);
++				Floor.RequiredLeaveCoordinate = FloorIndex == 0
++					? FIntVector(2, 2, 0) : Plan.ExitCoordinate;
++				Floor.OrdinaryWalkableCellCount = 2;
++				Floor.TotalWalkableCellCount = 3;
++				Floor.RequiredRouteLengthTiles = 2;
++				Floor.FarthestRouteLengthTiles = 3;
++				Floor.SpatialSeparationRatio = 0.5;
++				Floor.RouteCoverageRatio = 2.0 / 3.0;
++				Floor.JunctionMetrics.DeadEndCount = 2;
++				Floor.CycleRank = 0;
++			}
++			Plan.JunctionMetrics.DeadEndCount = 4;
++			Plan.CycleRank = 0;
++			return Plan;
++		}
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeMultiFloorProfileContractTest,
++		"Demo.PCG.Unit.MultiFloor.ProfileContract",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeMultiFloorProfileContractTest::RunTest(const FString& Parameters)
++	{
++		using namespace MultiFloorDataContractTestsPrivate;
++		(void)Parameters;
++		UZeroEscapeLevelGenerationProfile* Profile =
++			NewObject<UZeroEscapeLevelGenerationProfile>();
++		FString Error;
++		FZeroEscapeGenerationMetrics EmptyMetrics;
++		TestTrue(TEXT("每层 WFC 报告默认必须为空"), EmptyMetrics.FloorWfcMetrics.IsEmpty());
++		FZeroEscapeFloorWfcMetrics FloorMetrics;
++		TestEqual(TEXT("未填写的每层 WFC 报告没有合法楼层"), FloorMetrics.FloorIndex, INDEX_NONE);
++		TestEqual(TEXT("每层 WFC 候选统计默认归零"), FloorMetrics.WfcCandidateAttemptCount, 0);
++		FloorMetrics.FloorIndex = 0;
++		EmptyMetrics.FloorWfcMetrics.Add(FloorMetrics);
++		TestEqual(TEXT("合法楼层统计可按楼层号保存"),
++			EmptyMetrics.FloorWfcMetrics[0].FloorIndex, 0);
++
++		BuildValidProfile(*Profile);
++		TestTrue(TEXT("合法多层 Profile 必须通过配置校验"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->SharedRouteConstraints.GridSize = FIntPoint(24, 16);
++		TestTrue(TEXT("合法范围内改变 GridSize 不得破坏配置合同"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		const FZeroEscapeFloorCountOption& FourFloorOption =
++			Profile->Difficulties[0].FloorCountOptions[2];
++		TestTrue(
++			TEXT("四层整栋总可走上限可以大于单层 Grid 容量"),
++			FourFloorOption.MaxTotalWalkableCellCount
++				> Profile->SharedRouteConstraints.GridSize.X
++					* Profile->SharedRouteConstraints.GridSize.Y);
++		TestTrue(TEXT("整栋总可走量合同必须通过配置校验"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		FZeroEscapeFloorCountOption& InvalidWholeBuildingMinimum =
++			Profile->Difficulties[0].FloorCountOptions[2];
++		InvalidWholeBuildingMinimum.MinTotalWalkableCellCount =
++			InvalidWholeBuildingMinimum.MinOrdinaryWalkableCellCountPerFloor
++				* InvalidWholeBuildingMinimum.FloorCount - 1;
++		TestFalse(TEXT("整栋总可走下限不得低于各层普通内容下限之和"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->StructureDefinitions.Add(MakeTwoFloorStairDefinition(TEXT("TwoFloorStair_Alt")));
++		TestTrue(TEXT("同一 Kind 可以配置多个 DefinitionId"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->StructureDefinitions[0].InternalConnections.Add(
++			Profile->StructureDefinitions[0].InternalConnections[0]);
++		TestFalse(TEXT("同向重复 InternalConnection 必须被拒绝"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		const FZeroEscapeLocalCellConnection ExistingConnection =
++			Profile->StructureDefinitions[0].InternalConnections[0];
++		FZeroEscapeLocalCellConnection ReversedConnection;
++		ReversedConnection.FirstCell = ExistingConnection.SecondCell;
++		ReversedConnection.SecondCell = ExistingConnection.FirstCell;
++		Profile->StructureDefinitions[0].InternalConnections.Add(ReversedConnection);
++		TestFalse(TEXT("反向重复 InternalConnection 必须被拒绝"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->StructureDefinitions[2].bAllowClearanceAboveGeneratedTopFloor = false;
++		TestFalse(TEXT("高厅必须明确允许裁掉真实顶层以上净空"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->StructureDefinitions.RemoveAt(1);
++		TestFalse(TEXT("三层楼梯间概率大于零时必须存在对应定义"), Profile->IsConfigured(Error));
++		for (FZeroEscapeDifficultyDefinition& Difficulty : Profile->Difficulties)
++		{
++			Difficulty.ThreeFloorStairwellChancePercent = 0;
++		}
++		TestTrue(TEXT("概率为零时可以不配置三层楼梯间"), Profile->IsConfigured(Error));
++
++		BuildValidProfile(*Profile);
++		Profile->Difficulties[0].FloorCountOptions[2].MaxAdditionalTwoFloorStairCount = 5;
++		TestFalse(TEXT("楼梯端点超过共享导航点预算必须失败"), Profile->IsConfigured(Error));
++		return true;
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeResolvedInputNormalizationTest,
++		"Demo.PCG.Unit.MultiFloor.ResolvedInputNormalization",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeResolvedInputNormalizationTest::RunTest(const FString& Parameters)
++	{
++		using namespace MultiFloorDataContractTestsPrivate;
++		(void)Parameters;
++		UZeroEscapeLevelGenerationProfile* BaselineProfile =
++			NewObject<UZeroEscapeLevelGenerationProfile>();
++		UZeroEscapeLevelGenerationProfile* ReorderedProfile =
++			NewObject<UZeroEscapeLevelGenerationProfile>();
++		BuildValidProfile(*BaselineProfile);
++		BuildValidProfile(*ReorderedProfile);
++		AddNormalizationCoverage(*BaselineProfile);
++		AddNormalizationCoverage(*ReorderedProfile);
++		ReverseProfileArrayOrder(*ReorderedProfile);
++
++		FZeroEscapeGenerationRequest Request;
++		Request.Seed = 13579;
++		Request.Difficulty = EZeroEscapeDifficulty::Normal;
++		FResolvedGenerationInput BaselineInput;
++		FResolvedGenerationInput ReorderedInput;
++		FZeroEscapeGenerationReport BaselineReport;
++		FZeroEscapeGenerationReport ReorderedReport;
++		TestTrue(TEXT("基准 Profile 必须成功解析"), FGenerationCore::ResolveGenerationInput(
++			*BaselineProfile, Request, 1, BaselineInput, BaselineReport));
++		TestTrue(TEXT("仅重排数组的 Profile 必须成功解析"), FGenerationCore::ResolveGenerationInput(
++			*ReorderedProfile, Request, 1, ReorderedInput, ReorderedReport));
++		TestEqual(
++			TEXT("语义相同的 DataAsset 数组重排必须得到完全相同的规范化生成输入"),
++			BuildResolvedInputOrderFingerprint(ReorderedInput),
++			BuildResolvedInputOrderFingerprint(BaselineInput));
++		return true;
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeMultiFloorCanonicalHashTest,
++		"Demo.PCG.Unit.MultiFloor.CanonicalHash",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeMultiFloorCanonicalHashTest::RunTest(const FString& Parameters)
++	{
++		using namespace MultiFloorDataContractTestsPrivate;
++		(void)Parameters;
++		const FZeroEscapeGeneratedLevelPlan Baseline = MakeHashFixturePlan();
++		const int64 BaselineHash = FGenerationCore::ComputeCanonicalLayoutHash(Baseline);
++		TestTrue(TEXT("合法多层 Plan 必须产生非零 Hash"), BaselineHash != 0);
++
++		FZeroEscapeGeneratedLevelPlan PresentationOnly = Baseline;
++		PresentationOnly.Signature.PresentationVersion = 99;
++		TestEqual(TEXT("PresentationVersion 不进入纯布局 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(PresentationOnly), BaselineHash);
++
++		FZeroEscapeGeneratedLevelPlan DifferentOpeningSet = Baseline;
++		DifferentOpeningSet.Structures[0].ActiveOpeningSetId = TEXT("AnotherSet");
++		TestNotEqual(TEXT("ActiveOpeningSetId 字符串内容必须进入 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(DifferentOpeningSet), BaselineHash);
++
++		FZeroEscapeGeneratedLevelPlan DifferentAnchor = Baseline;
++		DifferentAnchor.AnchorHeightCm += 0.001;
++		TestNotEqual(TEXT("AnchorHeightCm 的 IEEE bit 必须进入 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(DifferentAnchor), BaselineHash);
++
++		FZeroEscapeGeneratedLevelPlan DifferentWholeBuildingTotal = Baseline;
++		++DifferentWholeBuildingTotal.Floors[0].TotalWalkableCellCount;
++		TestNotEqual(TEXT("构成整栋总可走量的每层统计必须进入 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(DifferentWholeBuildingTotal),
++			BaselineHash);
++
++		FZeroEscapeGeneratedLevelPlan InvalidSpawnFloor = Baseline;
++		InvalidSpawnFloor.PlayerSpawnCoordinate.Z = 1;
++		TestEqual(TEXT("玩家不在一楼的 Plan 必须拒绝 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(InvalidSpawnFloor), static_cast<int64>(0));
++
++		FZeroEscapeGeneratedLevelPlan InvalidOrder = Baseline;
++		InvalidOrder.OrdinaryCells.Swap(0, 1);
++		TestEqual(TEXT("普通格未按 Z/Y/X 稳定排序时必须拒绝 Hash"),
++			FGenerationCore::ComputeCanonicalLayoutHash(InvalidOrder), static_cast<int64>(0));
++		return true;
++	}
++}
++
++#endif
