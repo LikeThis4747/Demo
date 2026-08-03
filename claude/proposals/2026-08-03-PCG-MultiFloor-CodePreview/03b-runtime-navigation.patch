@@ -1,6 +1,6 @@
 diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..c67e10c89bd8d8795a6f5d3428f2e2d09b00fa3c
+index 0000000000000000000000000000000000000000..a082fd7e2a7eae6136239bd5a9dbb0dcfa6509df
 --- /dev/null
 +++ b/Source/Demo/Private/PCG/Tests/ZeroEscapeRuntimeNavigationTests.cpp
 @@ -0,0 +1,113 @@
@@ -118,7 +118,7 @@ index 0000000000000000000000000000000000000000..c67e10c89bd8d8795a6f5d3428f2e2d0
 +
 +#endif
 diff --git a/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp b/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
-index abae6d96c8428302ec25fd7eae5e29f90148b27c..d79ae8ee5fb666f17f26e1560cd3a40b2c59197e 100644
+index abae6d96c8428302ec25fd7eae5e29f90148b27c..0b0c5c00815647747d85edc7d44381e15c3c413e 100644
 --- a/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
 +++ b/Source/Demo/Private/PCG/ZeroEscapeRuntimeLevelGenerator.cpp
 @@ -2,8 +2,8 @@
@@ -128,7 +128,7 @@ index abae6d96c8428302ec25fd7eae5e29f90148b27c..d79ae8ee5fb666f17f26e1560cd3a40b
 - * 职责：同步解析空间配置、运行 Grid/WFC、校验结果并事务式提交结构 HISM 与顶灯 Actor。
 - * 边界：不在 Construction Script/Tick 中生成；Actor 只消费纯值 Solver 的原子结果。
 + * 职责：同步求解/装配多层结构，随后用事件和单个超时 Timer 等待并验收正式导航。
-+ * 边界：不使用 Tick、不强制全局导航 Build、不自动更换 Seed，也不创建一次性导航探针。
++ * 边界：不使用 Tick、不强制全局导航 Build、不在同一 World 自动换 Seed 重入，也不创建一次性导航探针。
   */
  
  #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
@@ -1537,7 +1537,7 @@ index 0000000000000000000000000000000000000000..937f28a3b0b1d570241db7ff056590b8
 +	};
 +}
 diff --git a/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h b/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
-index 52aaf68affd69d79c10d5a58027a11d9704bc954..eb1ea1d48ffb55478662930002f722d6dd904f18 100644
+index 52aaf68affd69d79c10d5a58027a11d9704bc954..a837d696bd35d5c1041516f31693517dbd5fbdb7 100644
 --- a/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
 +++ b/Source/Demo/Public/PCG/ZeroEscapeRuntimeLevelGenerator.h
 @@ -2,24 +2,28 @@
@@ -1587,21 +1587,20 @@ index 52aaf68affd69d79c10d5a58027a11d9704bc954..eb1ea1d48ffb55478662930002f722d6
  UENUM(BlueprintType)
  enum class EZeroEscapeGenerationTrigger : uint8
  {
-@@ -46,12 +50,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
- 	const FZeroEscapeGenerationReport&,
+@@ -47,10 +51,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
  	Report);
  
--/**
+ /**
 - * 实时非工具型整关 PCG 的世界边界 Actor。
 - * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM 与顶灯 Actor；
 - * 任一检查点失败都会回滚本次全部表现对象。
 - * 玩法对象、敌人、陷阱和奖励不会在这里生成；其他系统只读取 Ready 后的 Start/Exit/Rooms。
-- */
-+/** 正式运行时整关生成器；只有导航路径验收成功才广播成功并进入 Ready。 */
++ * 正式运行时整关生成器；只有导航路径验收成功才广播成功并进入 Ready。
++ * 每个 Actor 生命周期只接受一次生成请求；需要重试时由 GameMode 重载关卡创建新 World。
+  */
  UCLASS(Blueprintable)
  class DEMO_API AZeroEscapeRuntimeLevelGenerator : public AActor
- {
-@@ -61,123 +60,166 @@ public:
+@@ -61,123 +63,169 @@ public:
  	/** 创建无 Tick 的生成器和统一 GeneratedRoot。 */
  	AZeroEscapeRuntimeLevelGenerator();
  
@@ -1624,7 +1623,10 @@ index 52aaf68affd69d79c10d5a58027a11d9704bc954..eb1ea1d48ffb55478662930002f722d6
  	bool CanAcceptGenerationRequest() const;
  
 -	/** 非生成期间幂等清空 HISM 与 Plan 并回到 Idle；忙碌时不修改状态。 */
-+	/** 非生成/等待期间幂等清空场景和 Plan。 */
++	/**
++	 * 非生成/等待期间幂等清空场景和 Plan。
++	 * 此操作不会解除单次请求门禁；再次生成必须重载关卡并创建新的生成器 Actor。
++	 */
  	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
  	bool ClearGeneratedScene();
  

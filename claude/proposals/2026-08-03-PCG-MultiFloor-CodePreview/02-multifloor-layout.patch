@@ -1,9 +1,9 @@
 diff --git a/Source/Demo/Private/PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.cpp b/Source/Demo/Private/PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.cpp
 new file mode 100644
-index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d61252cad
+index 0000000000000000000000000000000000000000..3a32940c9176d323275bc9ef9efd7f9f96c50e5d
 --- /dev/null
 +++ b/Source/Demo/Private/PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.cpp
-@@ -0,0 +1,3728 @@
+@@ -0,0 +1,3735 @@
 +// Copyright Epic Games, Inc. All Rights Reserved.
 +
 +/**
@@ -193,6 +193,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return true;
 +		}
 +
++		// —— 保留格索引、占用所有权与完整结构候选构造 ——
 +		int32 ToBuildingIndex(
 +			const FIntVector Address,
 +			const FIntPoint GridSize)
@@ -1225,6 +1226,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return true;
 +		}
 +
++		// —— 玩家出生点、必需双层楼梯回溯链与顶层终点 ——
 +		bool TryChooseTopExit(
 +			const FResolvedGenerationInput& Input,
 +			const FZeroEscapeFloorCountOption& FloorOption,
@@ -1803,6 +1805,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return true;
 +		}
 +
++		// —— 高天花板房间数量抽取与完整占地放置 ——
 +		int32 DrawHighCeilingRoomTarget(
 +			const FResolvedGenerationInput& Input,
 +			const FZeroEscapeFloorCountOption& FloorOption)
@@ -2030,6 +2033,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return false;
 +		}
 +
++		// —— 各层二维约束投影与现有 WFC 求解器复用 ——
 +		bool FindHorizontalDirection(
 +			const FIntVector From,
 +			const FIntVector To,
@@ -2462,6 +2466,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return Metrics;
 +		}
 +
++		// —— 合并逐层结果并验收整栋无向通行图 ——
 +		void AddJunctionMetrics(
 +			FZeroEscapeJunctionMetrics& InOutTotal,
 +			const FZeroEscapeJunctionMetrics& Source)
@@ -2925,6 +2930,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +			return true;
 +		}
 +
++		// —— 一层追猎者出生点选择与玩家初始路线距离 ——
 +		bool SelectPursuerSpawn(
 +			const FResolvedGenerationInput& Input,
 +			const FPlacementState& State,
@@ -3295,6 +3301,7 @@ index 0000000000000000000000000000000000000000..07447a42dc3e99d473470550f0db797d
 +		}
 +	}
 +
++	// —— 公开求解入口与共享预算下的整栋有限重试 ——
 +	bool FMultiFloorLayoutPlanner::Solve(
 +		const FResolvedGenerationInput& Input,
 +		FZeroEscapeGeneratedLevelPlan& OutPlan,

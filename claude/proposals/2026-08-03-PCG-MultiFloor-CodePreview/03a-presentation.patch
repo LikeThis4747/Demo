@@ -1,449 +1,9 @@
-diff --git a/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h
-new file mode 100644
---- /dev/null
-+++ b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h
-@@ -0,0 +1,81 @@
-+// Copyright Epic Games, Inc. All Rights Reserved.
-+
-+/**
-+ * @file ZeroEscapeStructureBuilder.h
-+ * 职责：把已经通过全局验证的多层 Plan 展开为普通结构与完整结构的 HISM 实例。
-+ * 边界：不求解布局、不修改 Plan/Hash、不生成顶灯或玩法对象，也不拥有回滚生命周期。
-+ */
-+
-+#pragma once
-+
-+#include "CoreMinimal.h"
-+#include "PCG/ZeroEscapeGenerationAssets.h"
-+
-+class AActor;
-+class UHierarchicalInstancedStaticMeshComponent;
-+class USceneComponent;
-+class UStaticMesh;
-+class UZeroEscapePresentationProfile;
-+
-+namespace ZeroEscape::LevelGeneration
-+{
-+	/** 一条尚未提交到场景的表现实例；GroupId 只用于稳定批处理和诊断。 */
-+	struct FStructurePresentationInstance
-+	{
-+		FName GroupId = NAME_None;
-+		TObjectPtr<UStaticMesh> StaticMesh = nullptr;
-+		FName CollisionProfileName = NAME_None;
-+		EZeroEscapeStructurePieceCollisionRole CollisionRole =
-+			EZeroEscapeStructurePieceCollisionRole::StandardProfile;
-+		bool bCanEverAffectNavigation = false;
-+		bool bHiddenInGame = false;
-+		bool bCastShadow = true;
-+		FTransform LocalTransform = FTransform::Identity;
-+		int32 RelatedStableId = INDEX_NONE;
-+	};
-+
-+	/** 构建结果不拥有 UObject；Generator 把计数并入 Report，并负责销毁已登记组件。 */
-+	struct FStructureBuildResult
-+	{
-+		int32 InstancedMeshCount = 0;
-+		int32 HismComponentCount = 0;
-+		int32 RelatedStableId = INDEX_NONE;
-+		FString Error;
-+
-+		void Reset()
-+		{
-+			InstancedMeshCount = 0;
-+			HismComponentCount = 0;
-+			RelatedStableId = INDEX_NONE;
-+			Error.Reset();
-+		}
-+	};
-+
-+	/** 普通格与完整楼梯/高厅的唯一结构表现构建器。 */
-+	class FStructureBuilder final
-+	{
-+	public:
-+		/**
-+		 * 只展开纯描述，不创建组件；测试用同一入口验证多层高度、旋转和隐藏坡面数量。
-+		 * 失败时 OutInstances 为空，OutResult 保存首个关联结构和原因。
-+		 */
-+		static bool Expand(
-+			const FZeroEscapeGeneratedLevelPlan& Plan,
-+			const UZeroEscapePresentationProfile& Profile,
-+			TArray<FStructurePresentationInstance>& OutInstances,
-+			FStructureBuildResult& OutResult);
-+
-+		/**
-+		 * 展开并提交 HISM。每个组件创建后立即加入 InOutRegisteredComponents，
-+		 * 因而后续任意失败都可由 Generator 的统一事务路径回滚。
-+		 */
-+		static bool Build(
-+			AActor& Owner,
-+			USceneComponent& GeneratedRoot,
-+			const FZeroEscapeGeneratedLevelPlan& Plan,
-+			const UZeroEscapePresentationProfile& Profile,
-+			TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>&
-+				InOutRegisteredComponents,
-+			FStructureBuildResult& OutResult);
-+	};
-+}
-diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp
-new file mode 100644
---- /dev/null
-+++ b/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp
-@@ -0,0 +1,349 @@
-+// Copyright Epic Games, Inc. All Rights Reserved.
-+
-+/**
-+ * @file ZeroEscapeStructurePresentationTests.cpp
-+ * 职责：验证完整结构配方、共享边唯一所有权、顺时针旋转和非零地板高度基准。
-+ * 边界：只展开纯描述，不创建 World、HISM、临时导航坡面或一次性测试 Actor。
-+ */
-+
-+#include "PCG/Presentation/ZeroEscapeStructureBuilder.h"
-+
-+#if WITH_DEV_AUTOMATION_TESTS
-+
-+#include "Engine/StaticMesh.h"
-+#include "Misc/AutomationTest.h"
-+#include "PCG/ZeroEscapeGenerationAssets.h"
-+
-+namespace ZeroEscape::LevelGeneration::Tests
-+{
-+	namespace
-+	{
-+		UStaticMesh* NewTestMesh()
-+		{
-+			return NewObject<UStaticMesh>(GetTransientPackage());
-+		}
-+
-+		void ConfigureBinding(
-+			FZeroEscapeStructureMeshBinding& Binding,
-+			UStaticMesh* Mesh)
-+		{
-+			Binding.StaticMesh = Mesh;
-+			Binding.CollisionProfileName = TEXT("BlockAll");
-+			Binding.bCanEverAffectNavigation = true;
-+		}
-+
-+		void ConfigureBaseProfile(
-+			UZeroEscapePresentationProfile& Profile,
-+			UStaticMesh* Mesh)
-+		{
-+			Profile.StructureUnitSizeCm = 300.0;
-+			Profile.FloorTopZCm = 37.0;
-+			Profile.WallBaseZCm = 5.0;
-+			Profile.CeilingPivotZCm = 305.0;
-+			Profile.bSpawnCeilingLights = false;
-+			ConfigureBinding(Profile.Floor, Mesh);
-+			ConfigureBinding(Profile.Ceiling, Mesh);
-+			ConfigureBinding(Profile.Wall, Mesh);
-+			Profile.WallTopTrim.StaticMesh = nullptr;
-+			Profile.Pillar.StaticMesh = Mesh;
-+			Profile.Pillar.CollisionProfileName = TEXT("BlockAll");
-+		}
-+
-+		FZeroEscapeStructurePresentationPiece MakePiece(
-+			const FName PieceId,
-+			UStaticMesh* Mesh,
-+			const FTransform& RelativeTransform = FTransform::Identity)
-+		{
-+			FZeroEscapeStructurePresentationPiece Piece;
-+			Piece.PieceId = PieceId;
-+			Piece.StaticMesh = Mesh;
-+			Piece.RelativeTransform = RelativeTransform;
-+			Piece.CollisionProfileName = TEXT("BlockAll");
-+			Piece.CollisionRole = EZeroEscapeStructurePieceCollisionRole::StandardProfile;
-+			Piece.bCanEverAffectNavigation = true;
-+			return Piece;
-+		}
-+
-+		FZeroEscapeStructurePresentationRecipe MakeHighRecipe(
-+			UStaticMesh* Mesh,
-+			const FTransform& PieceTransform = FTransform::Identity)
-+		{
-+			FZeroEscapeStructurePresentationRecipe Recipe;
-+			Recipe.DefinitionId = TEXT("High");
-+			Recipe.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
-+			Recipe.CommonPieces.Add(MakePiece(TEXT("BoundaryOwner"), Mesh, PieceTransform));
-+			FZeroEscapeStructureOpeningSetPresentation& OpeningSet =
-+				Recipe.OpeningSets.AddDefaulted_GetRef();
-+			OpeningSet.OpeningSetId = TEXT("Default");
-+			return Recipe;
-+		}
-+
-+		FZeroEscapeGeneratedLevelPlan MakePlan()
-+		{
-+			FZeroEscapeGeneratedLevelPlan Plan;
-+			Plan.FloorCount = 1;
-+			Plan.GridSize = FIntPoint(4, 4);
-+			Plan.LogicalTileSizeCm = 600.0;
-+			Plan.FloorHeightCm = 450.0;
-+			Plan.AnchorHeightCm = 100.0;
-+			return Plan;
-+		}
-+
-+		void AddOrdinary(
-+			FZeroEscapeGeneratedLevelPlan& Plan,
-+			const FIntVector Coordinate,
-+			const uint8 OpeningMask)
-+		{
-+			FZeroEscapeGeneratedOrdinaryCell& Cell =
-+				Plan.OrdinaryCells.AddDefaulted_GetRef();
-+			Cell.Coordinate = Coordinate;
-+			Cell.OpeningMask = OpeningMask;
-+		}
-+
-+		void AddHighStructure(
-+			FZeroEscapeGeneratedLevelPlan& Plan,
-+			const FIntVector ReservedCell,
-+			const bool bUseClearance)
-+		{
-+			FZeroEscapeGeneratedStructure& Structure =
-+				Plan.Structures.AddDefaulted_GetRef();
-+			Structure.StableStructureId = 0;
-+			Structure.DefinitionId = TEXT("High");
-+			Structure.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
-+			Structure.BaseCoordinate = ReservedCell;
-+			Structure.ActiveOpeningSetId = TEXT("Default");
-+			if (bUseClearance)
-+			{
-+				Structure.ClearanceCells.Add(ReservedCell);
-+			}
-+			else
-+			{
-+				Structure.SolidCells.Add(ReservedCell);
-+			}
-+		}
-+
-+		int32 CountGroup(
-+			const TArray<FStructurePresentationInstance>& Instances,
-+			const FName GroupId)
-+		{
-+			int32 Count = 0;
-+			for (const FStructurePresentationInstance& Instance : Instances)
-+			{
-+				if (Instance.GroupId == GroupId)
-+				{
-+					++Count;
-+				}
-+			}
-+			return Count;
-+		}
-+
-+		int32 CountDistinctGroups(
-+			const TArray<FStructurePresentationInstance>& Instances)
-+		{
-+			TSet<FName> GroupIds;
-+			for (const FStructurePresentationInstance& Instance : Instances)
-+			{
-+				GroupIds.Add(Instance.GroupId);
-+			}
-+			return GroupIds.Num();
-+		}
-+
-+		const FStructurePresentationInstance* FindGroup(
-+			const TArray<FStructurePresentationInstance>& Instances,
-+			const FName GroupId)
-+		{
-+			return Instances.FindByPredicate(
-+				[GroupId](const FStructurePresentationInstance& Instance)
-+				{
-+					return Instance.GroupId == GroupId;
-+				});
-+		}
-+	}
-+
-+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-+		FZeroEscapeStructureEdgeOwnershipTest,
-+		"Demo.PCG.Presentation.StructureEdgeOwnership",
-+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-+
-+	bool FZeroEscapeStructureEdgeOwnershipTest::RunTest(const FString& Parameters)
-+	{
-+		(void)Parameters;
-+		UStaticMesh* Mesh = NewTestMesh();
-+		UZeroEscapePresentationProfile* Profile =
-+			NewObject<UZeroEscapePresentationProfile>();
-+		ConfigureBaseProfile(*Profile, Mesh);
-+		Profile->StructureRecipes.Add(MakeHighRecipe(Mesh));
-+		TArray<FStructurePresentationInstance> Instances;
-+		FStructureBuildResult Result;
-+
-+		FZeroEscapeGeneratedLevelPlan OpenPortalPlan = MakePlan();
-+		AddOrdinary(
-+			OpenPortalPlan,
-+			FIntVector(1, 1, 0),
-+			Grid::DirectionBit(1));
-+		AddHighStructure(OpenPortalPlan, FIntVector(2, 1, 0), false);
-+		TestTrue(
-+			TEXT("开放结构口应可展开"),
-+			FStructureBuilder::Expand(OpenPortalPlan, *Profile, Instances, Result));
-+		TestEqual(
-+			TEXT("开放口方向不生成普通墙，其他三边共六段"),
-+			CountGroup(Instances, TEXT("GeneratedWallHISM")), 6);
-+		TestEqual(
-+			TEXT("同 GroupId 的展开结果必须收敛为五个 HISM 批次"),
-+			CountDistinctGroups(Instances), 5);
-+
-+		FZeroEscapeGeneratedLevelPlan SealedStructurePlan = MakePlan();
-+		AddOrdinary(
-+			SealedStructurePlan,
-+			FIntVector(1, 1, 0),
-+			Grid::DirectionBit(0));
-+		AddHighStructure(SealedStructurePlan, FIntVector(2, 1, 0), false);
-+		TestTrue(
-+			TEXT("结构封闭边应可展开"),
-+			FStructureBuilder::Expand(SealedStructurePlan, *Profile, Instances, Result));
-+		TestEqual(
-+			TEXT("相邻结构保留格的封闭边不由普通格重复生成"),
-+			CountGroup(Instances, TEXT("GeneratedWallHISM")), 4);
-+		TestEqual(
-+			TEXT("封闭结构边只由完整结构 recipe 生成一份"),
-+			CountGroup(Instances, TEXT("Generated_High_Common_None_BoundaryOwner")), 1);
-+
-+		FZeroEscapeGeneratedLevelPlan OrdinaryPairPlan = MakePlan();
-+		AddOrdinary(OrdinaryPairPlan, FIntVector(1, 1, 0), Grid::DirectionBit(0));
-+		AddOrdinary(OrdinaryPairPlan, FIntVector(2, 1, 0), Grid::DirectionBit(0));
-+		TestTrue(
-+			TEXT("相邻普通格应可展开"),
-+			FStructureBuilder::Expand(OrdinaryPairPlan, *Profile, Instances, Result));
-+		TestEqual(
-+			TEXT("普通格共享封闭边仍按 300cm 段去重"),
-+			CountGroup(Instances, TEXT("GeneratedWallHISM")), 10);
-+
-+		FZeroEscapeGeneratedLevelPlan ClearancePlan = MakePlan();
-+		AddOrdinary(ClearancePlan, FIntVector(1, 1, 0), Grid::DirectionBit(0));
-+		AddHighStructure(ClearancePlan, FIntVector(2, 1, 0), true);
-+		TestTrue(
-+			TEXT("高厅净空边应可展开"),
-+			FStructureBuilder::Expand(ClearancePlan, *Profile, Instances, Result));
-+		TestEqual(
-+			TEXT("高厅 Clearance 相邻边由高厅 recipe 唯一负责"),
-+			CountGroup(Instances, TEXT("GeneratedWallHISM")), 4);
-+		return true;
-+	}
-+
-+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-+		FZeroEscapeStructureRotationAndHeightTest,
-+		"Demo.PCG.Presentation.StructureRotationAndHeight",
-+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-+
-+	bool FZeroEscapeStructureRotationAndHeightTest::RunTest(const FString& Parameters)
-+	{
-+		(void)Parameters;
-+		UStaticMesh* Mesh = NewTestMesh();
-+		UZeroEscapePresentationProfile* Profile =
-+			NewObject<UZeroEscapePresentationProfile>();
-+		ConfigureBaseProfile(*Profile, Mesh);
-+		Profile->StructureRecipes.Add(MakeHighRecipe(
-+			Mesh, FTransform(FVector(100.0, 0.0, 10.0))));
-+
-+		const FVector ExpectedOffsets[4] = {
-+			FVector(100.0, 0.0, 10.0),
-+			FVector(0.0, -100.0, 10.0),
-+			FVector(-100.0, 0.0, 10.0),
-+			FVector(0.0, 100.0, 10.0)};
-+		for (uint8 QuarterTurn = 0; QuarterTurn < 4; ++QuarterTurn)
-+		{
-+			FZeroEscapeGeneratedLevelPlan Plan = MakePlan();
-+			AddOrdinary(Plan, FIntVector(0, 0, 0), Grid::DirectionBit(0));
-+			AddHighStructure(Plan, FIntVector(2, 2, 0), false);
-+			Plan.Structures[0].QuarterTurnCount = QuarterTurn;
-+			TArray<FStructurePresentationInstance> Instances;
-+			FStructureBuildResult Result;
-+			TestTrue(
-+				TEXT("四种顺时针旋转都应展开"),
-+				FStructureBuilder::Expand(Plan, *Profile, Instances, Result));
-+			const FStructurePresentationInstance* Marker = FindGroup(
-+				Instances, TEXT("Generated_High_Common_None_BoundaryOwner"));
-+			TestNotNull(TEXT("完整结构标记 Piece 必须存在"), Marker);
-+			if (Marker != nullptr)
-+			{
-+				const FVector Expected = FVector(1200.0, 1200.0, Profile->FloorTopZCm)
-+					+ ExpectedOffsets[QuarterTurn];
-+				TestTrue(
-+					TEXT("QuarterTurnCount 必须映射为 UE 负 Yaw 的顺时针旋转"),
-+					Marker->LocalTransform.GetLocation().Equals(Expected, 0.1));
-+			}
-+			const FStructurePresentationInstance* Floor =
-+				FindGroup(Instances, TEXT("GeneratedFloorHISM"));
-+			const FStructurePresentationInstance* Ceiling =
-+				FindGroup(Instances, TEXT("GeneratedCeilingHISM"));
-+			const FStructurePresentationInstance* Wall =
-+				FindGroup(Instances, TEXT("GeneratedWallHISM"));
-+			const FStructurePresentationInstance* Pillar =
-+				FindGroup(Instances, TEXT("GeneratedPillarHISM"));
-+			TestNotNull(TEXT("普通地板必须存在"), Floor);
-+			TestNotNull(TEXT("普通天花板必须存在"), Ceiling);
-+			TestNotNull(TEXT("普通墙必须存在"), Wall);
-+			TestNotNull(TEXT("普通柱必须存在"), Pillar);
-+			if (Floor && Ceiling && Wall && Pillar)
-+			{
-+				TestTrue(TEXT("地板使用 FloorTopZCm"),
-+					FMath::IsNearlyEqual(Floor->LocalTransform.GetLocation().Z, 37.0));
-+				TestTrue(TEXT("天花板使用同一地板顶面基准"),
-+					FMath::IsNearlyEqual(Ceiling->LocalTransform.GetLocation().Z, 342.0));
-+				TestTrue(TEXT("墙使用同一地板顶面基准"),
-+					FMath::IsNearlyEqual(Wall->LocalTransform.GetLocation().Z, 42.0));
-+				TestTrue(TEXT("柱使用同一地板顶面基准"),
-+					FMath::IsNearlyEqual(Pillar->LocalTransform.GetLocation().Z, 42.0));
-+			}
-+		}
-+		return true;
-+	}
-+
-+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-+		FZeroEscapeStructurePresentationCrossContractTest,
-+		"Demo.PCG.Presentation.CrossAssetContract",
-+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-+
-+	bool FZeroEscapeStructurePresentationCrossContractTest::RunTest(
-+		const FString& Parameters)
-+	{
-+		(void)Parameters;
-+		UStaticMesh* Mesh = NewTestMesh();
-+		UZeroEscapeLevelGenerationProfile* Generation =
-+			NewObject<UZeroEscapeLevelGenerationProfile>();
-+		UZeroEscapePresentationProfile* Presentation =
-+			NewObject<UZeroEscapePresentationProfile>();
-+		ConfigureBaseProfile(*Presentation, Mesh);
-+		Presentation->StructureRecipes.Add(MakeHighRecipe(Mesh));
-+
-+		FZeroEscapeStructureDefinition& Definition =
-+			Generation->StructureDefinitions.AddDefaulted_GetRef();
-+		Definition.DefinitionId = TEXT("High");
-+		Definition.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
-+		FZeroEscapeStructureOpeningSetDefinition& LogicalOpening =
-+			Definition.AllowedOpeningSets.AddDefaulted_GetRef();
-+		LogicalOpening.SetId = TEXT("Default");
-+		FString Error;
-+		TestTrue(
-+			TEXT("逻辑定义与表现 recipe 一一对应时合同通过"),
-+			ValidateZeroEscapeStructurePresentationBindings(
-+				*Generation, *Presentation, Error));
-+
-+		Presentation->StructureRecipes[0].OpeningSets[0].OpeningSetId = TEXT("OrphanSet");
-+		TestFalse(
-+			TEXT("表现包含逻辑层没有的开口组合时必须失败"),
-+			ValidateZeroEscapeStructurePresentationBindings(
-+				*Generation, *Presentation, Error));
-+		Presentation->StructureRecipes[0].OpeningSets[0].OpeningSetId = TEXT("Default");
-+		Presentation->StructureRecipes[0].Kind = EZeroEscapeStructureKind::TwoFloorStair;
-+		TestFalse(
-+			TEXT("同 DefinitionId 但 Kind 不一致时必须失败"),
-+			ValidateZeroEscapeStructurePresentationBindings(
-+				*Generation, *Presentation, Error));
-+		TestFalse(
-+			TEXT("双层楼梯缺少两块隐藏坡面时自身配置也必须失败"),
-+			Presentation->IsConfigured(600.0, Error));
-+		return true;
-+	}
-+}
-+
-+#endif
 diff --git a/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.cpp b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.cpp
 new file mode 100644
+index 0000000000000000000000000000000000000000..543d0658f4f2b529fce74bccdb3f458933a21a07
 --- /dev/null
 +++ b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.cpp
-@@ -0,0 +1,705 @@
+@@ -0,0 +1,693 @@
 +// Copyright Epic Games, Inc. All Rights Reserved.
 +
 +/**
@@ -460,6 +20,7 @@ new file mode 100644
 +#include "Engine/StaticMesh.h"
 +#include "GameFramework/Actor.h"
 +#include "PCG/ZeroEscapeGenerationAssets.h"
++#include "PCG/ZeroEscapeGenerationCore.h"
 +#include "UObject/UObjectGlobals.h"
 +
 +namespace ZeroEscape::LevelGeneration
@@ -509,20 +70,6 @@ new file mode 100644
 +			Result.RelatedStableId = RelatedStableId;
 +			Result.Error = MoveTemp(Message);
 +			return false;
-+		}
-+
-+		bool IsFinitePositiveScaleTransform(const FTransform& Transform)
-+		{
-+			const FVector Location = Transform.GetLocation();
-+			const FQuat Rotation = Transform.GetRotation();
-+			const FVector Scale = Transform.GetScale3D();
-+			return !Location.ContainsNaN()
-+				&& !Rotation.ContainsNaN()
-+				&& Rotation.IsNormalized()
-+				&& !Scale.ContainsNaN()
-+				&& Scale.X > 0.0
-+				&& Scale.Y > 0.0
-+				&& Scale.Z > 0.0;
 +		}
 +
 +		bool IsInsidePlan(const FIntVector Coordinate, const FZeroEscapeGeneratedLevelPlan& Plan)
@@ -595,7 +142,8 @@ new file mode 100644
 +			FStructureBuildResult& OutResult)
 +		{
 +			const FTransform LocalTransform = Piece.RelativeTransform * StructureTransform;
-+			if (!IsValid(Piece.StaticMesh) || !IsFinitePositiveScaleTransform(LocalTransform))
++			if (!IsValid(Piece.StaticMesh)
++				|| !FGenerationCore::IsFinitePositiveScaleTransform(LocalTransform))
 +			{
 +				return Fail(
 +					OutResult,
@@ -1010,7 +558,7 @@ new file mode 100644
 +			if (Instance.GroupId.IsNone()
 +				|| !IsValid(Instance.StaticMesh)
 +				|| Instance.CollisionProfileName.IsNone()
-+				|| !StructureBuilderPrivate::IsFinitePositiveScaleTransform(
++				|| !FGenerationCore::IsFinitePositiveScaleTransform(
 +					Instance.LocalTransform))
 +			{
 +				OutInstances.Reset();
@@ -1149,14 +697,693 @@ new file mode 100644
 +		return true;
 +	}
 +}
+diff --git a/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h
+new file mode 100644
+index 0000000000000000000000000000000000000000..014c302e6aca2a3e6bee1d8f094b4ee487d98a84
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Presentation/ZeroEscapeStructureBuilder.h
+@@ -0,0 +1,81 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapeStructureBuilder.h
++ * 职责：把已经通过全局验证的多层 Plan 展开为普通结构与完整结构的 HISM 实例。
++ * 边界：不求解布局、不修改 Plan/Hash、不生成顶灯或玩法对象，也不拥有回滚生命周期。
++ */
++
++#pragma once
++
++#include "CoreMinimal.h"
++#include "PCG/ZeroEscapeGenerationAssets.h"
++
++class AActor;
++class UHierarchicalInstancedStaticMeshComponent;
++class USceneComponent;
++class UStaticMesh;
++class UZeroEscapePresentationProfile;
++
++namespace ZeroEscape::LevelGeneration
++{
++	/** 一条尚未提交到场景的表现实例；GroupId 只用于稳定批处理和诊断。 */
++	struct FStructurePresentationInstance
++	{
++		FName GroupId = NAME_None;
++		TObjectPtr<UStaticMesh> StaticMesh = nullptr;
++		FName CollisionProfileName = NAME_None;
++		EZeroEscapeStructurePieceCollisionRole CollisionRole =
++			EZeroEscapeStructurePieceCollisionRole::StandardProfile;
++		bool bCanEverAffectNavigation = false;
++		bool bHiddenInGame = false;
++		bool bCastShadow = true;
++		FTransform LocalTransform = FTransform::Identity;
++		int32 RelatedStableId = INDEX_NONE;
++	};
++
++	/** 构建结果不拥有 UObject；Generator 把计数并入 Report，并负责销毁已登记组件。 */
++	struct FStructureBuildResult
++	{
++		int32 InstancedMeshCount = 0;
++		int32 HismComponentCount = 0;
++		int32 RelatedStableId = INDEX_NONE;
++		FString Error;
++
++		void Reset()
++		{
++			InstancedMeshCount = 0;
++			HismComponentCount = 0;
++			RelatedStableId = INDEX_NONE;
++			Error.Reset();
++		}
++	};
++
++	/** 普通格与完整楼梯/高厅的唯一结构表现构建器。 */
++	class FStructureBuilder final
++	{
++	public:
++		/**
++		 * 只展开纯描述，不创建组件；测试用同一入口验证多层高度、旋转和隐藏坡面数量。
++		 * 失败时 OutInstances 为空，OutResult 保存首个关联结构和原因。
++		 */
++		static bool Expand(
++			const FZeroEscapeGeneratedLevelPlan& Plan,
++			const UZeroEscapePresentationProfile& Profile,
++			TArray<FStructurePresentationInstance>& OutInstances,
++			FStructureBuildResult& OutResult);
++
++		/**
++		 * 展开并提交 HISM。每个组件创建后立即加入 InOutRegisteredComponents，
++		 * 因而后续任意失败都可由 Generator 的统一事务路径回滚。
++		 */
++		static bool Build(
++			AActor& Owner,
++			USceneComponent& GeneratedRoot,
++			const FZeroEscapeGeneratedLevelPlan& Plan,
++			const UZeroEscapePresentationProfile& Profile,
++			TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>>&
++				InOutRegisteredComponents,
++			FStructureBuildResult& OutResult);
++	};
++}
+diff --git a/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp b/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp
+new file mode 100644
+index 0000000000000000000000000000000000000000..ce40daf221f01ee1d9bcec204254528cfc614709
+--- /dev/null
++++ b/Source/Demo/Private/PCG/Tests/ZeroEscapeStructurePresentationTests.cpp
+@@ -0,0 +1,350 @@
++// Copyright Epic Games, Inc. All Rights Reserved.
++
++/**
++ * @file ZeroEscapeStructurePresentationTests.cpp
++ * 职责：验证完整结构配方、共享边唯一所有权、顺时针旋转和非零地板高度基准。
++ * 边界：只展开纯描述，不创建 World、HISM、临时导航坡面或一次性测试 Actor。
++ */
++
++#include "PCG/Presentation/ZeroEscapeStructureBuilder.h"
++
++#if WITH_DEV_AUTOMATION_TESTS
++
++#include "Engine/StaticMesh.h"
++#include "Misc/AutomationTest.h"
++#include "PCG/ZeroEscapeGenerationAssets.h"
++
++namespace ZeroEscape::LevelGeneration::Tests
++{
++	namespace
++	{
++		UStaticMesh* NewTestMesh()
++		{
++			return NewObject<UStaticMesh>(GetTransientPackage());
++		}
++
++		void ConfigureBinding(
++			FZeroEscapeStructureMeshBinding& Binding,
++			UStaticMesh* Mesh)
++		{
++			Binding.StaticMesh = Mesh;
++			Binding.CollisionProfileName = TEXT("BlockAll");
++			Binding.bCanEverAffectNavigation = true;
++		}
++
++		void ConfigureBaseProfile(
++			UZeroEscapePresentationProfile& Profile,
++			UStaticMesh* Mesh)
++		{
++			Profile.StructureUnitSizeCm = 300.0;
++			Profile.FloorTopZCm = 37.0;
++			Profile.WallBaseZCm = 5.0;
++			Profile.CeilingPivotZCm = 305.0;
++			Profile.bSpawnCeilingLights = false;
++			ConfigureBinding(Profile.Floor, Mesh);
++			ConfigureBinding(Profile.Ceiling, Mesh);
++			ConfigureBinding(Profile.Wall, Mesh);
++			Profile.WallTopTrim.StaticMesh = nullptr;
++			Profile.Pillar.StaticMesh = Mesh;
++			Profile.Pillar.CollisionProfileName = TEXT("BlockAll");
++		}
++
++		FZeroEscapeStructurePresentationPiece MakePiece(
++			const FName PieceId,
++			UStaticMesh* Mesh,
++			const FTransform& RelativeTransform = FTransform::Identity)
++		{
++			FZeroEscapeStructurePresentationPiece Piece;
++			Piece.PieceId = PieceId;
++			Piece.StaticMesh = Mesh;
++			Piece.RelativeTransform = RelativeTransform;
++			Piece.CollisionProfileName = TEXT("BlockAll");
++			Piece.CollisionRole = EZeroEscapeStructurePieceCollisionRole::StandardProfile;
++			Piece.bCanEverAffectNavigation = true;
++			return Piece;
++		}
++
++		FZeroEscapeStructurePresentationRecipe MakeHighRecipe(
++			UStaticMesh* Mesh,
++			const FTransform& PieceTransform = FTransform::Identity)
++		{
++			FZeroEscapeStructurePresentationRecipe Recipe;
++			Recipe.DefinitionId = TEXT("High");
++			Recipe.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
++			Recipe.CommonPieces.Add(MakePiece(TEXT("BoundaryOwner"), Mesh, PieceTransform));
++			FZeroEscapeStructureOpeningSetPresentation& OpeningSet =
++				Recipe.OpeningSets.AddDefaulted_GetRef();
++			OpeningSet.OpeningSetId = TEXT("Default");
++			return Recipe;
++		}
++
++		FZeroEscapeGeneratedLevelPlan MakePlan()
++		{
++			FZeroEscapeGeneratedLevelPlan Plan;
++			Plan.FloorCount = 1;
++			Plan.GridSize = FIntPoint(4, 4);
++			Plan.LogicalTileSizeCm = 600.0;
++			Plan.FloorHeightCm = 450.0;
++			Plan.AnchorHeightCm = 100.0;
++			return Plan;
++		}
++
++		void AddOrdinary(
++			FZeroEscapeGeneratedLevelPlan& Plan,
++			const FIntVector Coordinate,
++			const uint8 OpeningMask)
++		{
++			FZeroEscapeGeneratedOrdinaryCell& Cell =
++				Plan.OrdinaryCells.AddDefaulted_GetRef();
++			Cell.Coordinate = Coordinate;
++			Cell.OpeningMask = OpeningMask;
++		}
++
++		void AddHighStructure(
++			FZeroEscapeGeneratedLevelPlan& Plan,
++			const FIntVector ReservedCell,
++			const bool bUseClearance)
++		{
++			FZeroEscapeGeneratedStructure& Structure =
++				Plan.Structures.AddDefaulted_GetRef();
++			Structure.StableStructureId = 0;
++			Structure.DefinitionId = TEXT("High");
++			Structure.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
++			Structure.BaseCoordinate = ReservedCell;
++			Structure.ActiveOpeningSetId = TEXT("Default");
++			if (bUseClearance)
++			{
++				Structure.ClearanceCells.Add(ReservedCell);
++			}
++			else
++			{
++				Structure.SolidCells.Add(ReservedCell);
++			}
++		}
++
++		int32 CountGroup(
++			const TArray<FStructurePresentationInstance>& Instances,
++			const FName GroupId)
++		{
++			int32 Count = 0;
++			for (const FStructurePresentationInstance& Instance : Instances)
++			{
++				if (Instance.GroupId == GroupId)
++				{
++					++Count;
++				}
++			}
++			return Count;
++		}
++
++		int32 CountDistinctGroups(
++			const TArray<FStructurePresentationInstance>& Instances)
++		{
++			TSet<FName> GroupIds;
++			for (const FStructurePresentationInstance& Instance : Instances)
++			{
++				GroupIds.Add(Instance.GroupId);
++			}
++			return GroupIds.Num();
++		}
++
++		const FStructurePresentationInstance* FindGroup(
++			const TArray<FStructurePresentationInstance>& Instances,
++			const FName GroupId)
++		{
++			return Instances.FindByPredicate(
++				[GroupId](const FStructurePresentationInstance& Instance)
++				{
++					return Instance.GroupId == GroupId;
++				});
++		}
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeStructureEdgeOwnershipTest,
++		"Demo.PCG.Presentation.StructureEdgeOwnership",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeStructureEdgeOwnershipTest::RunTest(const FString& Parameters)
++	{
++		(void)Parameters;
++		UStaticMesh* Mesh = NewTestMesh();
++		UZeroEscapePresentationProfile* Profile =
++			NewObject<UZeroEscapePresentationProfile>();
++		ConfigureBaseProfile(*Profile, Mesh);
++		Profile->StructureRecipes.Add(MakeHighRecipe(Mesh));
++		TArray<FStructurePresentationInstance> Instances;
++		FStructureBuildResult Result;
++
++		FZeroEscapeGeneratedLevelPlan OpenPortalPlan = MakePlan();
++		AddOrdinary(
++			OpenPortalPlan,
++			FIntVector(1, 1, 0),
++			Grid::DirectionBit(1));
++		AddHighStructure(OpenPortalPlan, FIntVector(2, 1, 0), false);
++		TestTrue(
++			TEXT("开放结构口应可展开"),
++			FStructureBuilder::Expand(OpenPortalPlan, *Profile, Instances, Result));
++		TestEqual(
++			TEXT("开放口方向不生成普通墙，其他三边共六段"),
++			CountGroup(Instances, TEXT("GeneratedWallHISM")), 6);
++		TestEqual(
++			TEXT("同 GroupId 的展开结果必须收敛为五个 HISM 批次"),
++			CountDistinctGroups(Instances), 5);
++
++		FZeroEscapeGeneratedLevelPlan SealedStructurePlan = MakePlan();
++		AddOrdinary(
++			SealedStructurePlan,
++			FIntVector(1, 1, 0),
++			Grid::DirectionBit(0));
++		AddHighStructure(SealedStructurePlan, FIntVector(2, 1, 0), false);
++		TestTrue(
++			TEXT("结构封闭边应可展开"),
++			FStructureBuilder::Expand(SealedStructurePlan, *Profile, Instances, Result));
++		TestEqual(
++			TEXT("相邻结构保留格的封闭边不由普通格重复生成"),
++			CountGroup(Instances, TEXT("GeneratedWallHISM")), 4);
++		TestEqual(
++			TEXT("封闭结构边只由完整结构 recipe 生成一份"),
++			CountGroup(Instances, TEXT("Generated_High_Common_None_BoundaryOwner")), 1);
++
++		FZeroEscapeGeneratedLevelPlan OrdinaryPairPlan = MakePlan();
++		AddOrdinary(OrdinaryPairPlan, FIntVector(1, 1, 0), Grid::DirectionBit(0));
++		AddOrdinary(OrdinaryPairPlan, FIntVector(2, 1, 0), Grid::DirectionBit(0));
++		TestTrue(
++			TEXT("相邻普通格应可展开"),
++			FStructureBuilder::Expand(OrdinaryPairPlan, *Profile, Instances, Result));
++		TestEqual(
++			TEXT("普通格共享封闭边仍按 300cm 段去重"),
++			CountGroup(Instances, TEXT("GeneratedWallHISM")), 10);
++
++		FZeroEscapeGeneratedLevelPlan ClearancePlan = MakePlan();
++		AddOrdinary(ClearancePlan, FIntVector(1, 1, 0), Grid::DirectionBit(0));
++		AddHighStructure(ClearancePlan, FIntVector(2, 1, 0), true);
++		TestTrue(
++			TEXT("高厅净空边应可展开"),
++			FStructureBuilder::Expand(ClearancePlan, *Profile, Instances, Result));
++		TestEqual(
++			TEXT("高厅 Clearance 相邻边由高厅 recipe 唯一负责"),
++			CountGroup(Instances, TEXT("GeneratedWallHISM")), 4);
++		return true;
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeStructureRotationAndHeightTest,
++		"Demo.PCG.Presentation.StructureRotationAndHeight",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeStructureRotationAndHeightTest::RunTest(const FString& Parameters)
++	{
++		(void)Parameters;
++		UStaticMesh* Mesh = NewTestMesh();
++		UZeroEscapePresentationProfile* Profile =
++			NewObject<UZeroEscapePresentationProfile>();
++		ConfigureBaseProfile(*Profile, Mesh);
++		Profile->StructureRecipes.Add(MakeHighRecipe(
++			Mesh, FTransform(FVector(100.0, 0.0, 10.0))));
++
++		const FVector ExpectedOffsets[4] = {
++			FVector(100.0, 0.0, 10.0),
++			FVector(0.0, -100.0, 10.0),
++			FVector(-100.0, 0.0, 10.0),
++			FVector(0.0, 100.0, 10.0)};
++		for (uint8 QuarterTurn = 0; QuarterTurn < 4; ++QuarterTurn)
++		{
++			FZeroEscapeGeneratedLevelPlan Plan = MakePlan();
++			AddOrdinary(Plan, FIntVector(0, 0, 0), Grid::DirectionBit(0));
++			AddHighStructure(Plan, FIntVector(2, 2, 0), false);
++			Plan.Structures[0].QuarterTurnCount = QuarterTurn;
++			TArray<FStructurePresentationInstance> Instances;
++			FStructureBuildResult Result;
++			TestTrue(
++				TEXT("四种顺时针旋转都应展开"),
++				FStructureBuilder::Expand(Plan, *Profile, Instances, Result));
++			const FStructurePresentationInstance* Marker = FindGroup(
++				Instances, TEXT("Generated_High_Common_None_BoundaryOwner"));
++			TestNotNull(TEXT("完整结构标记 Piece 必须存在"), Marker);
++			if (Marker != nullptr)
++			{
++				const FVector Expected = FVector(1200.0, 1200.0, Profile->FloorTopZCm)
++					+ ExpectedOffsets[QuarterTurn];
++				TestTrue(
++					TEXT("QuarterTurnCount 必须映射为 UE 负 Yaw 的顺时针旋转"),
++					Marker->LocalTransform.GetLocation().Equals(Expected, 0.1));
++			}
++			const FStructurePresentationInstance* Floor =
++				FindGroup(Instances, TEXT("GeneratedFloorHISM"));
++			const FStructurePresentationInstance* Ceiling =
++				FindGroup(Instances, TEXT("GeneratedCeilingHISM"));
++			const FStructurePresentationInstance* Wall =
++				FindGroup(Instances, TEXT("GeneratedWallHISM"));
++			const FStructurePresentationInstance* Pillar =
++				FindGroup(Instances, TEXT("GeneratedPillarHISM"));
++			TestNotNull(TEXT("普通地板必须存在"), Floor);
++			TestNotNull(TEXT("普通天花板必须存在"), Ceiling);
++			TestNotNull(TEXT("普通墙必须存在"), Wall);
++			TestNotNull(TEXT("普通柱必须存在"), Pillar);
++			if (Floor && Ceiling && Wall && Pillar)
++			{
++				TestTrue(TEXT("地板使用 FloorTopZCm"),
++					FMath::IsNearlyEqual(Floor->LocalTransform.GetLocation().Z, 37.0));
++				TestTrue(TEXT("天花板使用同一地板顶面基准"),
++					FMath::IsNearlyEqual(Ceiling->LocalTransform.GetLocation().Z, 342.0));
++				TestTrue(TEXT("墙使用同一地板顶面基准"),
++					FMath::IsNearlyEqual(Wall->LocalTransform.GetLocation().Z, 42.0));
++				TestTrue(TEXT("柱使用同一地板顶面基准"),
++					FMath::IsNearlyEqual(Pillar->LocalTransform.GetLocation().Z, 42.0));
++			}
++		}
++		return true;
++	}
++
++	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
++		FZeroEscapeStructurePresentationCrossContractTest,
++		"Demo.PCG.Presentation.CrossAssetContract",
++		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
++
++	bool FZeroEscapeStructurePresentationCrossContractTest::RunTest(
++		const FString& Parameters)
++	{
++		(void)Parameters;
++		UStaticMesh* Mesh = NewTestMesh();
++		UZeroEscapeLevelGenerationProfile* Generation =
++			NewObject<UZeroEscapeLevelGenerationProfile>();
++		UZeroEscapePresentationProfile* Presentation =
++			NewObject<UZeroEscapePresentationProfile>();
++		ConfigureBaseProfile(*Presentation, Mesh);
++		Presentation->StructureRecipes.Add(MakeHighRecipe(Mesh));
++
++		FZeroEscapeStructureDefinition& Definition =
++			Generation->StructureDefinitions.AddDefaulted_GetRef();
++		Definition.DefinitionId = TEXT("High");
++		Definition.Kind = EZeroEscapeStructureKind::HighCeilingRoom;
++		FZeroEscapeStructureOpeningSetDefinition& LogicalOpening =
++			Definition.AllowedOpeningSets.AddDefaulted_GetRef();
++		LogicalOpening.SetId = TEXT("Default");
++		FString Error;
++		TestTrue(
++			TEXT("逻辑定义与表现 recipe 一一对应时合同通过"),
++			ValidateZeroEscapeStructurePresentationBindings(
++				*Generation, *Presentation, Error));
++
++		Presentation->StructureRecipes[0].OpeningSets[0].OpeningSetId = TEXT("OrphanSet");
++		TestFalse(
++			TEXT("表现包含逻辑层没有的开口组合时必须失败"),
++			ValidateZeroEscapeStructurePresentationBindings(
++				*Generation, *Presentation, Error));
++		Presentation->StructureRecipes[0].OpeningSets[0].OpeningSetId = TEXT("Default");
++		Presentation->StructureRecipes[0].Kind = EZeroEscapeStructureKind::TwoFloorStair;
++		TestFalse(
++			TEXT("同 DefinitionId 但 Kind 不一致时必须失败"),
++			ValidateZeroEscapeStructurePresentationBindings(
++				*Generation, *Presentation, Error));
++		TestFalse(
++			TEXT("双层楼梯缺少两块隐藏坡面时自身配置也必须失败"),
++			Presentation->IsConfigured(600.0, Error));
++		return true;
++	}
++}
++
++#endif
+diff --git a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
+index e648398ce26a7fb6dff30f68025c18613c18b2a0..7cfb54656d7e71c1306b0c30bc0c401c5165ddf5 100644
+--- a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
++++ b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
+@@ -51,6 +51,62 @@ namespace
+ 
+ 		return true;
+ 	}
++
++	bool ValidatePresentationPiece(
++		const FZeroEscapeStructurePresentationPiece& Piece,
++		const bool bMustBeNavigationRamp,
++		FString& OutError)
++	{
++		FCollisionResponseTemplate ProfileTemplate;
++		if (Piece.PieceId.IsNone()
++			|| !IsValid(Piece.StaticMesh)
++			|| !ZeroEscape::LevelGeneration::FGenerationCore::IsFinitePositiveScaleTransform(
++				Piece.RelativeTransform)
++			|| Piece.CollisionProfileName.IsNone()
++			|| !UCollisionProfile::Get()->GetProfileTemplate(
++				Piece.CollisionProfileName, ProfileTemplate))
++		{
++			OutError = TEXT("完整结构 Piece 的 ID、Mesh、Transform 或碰撞配置非法。");
++			return false;
++		}
++
++		if (bMustBeNavigationRamp
++			!= (Piece.CollisionRole
++				== EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp))
++		{
++			OutError = TEXT("只有 NavigationRampPieces 可使用 HiddenNavigationRamp 职责。");
++			return false;
++		}
++
++		switch (Piece.CollisionRole)
++		{
++		case EZeroEscapeStructurePieceCollisionRole::StandardProfile:
++			if (Piece.bHiddenInGame)
++			{
++				OutError = TEXT("StandardProfile Piece 不得被标记为隐藏斜坡。");
++				return false;
++			}
++			break;
++		case EZeroEscapeStructurePieceCollisionRole::VisibleStairMesh:
++			if (Piece.bCanEverAffectNavigation || Piece.bHiddenInGame)
++			{
++				OutError = TEXT("VisibleStairMesh 必须可见且不得影响导航。");
++				return false;
++			}
++			break;
++		case EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp:
++			if (!Piece.bCanEverAffectNavigation || !Piece.bHiddenInGame || Piece.bCastShadow)
++			{
++				OutError = TEXT("HiddenNavigationRamp 必须隐藏、无阴影且影响导航。");
++				return false;
++			}
++			break;
++		default:
++			OutError = TEXT("完整结构 Piece 使用未知碰撞职责。");
++			return false;
++		}
++		return true;
++	}
+ }
+ 
+ int32 FZeroEscapeWfcShapeWeights::GetWeightForMask(const uint8 OpeningMask) const
+@@ -697,6 +753,16 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
+ 	return true;
+ }
+ 
++const FZeroEscapeStructurePresentationRecipe*
++UZeroEscapePresentationProfile::FindStructureRecipe(const FName DefinitionId) const
++{
++	return StructureRecipes.FindByPredicate(
++		[DefinitionId](const FZeroEscapeStructurePresentationRecipe& Recipe)
++		{
++			return Recipe.DefinitionId == DefinitionId;
++		});
++}
++
+ bool UZeroEscapePresentationProfile::IsConfigured(
+ 	const double LogicalTileSizeCm,
+ 	FString& OutError) const
+@@ -733,6 +799,72 @@ bool UZeroEscapePresentationProfile::IsConfigured(
+ 		return false;
+ 	}
+ 
++	TSet<FName> SeenRecipeIds;
++	for (const FZeroEscapeStructurePresentationRecipe& Recipe : StructureRecipes)
++	{
++		if (Recipe.DefinitionId.IsNone() || SeenRecipeIds.Contains(Recipe.DefinitionId)
++			|| Recipe.OpeningSets.IsEmpty())
++		{
++			OutError = TEXT("完整结构表现 DefinitionId 必须唯一，且至少有一个开口组合。");
++			return false;
++		}
++		SeenRecipeIds.Add(Recipe.DefinitionId);
++
++		const int32 RequiredRampCount = Recipe.Kind == EZeroEscapeStructureKind::TwoFloorStair
++			? 2
++			: (Recipe.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 4 : 0);
++		if (Recipe.NavigationRampPieces.Num() != RequiredRampCount)
++		{
++			OutError = FString::Printf(
++				TEXT("结构 %s 的隐藏斜坡数量应为 %d。"),
++				*Recipe.DefinitionId.ToString(), RequiredRampCount);
++			return false;
++		}
++
++		auto ValidatePieceArray = [&OutError](
++			const TArray<FZeroEscapeStructurePresentationPiece>& Pieces,
++			const bool bNavigationRamps) -> bool
++		{
++			TSet<FName> SeenPieceIds;
++			for (const FZeroEscapeStructurePresentationPiece& Piece : Pieces)
++			{
++				if (SeenPieceIds.Contains(Piece.PieceId)
++					|| !ValidatePresentationPiece(Piece, bNavigationRamps, OutError))
++				{
++					if (OutError.IsEmpty())
++					{
++						OutError = TEXT("同一表现作用域内 PieceId 重复。");
++					}
++					return false;
++				}
++				SeenPieceIds.Add(Piece.PieceId);
++			}
++			return true;
++		};
++
++		if (!ValidatePieceArray(Recipe.CommonPieces, false)
++			|| !ValidatePieceArray(Recipe.NavigationRampPieces, true))
++		{
++			return false;
++		}
++
++		TSet<FName> SeenOpeningSets;
++		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet : Recipe.OpeningSets)
++		{
++			if (OpeningSet.OpeningSetId.IsNone()
++				|| SeenOpeningSets.Contains(OpeningSet.OpeningSetId)
++				|| !ValidatePieceArray(OpeningSet.Pieces, false))
++			{
++				if (OutError.IsEmpty())
++				{
++					OutError = TEXT("表现开口组合 ID 必须唯一且其 Piece 合法。");
++				}
++				return false;
++			}
++			SeenOpeningSets.Add(OpeningSet.OpeningSetId);
++		}
++	}
++
+ 	// 关闭顶灯时允许灯类为空，确保同一套结构表现可以无代码地回退到“不生成灯”。
+ 	if (bSpawnCeilingLights)
+ 	{
+@@ -755,3 +887,78 @@ bool UZeroEscapePresentationProfile::IsConfigured(
+ 
+ 	return true;
+ }
++
++bool ValidateZeroEscapeStructurePresentationBindings(
++	const UZeroEscapeLevelGenerationProfile& GenerationProfile,
++	const UZeroEscapePresentationProfile& PresentationProfile,
++	FString& OutError)
++{
++	OutError.Reset();
++	if (GenerationProfile.StructureDefinitions.Num()
++		!= PresentationProfile.StructureRecipes.Num())
++	{
++		OutError = TEXT("逻辑结构定义与表现 recipe 数量不同，存在缺失或孤儿配置。");
++		return false;
++	}
++
++	TSet<FName> LogicalIds;
++	for (const FZeroEscapeStructureDefinition& Definition :
++		GenerationProfile.StructureDefinitions)
++	{
++		if (Definition.DefinitionId.IsNone()
++			|| LogicalIds.Contains(Definition.DefinitionId))
++		{
++			OutError = TEXT("逻辑 StructureDefinition 的 DefinitionId 非空且必须唯一。");
++			return false;
++		}
++		LogicalIds.Add(Definition.DefinitionId);
++
++		const FZeroEscapeStructurePresentationRecipe* Recipe =
++			PresentationProfile.FindStructureRecipe(Definition.DefinitionId);
++		if (Recipe == nullptr || Recipe->Kind != Definition.Kind)
++		{
++			OutError = FString::Printf(
++				TEXT("逻辑结构 %s 缺少同 Kind 的唯一表现 recipe。"),
++				*Definition.DefinitionId.ToString());
++			return false;
++		}
++
++		TSet<FName> LogicalOpeningSetIds;
++		for (const FZeroEscapeStructureOpeningSetDefinition& OpeningSet :
++			Definition.AllowedOpeningSets)
++		{
++			LogicalOpeningSetIds.Add(OpeningSet.SetId);
++		}
++		if (LogicalOpeningSetIds.Num() != Definition.AllowedOpeningSets.Num()
++			|| Recipe->OpeningSets.Num() != LogicalOpeningSetIds.Num())
++		{
++			OutError = TEXT("逻辑与表现的开口组合数量或唯一性不一致。");
++			return false;
++		}
++		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet :
++			Recipe->OpeningSets)
++		{
++			if (!LogicalOpeningSetIds.Contains(OpeningSet.OpeningSetId))
++			{
++				OutError = FString::Printf(
++					TEXT("结构 %s 的表现包含逻辑层没有的开口组合 %s。"),
++					*Definition.DefinitionId.ToString(),
++					*OpeningSet.OpeningSetId.ToString());
++				return false;
++			}
++		}
++	}
++
++	for (const FZeroEscapeStructurePresentationRecipe& Recipe :
++		PresentationProfile.StructureRecipes)
++	{
++		if (!LogicalIds.Contains(Recipe.DefinitionId))
++		{
++			OutError = FString::Printf(
++				TEXT("表现 recipe %s 没有对应逻辑结构，是孤儿配置。"),
++				*Recipe.DefinitionId.ToString());
++			return false;
++		}
++	}
++	return true;
++}
 diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h b/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
+index 7b6a326cb4833bbc85c2f5831a8866f8b3780ac3..75a251320433633b7d6b7a295145520e3b490aee 100644
 --- a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
 +++ b/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h
-@@ -369,6 +369,87 @@ struct DEMO_API FZeroEscapeStructureMeshBinding
- 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+@@ -367,6 +367,87 @@ struct DEMO_API FZeroEscapeStructureMeshBinding
  	bool bCanEverAffectNavigation = true;
  };
-+
+ 
 +/** 项目表现配方中的碰撞职责；不是 UE 官方枚举。 */
 +UENUM(BlueprintType)
 +enum class EZeroEscapeStructurePieceCollisionRole : uint8
@@ -1237,10 +1464,11 @@ diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h b/Source/Demo/P
 +	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 +	TArray<FZeroEscapeStructurePresentationPiece> NavigationRampPieces;
 +};
- 
++
  /** 五类规范结构的可替换表现配置；WFC 不知道任何具体 Mesh。 */
  UCLASS(BlueprintType)
-@@ -411,6 +492,10 @@ public:
+ class DEMO_API UZeroEscapePresentationProfile final : public UPrimaryDataAsset
+@@ -406,6 +487,10 @@ public:
  	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Bindings")
  	FZeroEscapeStructureMeshBinding Pillar;
  
@@ -1251,7 +1479,7 @@ diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h b/Source/Demo/P
  	/**
  	 * 是否为本套表现生成室内顶灯。关闭后灯类与修正 Transform 不参与校验，
  	 * Generator 也不会创建灯 Actor，便于不改拓扑地临时回退照明表现。
-@@ -435,6 +520,18 @@ public:
+@@ -427,6 +512,18 @@ public:
  	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
  	FTransform CeilingLightCellTransform = FTransform::Identity;
  
@@ -1270,249 +1498,3 @@ diff --git a/Source/Demo/Public/PCG/ZeroEscapeGenerationAssets.h b/Source/Demo/P
 +	const UZeroEscapeLevelGenerationProfile& GenerationProfile,
 +	const UZeroEscapePresentationProfile& PresentationProfile,
 +	FString& OutError);
-diff --git a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
---- a/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
-+++ b/Source/Demo/Private/PCG/ZeroEscapeGenerationAssets.cpp
-@@ -43,6 +43,73 @@ namespace
- 
- 		return true;
- 	}
-+
-+	bool IsFinitePositiveScaleTransform(const FTransform& Transform)
-+	{
-+		const FVector Location = Transform.GetLocation();
-+		const FQuat Rotation = Transform.GetRotation();
-+		const FVector Scale = Transform.GetScale3D();
-+		return !Location.ContainsNaN()
-+			&& !Rotation.ContainsNaN()
-+			&& Rotation.IsNormalized()
-+			&& !Scale.ContainsNaN()
-+			&& Scale.X > 0.0 && Scale.Y > 0.0 && Scale.Z > 0.0;
-+	}
-+
-+	bool ValidatePresentationPiece(
-+		const FZeroEscapeStructurePresentationPiece& Piece,
-+		const bool bMustBeNavigationRamp,
-+		FString& OutError)
-+	{
-+		FCollisionResponseTemplate ProfileTemplate;
-+		if (Piece.PieceId.IsNone()
-+			|| !IsValid(Piece.StaticMesh)
-+			|| !IsFinitePositiveScaleTransform(Piece.RelativeTransform)
-+			|| Piece.CollisionProfileName.IsNone()
-+			|| !UCollisionProfile::Get()->GetProfileTemplate(
-+				Piece.CollisionProfileName, ProfileTemplate))
-+		{
-+			OutError = TEXT("完整结构 Piece 的 ID、Mesh、Transform 或碰撞配置非法。");
-+			return false;
-+		}
-+
-+		if (bMustBeNavigationRamp
-+			!= (Piece.CollisionRole
-+				== EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp))
-+		{
-+			OutError = TEXT("只有 NavigationRampPieces 可使用 HiddenNavigationRamp 职责。");
-+			return false;
-+		}
-+
-+		switch (Piece.CollisionRole)
-+		{
-+		case EZeroEscapeStructurePieceCollisionRole::StandardProfile:
-+			if (Piece.bHiddenInGame)
-+			{
-+				OutError = TEXT("StandardProfile Piece 不得被标记为隐藏斜坡。");
-+				return false;
-+			}
-+			break;
-+		case EZeroEscapeStructurePieceCollisionRole::VisibleStairMesh:
-+			if (Piece.bCanEverAffectNavigation || Piece.bHiddenInGame)
-+			{
-+				OutError = TEXT("VisibleStairMesh 必须可见且不得影响导航。");
-+				return false;
-+			}
-+			break;
-+		case EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp:
-+			if (!Piece.bCanEverAffectNavigation || !Piece.bHiddenInGame || Piece.bCastShadow)
-+			{
-+				OutError = TEXT("HiddenNavigationRamp 必须隐藏、无阴影且影响导航。");
-+				return false;
-+			}
-+			break;
-+		default:
-+			OutError = TEXT("完整结构 Piece 使用未知碰撞职责。");
-+			return false;
-+		}
-+		return true;
-+	}
- }
- 
- int32 FZeroEscapeWfcShapeWeights::GetWeightForMask(const uint8 OpeningMask) const
-@@ -542,6 +609,16 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
- 	return true;
- }
- 
-+const FZeroEscapeStructurePresentationRecipe*
-+UZeroEscapePresentationProfile::FindStructureRecipe(const FName DefinitionId) const
-+{
-+	return StructureRecipes.FindByPredicate(
-+		[DefinitionId](const FZeroEscapeStructurePresentationRecipe& Recipe)
-+		{
-+			return Recipe.DefinitionId == DefinitionId;
-+		});
-+}
-+
- bool UZeroEscapePresentationProfile::IsConfigured(
- 	const double LogicalTileSizeCm,
- 	FString& OutError) const
-@@ -576,6 +653,72 @@ bool UZeroEscapePresentationProfile::IsConfigured(
- 		return false;
- 	}
- 
-+	TSet<FName> SeenRecipeIds;
-+	for (const FZeroEscapeStructurePresentationRecipe& Recipe : StructureRecipes)
-+	{
-+		if (Recipe.DefinitionId.IsNone() || SeenRecipeIds.Contains(Recipe.DefinitionId)
-+			|| Recipe.OpeningSets.IsEmpty())
-+		{
-+			OutError = TEXT("完整结构表现 DefinitionId 必须唯一，且至少有一个开口组合。");
-+			return false;
-+		}
-+		SeenRecipeIds.Add(Recipe.DefinitionId);
-+
-+		const int32 RequiredRampCount = Recipe.Kind == EZeroEscapeStructureKind::TwoFloorStair
-+			? 2
-+			: (Recipe.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 4 : 0);
-+		if (Recipe.NavigationRampPieces.Num() != RequiredRampCount)
-+		{
-+			OutError = FString::Printf(
-+				TEXT("结构 %s 的隐藏斜坡数量应为 %d。"),
-+				*Recipe.DefinitionId.ToString(), RequiredRampCount);
-+			return false;
-+		}
-+
-+		auto ValidatePieceArray = [&OutError](
-+			const TArray<FZeroEscapeStructurePresentationPiece>& Pieces,
-+			const bool bNavigationRamps) -> bool
-+		{
-+			TSet<FName> SeenPieceIds;
-+			for (const FZeroEscapeStructurePresentationPiece& Piece : Pieces)
-+			{
-+				if (SeenPieceIds.Contains(Piece.PieceId)
-+					|| !ValidatePresentationPiece(Piece, bNavigationRamps, OutError))
-+				{
-+					if (OutError.IsEmpty())
-+					{
-+						OutError = TEXT("同一表现作用域内 PieceId 重复。");
-+					}
-+					return false;
-+				}
-+				SeenPieceIds.Add(Piece.PieceId);
-+			}
-+			return true;
-+		};
-+
-+		if (!ValidatePieceArray(Recipe.CommonPieces, false)
-+			|| !ValidatePieceArray(Recipe.NavigationRampPieces, true))
-+		{
-+			return false;
-+		}
-+
-+		TSet<FName> SeenOpeningSets;
-+		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet : Recipe.OpeningSets)
-+		{
-+			if (OpeningSet.OpeningSetId.IsNone()
-+				|| SeenOpeningSets.Contains(OpeningSet.OpeningSetId)
-+				|| !ValidatePieceArray(OpeningSet.Pieces, false))
-+			{
-+				if (OutError.IsEmpty())
-+				{
-+					OutError = TEXT("表现开口组合 ID 必须唯一且其 Piece 合法。");
-+				}
-+				return false;
-+			}
-+			SeenOpeningSets.Add(OpeningSet.OpeningSetId);
-+		}
-+	}
-+
- 	// 关闭顶灯时允许灯类为空，确保同一套结构表现可以无代码地回退到“不生成灯”。
- 	if (bSpawnCeilingLights)
- 	{
-@@ -601,3 +744,78 @@ bool UZeroEscapePresentationProfile::IsConfigured(
- 
- 	return true;
- }
-+
-+bool ValidateZeroEscapeStructurePresentationBindings(
-+	const UZeroEscapeLevelGenerationProfile& GenerationProfile,
-+	const UZeroEscapePresentationProfile& PresentationProfile,
-+	FString& OutError)
-+{
-+	OutError.Reset();
-+	if (GenerationProfile.StructureDefinitions.Num()
-+		!= PresentationProfile.StructureRecipes.Num())
-+	{
-+		OutError = TEXT("逻辑结构定义与表现 recipe 数量不同，存在缺失或孤儿配置。");
-+		return false;
-+	}
-+
-+	TSet<FName> LogicalIds;
-+	for (const FZeroEscapeStructureDefinition& Definition :
-+		GenerationProfile.StructureDefinitions)
-+	{
-+		if (Definition.DefinitionId.IsNone()
-+			|| LogicalIds.Contains(Definition.DefinitionId))
-+		{
-+			OutError = TEXT("逻辑 StructureDefinition 的 DefinitionId 非空且必须唯一。");
-+			return false;
-+		}
-+		LogicalIds.Add(Definition.DefinitionId);
-+
-+		const FZeroEscapeStructurePresentationRecipe* Recipe =
-+			PresentationProfile.FindStructureRecipe(Definition.DefinitionId);
-+		if (Recipe == nullptr || Recipe->Kind != Definition.Kind)
-+		{
-+			OutError = FString::Printf(
-+				TEXT("逻辑结构 %s 缺少同 Kind 的唯一表现 recipe。"),
-+				*Definition.DefinitionId.ToString());
-+			return false;
-+		}
-+
-+		TSet<FName> LogicalOpeningSetIds;
-+		for (const FZeroEscapeStructureOpeningSetDefinition& OpeningSet :
-+			Definition.AllowedOpeningSets)
-+		{
-+			LogicalOpeningSetIds.Add(OpeningSet.SetId);
-+		}
-+		if (LogicalOpeningSetIds.Num() != Definition.AllowedOpeningSets.Num()
-+			|| Recipe->OpeningSets.Num() != LogicalOpeningSetIds.Num())
-+		{
-+			OutError = TEXT("逻辑与表现的开口组合数量或唯一性不一致。");
-+			return false;
-+		}
-+		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet :
-+			Recipe->OpeningSets)
-+		{
-+			if (!LogicalOpeningSetIds.Contains(OpeningSet.OpeningSetId))
-+			{
-+				OutError = FString::Printf(
-+					TEXT("结构 %s 的表现包含逻辑层没有的开口组合 %s。"),
-+					*Definition.DefinitionId.ToString(),
-+					*OpeningSet.OpeningSetId.ToString());
-+				return false;
-+			}
-+		}
-+	}
-+
-+	for (const FZeroEscapeStructurePresentationRecipe& Recipe :
-+		PresentationProfile.StructureRecipes)
-+	{
-+		if (!LogicalIds.Contains(Recipe.DefinitionId))
-+		{
-+			OutError = FString::Printf(
-+				TEXT("表现 recipe %s 没有对应逻辑结构，是孤儿配置。"),
-+				*Recipe.DefinitionId.ToString());
-+			return false;
-+		}
-+	}
-+	return true;
-+}
