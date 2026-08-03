@@ -8,25 +8,14 @@
 
 #include "PCG/ZeroEscapeGenerationAssets.h"
 
+#include "PCG/ZeroEscapeGenerationCore.h"
+
 #include "Engine/CollisionProfile.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/Actor.h"
 
 namespace
 {
-	/** Transform 必须有限且不缩放；结构大小由统一网格决定，禁止在绑定里偷偷拉伸素材。 */
-	bool IsFiniteUnitScaleTransform(const FTransform& Transform)
-	{
-		const FVector Location = Transform.GetLocation();
-		const FQuat Rotation = Transform.GetRotation();
-		const FVector Scale = Transform.GetScale3D();
-		return !Location.ContainsNaN()
-			&& !Rotation.ContainsNaN()
-			&& !Scale.ContainsNaN()
-			&& Rotation.IsNormalized()
-			&& Scale.Equals(FVector::OneVector, KINDA_SMALL_NUMBER);
-	}
-
 	/** 校验一个已配置绑定；可选空绑定由调用者在进入本函数前跳过。 */
 	bool ValidateBinding(
 		const FZeroEscapeStructureMeshBinding& Binding,
@@ -39,7 +28,8 @@ namespace
 			return false;
 		}
 
-		if (!IsFiniteUnitScaleTransform(Binding.PivotCorrection))
+		if (!ZeroEscape::LevelGeneration::FGenerationCore::IsFiniteUnitScaleTransform(
+				Binding.PivotCorrection))
 		{
 			OutError = FString::Printf(
 				TEXT("Presentation.%s.PivotCorrection 必须是有限 Unit Scale Transform。"),
@@ -59,6 +49,62 @@ namespace
 			return false;
 		}
 
+		return true;
+	}
+
+	bool ValidatePresentationPiece(
+		const FZeroEscapeStructurePresentationPiece& Piece,
+		const bool bMustBeNavigationRamp,
+		FString& OutError)
+	{
+		FCollisionResponseTemplate ProfileTemplate;
+		if (Piece.PieceId.IsNone()
+			|| !IsValid(Piece.StaticMesh)
+			|| !ZeroEscape::LevelGeneration::FGenerationCore::IsFinitePositiveScaleTransform(
+				Piece.RelativeTransform)
+			|| Piece.CollisionProfileName.IsNone()
+			|| !UCollisionProfile::Get()->GetProfileTemplate(
+				Piece.CollisionProfileName, ProfileTemplate))
+		{
+			OutError = TEXT("完整结构 Piece 的 ID、Mesh、Transform 或碰撞配置非法。");
+			return false;
+		}
+
+		if (bMustBeNavigationRamp
+			!= (Piece.CollisionRole
+				== EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp))
+		{
+			OutError = TEXT("只有 NavigationRampPieces 可使用 HiddenNavigationRamp 职责。");
+			return false;
+		}
+
+		switch (Piece.CollisionRole)
+		{
+		case EZeroEscapeStructurePieceCollisionRole::StandardProfile:
+			if (Piece.bHiddenInGame)
+			{
+				OutError = TEXT("StandardProfile Piece 不得被标记为隐藏斜坡。");
+				return false;
+			}
+			break;
+		case EZeroEscapeStructurePieceCollisionRole::VisibleStairMesh:
+			if (Piece.bCanEverAffectNavigation || Piece.bHiddenInGame)
+			{
+				OutError = TEXT("VisibleStairMesh 必须可见且不得影响导航。");
+				return false;
+			}
+			break;
+		case EZeroEscapeStructurePieceCollisionRole::HiddenNavigationRamp:
+			if (!Piece.bCanEverAffectNavigation || !Piece.bHiddenInGame || Piece.bCastShadow)
+			{
+				OutError = TEXT("HiddenNavigationRamp 必须隐藏、无阴影且影响导航。");
+				return false;
+			}
+			break;
+		default:
+			OutError = TEXT("完整结构 Piece 使用未知碰撞职责。");
+			return false;
+		}
 		return true;
 	}
 }
@@ -127,136 +173,432 @@ bool FZeroEscapeWfcShapeWeights::IsConfigured(FString& OutError) const
 bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 {
 	OutError.Reset();
+	auto Fail = [&OutError](FString Message)
+	{
+		OutError = MoveTemp(Message);
+		return false;
+	};
+
 	if (ProfileVersion <= 0)
 	{
-		OutError = TEXT("GenerationProfile.ProfileVersion 必须大于 0。");
-		return false;
+		return Fail(TEXT("GenerationProfile.ProfileVersion 必须大于 0。"));
 	}
 
 	const FZeroEscapeSharedRouteConstraints& Route = SharedRouteConstraints;
 	const FIntPoint GridSize = Route.GridSize;
+	const int64 GridCellCount = static_cast<int64>(GridSize.X) * GridSize.Y;
 	if (GridSize.X < ZeroEscape::GenerationLimits::MinGridAxis
 		|| GridSize.Y < ZeroEscape::GenerationLimits::MinGridAxis
 		|| GridSize.X > ZeroEscape::GenerationLimits::MaxGridAxis
 		|| GridSize.Y > ZeroEscape::GenerationLimits::MaxGridAxis
-		|| GridSize.X * GridSize.Y > ZeroEscape::GenerationLimits::MaxGridCells)
+		|| GridCellCount > ZeroEscape::GenerationLimits::MaxGridCells)
 	{
-		OutError = TEXT("SharedRouteConstraints.GridSize 超出运行时安全范围。");
-		return false;
+		return Fail(TEXT("SharedRouteConstraints.GridSize 超出每层运行时安全范围。"));
 	}
-	const int32 GridCellCount = GridSize.X * GridSize.Y;
-
-	// 房间槽需要在左右为 Start/Exit 留出连接空间，并在中线两侧保留外部入口缓冲。
-	if (GridSize.X < 14 || GridSize.Y < 10)
+	if (!FMath::IsFinite(Route.LogicalTileSizeCm)
+		|| !FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0))
 	{
-		OutError = TEXT("Start/Exit 与中立房间槽要求 GridSize 至少为 14x10。");
-		return false;
+		return Fail(TEXT("当前 HydroLab 结构合同要求 LogicalTileSizeCm=600。"));
 	}
-
-	// 当前表现层只接受已经测量并验证的 600/300 双层网格。
-	if (!FMath::IsNearlyEqual(Route.LogicalTileSizeCm, 600.0)
-		|| Route.RoomSizeTiles != 2)
+	if (!FMath::IsFinite(Route.FloorHeightCm) || Route.FloorHeightCm <= 0.0
+		|| !FMath::IsFinite(Route.AnchorHeightCm) || Route.AnchorHeightCm < 0.0
+		|| Route.MaxConsecutiveStraightTiles <= 0
+		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y))
 	{
-		OutError = TEXT("当前结构契约要求 LogicalTileSizeCm=600 且 RoomSizeTiles=2。");
-		return false;
+		return Fail(TEXT("SharedRouteConstraints 包含非法层高、锚点高度或连续直线限制。"));
 	}
 
-	if (Route.RoomCount < 0
-		|| Route.RoomCount > ZeroEscape::GenerationLimits::MaxRoomCount
-		|| Route.MaxRequiredRouteLengthTiles <= 0
-		|| !FMath::IsFinite(Route.AnchorHeightCm)
-		|| Route.AnchorHeightCm < 0.0)
+	const FZeroEscapeSharedGenerationBudget& Budget = SharedBudget;
+	if (Budget.MaxWholeLayoutAttempts <= 0
+		|| Budget.MaxWholeLayoutAttempts > ZeroEscape::GenerationLimits::MaxWholeLayoutAttempts
+		|| Budget.MaxStructureCandidateEvaluations <= 0
+		|| Budget.MaxStructureCandidateEvaluations
+			> ZeroEscape::GenerationLimits::MaxStructureCandidateEvaluations
+		|| Budget.MaxWfcCandidateAttemptsPerFloor <= 0
+		|| Budget.MaxWfcCandidateAttemptsPerFloor
+			> ZeroEscape::GenerationLimits::MaxWfcCandidateAttemptsPerFloor
+		|| Budget.MaxWfcBacktrackCountPerFloor <= 0
+		|| Budget.MaxWfcBacktrackCountPerFloor
+			> ZeroEscape::GenerationLimits::MaxWfcBacktrackCountPerFloor
+		|| Budget.MaxWfcSolveAttemptsPerFloor <= 0
+		|| Budget.MaxWfcSolveAttemptsPerFloor
+			> ZeroEscape::GenerationLimits::MaxWfcSolveAttemptsPerFloor
+		|| Budget.MaxWfcCandidateAttemptsPerFloor < Budget.MaxWfcSolveAttemptsPerFloor
+		|| Budget.MaxWfcBacktrackCountPerFloor < Budget.MaxWfcSolveAttemptsPerFloor)
 	{
-		OutError = TEXT("SharedRouteConstraints 包含非法房间、路线或 Anchor 参数。");
-		return false;
+		return Fail(TEXT("SharedBudget 的结构候选或逐层 WFC 预算非法。"));
+	}
+	if (!FMath::IsFinite(Budget.NavigationBuildTimeoutSeconds)
+		|| Budget.NavigationBuildTimeoutSeconds <= 0.0
+		|| Budget.NavigationBuildTimeoutSeconds
+			> ZeroEscape::GenerationLimits::MaxNavigationBuildTimeoutSeconds
+		|| Budget.MaxNavigationValidationPoints < 3
+		|| Budget.MaxNavigationValidationPoints
+			> ZeroEscape::GenerationLimits::MaxNavigationValidationPoints)
+	{
+		return Fail(TEXT("SharedBudget 的导航等待或验证点上限非法。"));
 	}
 
-	if (Route.MinWalkableCellCount <= 0
-		|| Route.MaxWalkableCellCount < Route.MinWalkableCellCount
-		|| Route.MaxWalkableCellCount > GridCellCount)
+	if (StructureDefinitions.IsEmpty())
 	{
-		OutError = TEXT("非空 Cell 数量必须满足 0 < MinWalkable <= MaxWalkable <= GridCells。");
-		return false;
+		return Fail(TEXT("StructureDefinitions 不能为空。"));
+	}
+	bool SeenStructureKinds[3] = {false, false, false};
+	TSet<FName> SeenDefinitionIds;
+	for (const FZeroEscapeStructureDefinition& Definition : StructureDefinitions)
+	{
+		const int32 KindIndex = static_cast<int32>(Definition.Kind);
+		if (Definition.DefinitionId.IsNone()
+			|| SeenDefinitionIds.Contains(Definition.DefinitionId)
+			|| KindIndex < 0 || KindIndex >= UE_ARRAY_COUNT(SeenStructureKinds))
+		{
+			return Fail(TEXT("StructureDefinitions 的 DefinitionId 缺失或重复，或 Kind 非法。"));
+		}
+		SeenDefinitionIds.Add(Definition.DefinitionId);
+		SeenStructureKinds[KindIndex] = true;
+
+		const int32 ExpectedRequiredFloorCount =
+			Definition.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 3
+			: Definition.Kind == EZeroEscapeStructureKind::TwoFloorStair ? 2
+			: 1;
+		if (Definition.RequiredFloorCount != ExpectedRequiredFloorCount)
+		{
+			return Fail(FString::Printf(
+				TEXT("结构 %s 的 RequiredFloorCount 与 Kind 不一致。"),
+				*Definition.DefinitionId.ToString()));
+		}
+		const bool bIsHighCeilingRoom =
+			Definition.Kind == EZeroEscapeStructureKind::HighCeilingRoom;
+		if (Definition.bAllowClearanceAboveGeneratedTopFloor != bIsHighCeilingRoom)
+		{
+			return Fail(FString::Printf(
+				TEXT("只有高天花板房间 %s 可以裁掉真实顶层以上的 Clearance。"),
+				*Definition.DefinitionId.ToString()));
+		}
+		if (Definition.WalkableCells.IsEmpty())
+		{
+			return Fail(FString::Printf(
+				TEXT("结构 %s 必须至少包含一个 Walkable Cell。"),
+				*Definition.DefinitionId.ToString()));
+		}
+
+		TSet<FIntVector> WalkableCells;
+		TSet<FIntVector> AllReservedCells;
+		auto AddCellArray = [
+			&Definition,
+			&WalkableCells,
+			&AllReservedCells,
+			&Fail](
+			const TArray<FIntVector>& Cells,
+			const bool bWalkable,
+			const bool bClearance)
+		{
+			for (const FIntVector Cell : Cells)
+			{
+				const int32 MaxLocalCoordinate =
+					ZeroEscape::GenerationLimits::MaxGridAxis - 1;
+				const bool bInsideRequiredFloors =
+					Cell.Z >= 0 && Cell.Z < Definition.RequiredFloorCount;
+				const bool bAllowedTopClearance = bClearance
+					&& Definition.bAllowClearanceAboveGeneratedTopFloor
+					&& Cell.Z == Definition.RequiredFloorCount;
+				if (Cell.X < -MaxLocalCoordinate || Cell.X > MaxLocalCoordinate
+					|| Cell.Y < -MaxLocalCoordinate || Cell.Y > MaxLocalCoordinate
+					|| (!bInsideRequiredFloors && !bAllowedTopClearance)
+					|| AllReservedCells.Contains(Cell))
+				{
+					return Fail(FString::Printf(
+						TEXT("结构 %s 的 Cell 越界、重复或跨占用类别；超出最大局部 X/Y 范围的结构不可能放入任何受支持 Grid。"),
+						*Definition.DefinitionId.ToString()));
+				}
+				AllReservedCells.Add(Cell);
+				if (bWalkable)
+				{
+					WalkableCells.Add(Cell);
+				}
+			}
+			return true;
+		};
+		if (!AddCellArray(Definition.WalkableCells, true, false)
+			|| !AddCellArray(Definition.SolidCells, false, false)
+			|| !AddCellArray(Definition.ClearanceCells, false, true))
+		{
+			return false;
+		}
+
+		TArray<bool> HasConnectionToNextFloor;
+		HasConnectionToNextFloor.Init(false, Definition.RequiredFloorCount - 1);
+		TMap<FIntVector, TSet<FIntVector>> NormalizedInternalConnections;
+		auto IsCoordinateLess = [](const FIntVector& Left, const FIntVector& Right)
+		{
+			return Left.X != Right.X ? Left.X < Right.X
+				: Left.Y != Right.Y ? Left.Y < Right.Y
+				: Left.Z < Right.Z;
+		};
+		for (const FZeroEscapeLocalCellConnection& Connection :
+			Definition.InternalConnections)
+		{
+			if (Connection.FirstCell == Connection.SecondCell
+				|| !WalkableCells.Contains(Connection.FirstCell)
+				|| !WalkableCells.Contains(Connection.SecondCell))
+			{
+				return Fail(FString::Printf(
+					TEXT("结构 %s 的内部连接必须连接两个不同 Walkable Cell。"),
+					*Definition.DefinitionId.ToString()));
+			}
+			FIntVector NormalizedFirst = Connection.FirstCell;
+			FIntVector NormalizedSecond = Connection.SecondCell;
+			if (IsCoordinateLess(NormalizedSecond, NormalizedFirst))
+			{
+				Swap(NormalizedFirst, NormalizedSecond);
+			}
+			TSet<FIntVector>& Neighbors =
+				NormalizedInternalConnections.FindOrAdd(NormalizedFirst);
+			if (Neighbors.Contains(NormalizedSecond))
+			{
+				return Fail(FString::Printf(
+					TEXT("结构 %s 的 InternalConnections 不得重复；反向记录视为同一条无向边。"),
+					*Definition.DefinitionId.ToString()));
+			}
+			Neighbors.Add(NormalizedSecond);
+			const int64 FloorDelta = FMath::Abs(
+				static_cast<int64>(Connection.FirstCell.Z)
+					- static_cast<int64>(Connection.SecondCell.Z));
+			if (FloorDelta == 0)
+			{
+				const int64 PlanarDistance = FMath::Abs(
+					static_cast<int64>(Connection.FirstCell.X)
+						- static_cast<int64>(Connection.SecondCell.X))
+					+ FMath::Abs(
+						static_cast<int64>(Connection.FirstCell.Y)
+							- static_cast<int64>(Connection.SecondCell.Y));
+				if (PlanarDistance != 1)
+				{
+					return Fail(TEXT("结构同层内部连接必须是四邻域相邻格。"));
+				}
+			}
+			else if (FloorDelta == 1)
+			{
+				const int32 LowerFloor =
+					FMath::Min(Connection.FirstCell.Z, Connection.SecondCell.Z);
+				if (!HasConnectionToNextFloor.IsValidIndex(LowerFloor))
+				{
+					return Fail(TEXT("结构跨层连接落在 RequiredFloorCount 之外。"));
+				}
+				HasConnectionToNextFloor[LowerFloor] = true;
+			}
+			else
+			{
+				return Fail(TEXT("结构内部连接不得跨过中间楼层。"));
+			}
+		}
+		TSet<FIntVector> ReachableWalkableCells;
+		TArray<FIntVector> WalkableQueue;
+		WalkableQueue.Add(Definition.WalkableCells[0]);
+		ReachableWalkableCells.Add(Definition.WalkableCells[0]);
+		for (int32 QueueIndex = 0; QueueIndex < WalkableQueue.Num(); ++QueueIndex)
+		{
+			const FIntVector Current = WalkableQueue[QueueIndex];
+			for (const FZeroEscapeLocalCellConnection& Connection :
+				Definition.InternalConnections)
+			{
+				FIntVector Neighbor;
+				bool bHasNeighbor = false;
+				if (Connection.FirstCell == Current)
+				{
+					Neighbor = Connection.SecondCell;
+					bHasNeighbor = true;
+				}
+				else if (Connection.SecondCell == Current)
+				{
+					Neighbor = Connection.FirstCell;
+					bHasNeighbor = true;
+				}
+				if (bHasNeighbor && !ReachableWalkableCells.Contains(Neighbor))
+				{
+					ReachableWalkableCells.Add(Neighbor);
+					WalkableQueue.Add(Neighbor);
+				}
+			}
+		}
+		if (ReachableWalkableCells.Num() != WalkableCells.Num())
+		{
+			return Fail(FString::Printf(
+				TEXT("结构 %s 的 WalkableCells 未被 InternalConnections 全部连通。"),
+				*Definition.DefinitionId.ToString()));
+		}
+		if (!bIsHighCeilingRoom)
+		{
+			for (const bool bConnected : HasConnectionToNextFloor)
+			{
+				if (!bConnected)
+				{
+					return Fail(TEXT("楼梯必须逐层包含内部跨层连接。"));
+				}
+			}
+		}
+
+		TSet<FName> LandingIds;
+		TSet<int32> LandingFloors;
+		for (const FZeroEscapeStructureLandingDefinition& Landing : Definition.Landings)
+		{
+			if (Landing.LandingId.IsNone()
+				|| LandingIds.Contains(Landing.LandingId)
+				|| !WalkableCells.Contains(Landing.LocalCoordinate)
+				|| LandingFloors.Contains(Landing.LocalCoordinate.Z))
+			{
+				return Fail(TEXT("结构 Landing 必须 ID 唯一、位于 Walkable Cell 且每层一个。"));
+			}
+			LandingIds.Add(Landing.LandingId);
+			LandingFloors.Add(Landing.LocalCoordinate.Z);
+		}
+		if ((!bIsHighCeilingRoom
+				&& Definition.Landings.Num() != Definition.RequiredFloorCount)
+			|| (bIsHighCeilingRoom && !Definition.Landings.IsEmpty()))
+		{
+			return Fail(TEXT("楼梯每层必须有一个 Landing；高天花板房间不得伪造 Landing。"));
+		}
+
+		TSet<FName> OpeningIds;
+		TMap<FName, int32> OpeningFloorById;
+		for (const FZeroEscapeStructureOpeningDefinition& Opening : Definition.Openings)
+		{
+			const uint8 Edge = static_cast<uint8>(Opening.OutwardEdge);
+			if (Opening.OpeningId.IsNone()
+				|| OpeningIds.Contains(Opening.OpeningId)
+				|| !WalkableCells.Contains(Opening.LocalWalkableCell)
+				|| Edge == 0
+				|| (Edge & ~ZeroEscape::Grid::AllOpenEdges) != 0
+				|| FMath::CountBits(static_cast<uint32>(Edge)) != 1)
+			{
+				return Fail(TEXT("结构 Opening 必须 ID 唯一、位于 Walkable Cell 且只有一个朝向。"));
+			}
+			uint8 DirectionIndex = ZeroEscape::Grid::DirectionCount;
+			for (uint8 CandidateDirection = 0;
+				CandidateDirection < ZeroEscape::Grid::DirectionCount;
+				++CandidateDirection)
+			{
+				if (Edge == ZeroEscape::Grid::DirectionBit(CandidateDirection))
+				{
+					DirectionIndex = CandidateDirection;
+					break;
+				}
+			}
+			const FIntPoint OutsidePlanar = ZeroEscape::Grid::Step(
+				FIntPoint(Opening.LocalWalkableCell.X, Opening.LocalWalkableCell.Y),
+				DirectionIndex);
+			const FIntVector OutsideCell(
+				OutsidePlanar.X,
+				OutsidePlanar.Y,
+				Opening.LocalWalkableCell.Z);
+			if (AllReservedCells.Contains(OutsideCell))
+			{
+				return Fail(FString::Printf(
+					TEXT("结构 %s 的 Opening 指向了本结构内部占用。"),
+					*Definition.DefinitionId.ToString()));
+			}
+			OpeningIds.Add(Opening.OpeningId);
+			OpeningFloorById.Add(Opening.OpeningId, Opening.LocalWalkableCell.Z);
+		}
+		if (Definition.Openings.IsEmpty() || Definition.AllowedOpeningSets.IsEmpty())
+		{
+			return Fail(TEXT("每种结构必须配置连接口和至少一个合法开放组合。"));
+		}
+
+		TSet<FName> OpeningSetIds;
+		int64 TotalOpeningSetWeight = 0;
+		for (const FZeroEscapeStructureOpeningSetDefinition& Set :
+			Definition.AllowedOpeningSets)
+		{
+			if (Set.SetId.IsNone() || OpeningSetIds.Contains(Set.SetId)
+				|| Set.SelectionWeight <= 0 || Set.OpenOpeningIds.IsEmpty())
+			{
+				return Fail(TEXT("结构 Opening Set 必须 ID 唯一、权重为正且至少开一个口。"));
+			}
+			OpeningSetIds.Add(Set.SetId);
+			TotalOpeningSetWeight += Set.SelectionWeight;
+			TSet<FName> SeenOpeningsInSet;
+			TArray<int32> OpenCountByFloor;
+			OpenCountByFloor.Init(0, Definition.RequiredFloorCount);
+			for (const FName OpeningId : Set.OpenOpeningIds)
+			{
+				const int32* Floor = OpeningFloorById.Find(OpeningId);
+				if (Floor == nullptr || SeenOpeningsInSet.Contains(OpeningId)
+					|| !OpenCountByFloor.IsValidIndex(*Floor))
+				{
+					return Fail(TEXT("Opening Set 引用了缺失、重复或越层的 OpeningId。"));
+				}
+				SeenOpeningsInSet.Add(OpeningId);
+				++OpenCountByFloor[*Floor];
+			}
+			for (const int32 OpenCount : OpenCountByFloor)
+			{
+				if (OpenCount > 3 || (!bIsHighCeilingRoom && OpenCount < 1))
+				{
+					return Fail(TEXT("楼梯每层必须开放 1 至 3 个连接口。"));
+				}
+			}
+		}
+		if (TotalOpeningSetWeight <= 0 || TotalOpeningSetWeight > MAX_int32)
+		{
+			return Fail(TEXT("结构 Opening Set 权重总和必须位于 int32 加权抽样范围内。"));
+		}
+
+		if (bIsHighCeilingRoom)
+		{
+			if (Definition.WalkableCells.Num() != 2
+				|| Definition.ClearanceCells.Num() != 2
+				|| Definition.WalkableCells[0].Z != 0
+				|| Definition.WalkableCells[1].Z != 0)
+			{
+				return Fail(TEXT("首版高天花板房间必须是本层 1x2 Walkable 和上一层对应净空。"));
+			}
+			const int64 RoomCellDistance = FMath::Abs(
+				static_cast<int64>(Definition.WalkableCells[0].X)
+					- static_cast<int64>(Definition.WalkableCells[1].X))
+				+ FMath::Abs(
+					static_cast<int64>(Definition.WalkableCells[0].Y)
+						- static_cast<int64>(Definition.WalkableCells[1].Y));
+			if (RoomCellDistance != 1)
+			{
+				return Fail(TEXT("首版高天花板房间的两个 Walkable Cell 必须相邻。"));
+			}
+			for (const FIntVector Walkable : Definition.WalkableCells)
+			{
+				if (!Definition.ClearanceCells.Contains(FIntVector(Walkable.X, Walkable.Y, 1)))
+				{
+					return Fail(TEXT("高天花板房间的 Clearance 必须与 1x2 Walkable 垂直对应。"));
+				}
+			}
+		}
 	}
 
-	if (Route.MaxConsecutiveStraightTiles <= 0
-		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y)
-		|| Route.MaxWfcCandidateAttempts <= 0
-		|| Route.MaxWfcBacktrackCount <= 0
-		|| Route.MaxWfcSolveAttempts <= 0
-		|| Route.MaxWfcSolveAttempts > 16
-		|| Route.MaxWfcCandidateAttempts < Route.MaxWfcSolveAttempts
-		|| Route.MaxWfcBacktrackCount < Route.MaxWfcSolveAttempts)
+	if (Difficulties.Num() != 3)
 	{
-		OutError = TEXT(
-			"连续轴向贯通上限或 WFC 尝试/候选/回溯预算配置非法；"
-			"总候选与总回溯预算必须至少能为每次尝试分配 1 次。");
-		return false;
+		return Fail(TEXT("Difficulties 必须恰好包含 Easy、Normal、Hard 各一条。"));
 	}
-
-	// 中立房间沿 X 轴均匀分布；相邻房间至少留一格，房间外部连接完全交给 WFC。
-	const int32 MinRoomX = 4;
-	const int32 MaxRoomX = GridSize.X - Route.RoomSizeTiles - 5;
-	const int32 RoomSpan = MaxRoomX - MinRoomX;
-	const int32 MinimumRoomSpacing = Route.RoomSizeTiles + 1;
-	if (Route.RoomCount > 0
-		&& (MaxRoomX < MinRoomX
-			|| (Route.RoomCount > 1
-				&& RoomSpan < (Route.RoomCount - 1) * MinimumRoomSpacing)))
-	{
-		OutError = TEXT("GridSize.X 无法容纳 RoomCount、2x2 房间与安全间距。");
-		return false;
-	}
-
-	// 上下 Lane 分列在中线两侧，并为地图外圈保留一格封闭边界。
-	const int32 CenterY = GridSize.Y / 2;
-	const int32 LowerLaneMinY = CenterY - Route.RoomSizeTiles;
-	const int32 UpperLaneMinY = CenterY + 1;
-	if (LowerLaneMinY < 1
-		|| UpperLaneMinY + Route.RoomSizeTiles > GridSize.Y - 1)
-	{
-		OutError = TEXT("GridSize.Y 无法在中线两侧容纳上下 2x2 房间 Lane 与外圈边界。");
-		return false;
-	}
-
-	const int64 FixedNonEmptyCellCount = 2LL
-		+ static_cast<int64>(Route.RoomCount)
-			* Route.RoomSizeTiles * Route.RoomSizeTiles;
-	if (FixedNonEmptyCellCount > Route.MaxWalkableCellCount)
-	{
-		OutError = FString::Printf(
-			TEXT("Start/Exit/Rooms 至少需要 %lld 个非空格，超过 MaxWalkable=%d。"),
-			static_cast<long long>(FixedNonEmptyCellCount),
-			Route.MaxWalkableCellCount);
-		return false;
-	}
-
 	bool SeenDifficulties[3] = {false, false, false};
 	int32 SharedEmptyWeight = INDEX_NONE;
 	int64 SharedNonEmptyWeight = INDEX_NONE;
+	bool bAnyThreeFloorStairwellRequested = false;
+	bool bAnyHighCeilingRoomRequested = false;
 	for (const FZeroEscapeDifficultyDefinition& Definition : Difficulties)
 	{
 		const int32 DifficultyIndex = static_cast<int32>(Definition.Difficulty);
 		if (DifficultyIndex < 0 || DifficultyIndex >= UE_ARRAY_COUNT(SeenDifficulties)
 			|| SeenDifficulties[DifficultyIndex])
 		{
-			OutError = TEXT("Difficulties 必须恰好包含三个互不重复的难度。");
-			return false;
+			return Fail(TEXT("Difficulties 包含非法或重复难度。"));
 		}
 		SeenDifficulties[DifficultyIndex] = true;
 
 		FString WeightError;
 		if (!Definition.WfcShapeWeights.IsConfigured(WeightError))
 		{
-			OutError = FString::Printf(
-				TEXT("难度 %d 的 WFC 权重非法：%s"),
-				DifficultyIndex,
-				*WeightError);
-			return false;
+			return Fail(FString::Printf(
+				TEXT("难度 %d 的 WFC 权重非法：%s"), DifficultyIndex, *WeightError));
 		}
-
-		const int64 NonEmptyWeight =
-			Definition.WfcShapeWeights.GetTotalNonEmptyVariantWeight();
+		const int64 NonEmptyWeight = Definition.WfcShapeWeights.GetTotalNonEmptyVariantWeight();
 		if (SharedEmptyWeight == INDEX_NONE)
 		{
 			SharedEmptyWeight = Definition.WfcShapeWeights.EmptyWeight;
@@ -265,21 +607,160 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		else if (SharedEmptyWeight != Definition.WfcShapeWeights.EmptyWeight
 			|| SharedNonEmptyWeight != NonEmptyWeight)
 		{
-			OutError = TEXT(
-				"Easy、Normal、Hard 必须保持相同 EmptyWeight 与非空 Variant 总权重；"
-				"难度只能重新分配 DeadEnd/Straight/Corner/T/Cross 的形态比例。");
-			return false;
+			return Fail(TEXT("三档难度必须保持相同 EmptyWeight 与非空 Variant 总权重。"));
+		}
+
+		const FZeroEscapeAdditionalTwoFloorStairWeights& ExtraWeights =
+			Definition.AdditionalTwoFloorStairsPerFloorPair;
+		const int64 TotalAdditionalStairWeight =
+			static_cast<int64>(ExtraWeights.ZeroAdditionalWeight)
+			+ ExtraWeights.OneAdditionalWeight + ExtraWeights.TwoAdditionalWeight;
+		if (ExtraWeights.ZeroAdditionalWeight < 0
+			|| ExtraWeights.OneAdditionalWeight < 0
+			|| ExtraWeights.TwoAdditionalWeight < 0
+			|| TotalAdditionalStairWeight <= 0
+			|| TotalAdditionalStairWeight > MAX_int32)
+		{
+			return Fail(TEXT("额外双层楼梯 0/1/2 数量权重必须非负且总和位于 int32 抽样范围内。"));
+		}
+		auto IsRatio = [](const double Value)
+		{
+			return FMath::IsFinite(Value) && Value >= 0.0 && Value <= 1.0;
+		};
+		if (Definition.ThreeFloorStairwellChancePercent < 0
+			|| Definition.ThreeFloorStairwellChancePercent > 100
+			|| !IsRatio(Definition.MinRequiredEndpointSpatialSeparationRatio)
+			|| !IsRatio(Definition.MinRequiredRouteCoverageRatio)
+			|| !IsRatio(Definition.MinAdditionalStairSeparationRatio)
+			|| !FMath::IsFinite(Definition.MinPlayerPursuerRouteDistanceCm)
+			|| Definition.MinPlayerPursuerRouteDistanceCm < 0.0)
+		{
+			return Fail(TEXT("难度的三层楼梯间概率、距离比例或出生路线距离非法。"));
+		}
+		bAnyThreeFloorStairwellRequested |=
+			Definition.ThreeFloorStairwellChancePercent > 0;
+		const FZeroEscapeHighCeilingRoomSettings& HighRooms = Definition.HighCeilingRooms;
+		if (HighRooms.MinimumTotalCount < 0 || HighRooms.MaxCountPerFloor < 0
+			|| !IsRatio(HighRooms.MinimumSeparationRatio))
+		{
+			return Fail(TEXT("高天花板房间的最低数量、每层上限或间距比例非法。"));
+		}
+		bAnyHighCeilingRoomRequested |= HighRooms.MinimumTotalCount > 0;
+
+		if (Definition.FloorCountOptions.Num() != 3)
+		{
+			return Fail(TEXT("每档难度必须恰好配置 2、3、4 层三个选项。"));
+		}
+		bool SeenFloorCounts[3] = {false, false, false};
+		int64 TotalFloorSelectionWeight = 0;
+		for (const FZeroEscapeFloorCountOption& Option : Definition.FloorCountOptions)
+		{
+			if (Option.FloorCount < ZeroEscape::GenerationLimits::MinFloorCount
+				|| Option.FloorCount > ZeroEscape::GenerationLimits::MaxFloorCount
+				|| Option.SelectionWeight < 0)
+			{
+				return Fail(TEXT("FloorCountOptions 必须包含互不重复的 2、3、4 层。"));
+			}
+			const int32 FloorOptionIndex =
+				Option.FloorCount - ZeroEscape::GenerationLimits::MinFloorCount;
+			if (SeenFloorCounts[FloorOptionIndex])
+			{
+				return Fail(TEXT("FloorCountOptions 必须包含互不重复的 2、3、4 层。"));
+			}
+			SeenFloorCounts[FloorOptionIndex] = true;
+			TotalFloorSelectionWeight += Option.SelectionWeight;
+
+			const int64 BuildingCellCapacity =
+				GridCellCount * static_cast<int64>(Option.FloorCount);
+			const int64 RequiredOrdinaryMinimum =
+				static_cast<int64>(Option.MinOrdinaryWalkableCellCountPerFloor)
+					* Option.FloorCount;
+			if (Option.MinTotalWalkableCellCount <= 0
+				|| Option.MaxTotalWalkableCellCount
+					< Option.MinTotalWalkableCellCount
+				|| Option.MaxTotalWalkableCellCount > BuildingCellCapacity
+				|| Option.MinOrdinaryWalkableCellCountPerFloor <= 0
+				|| Option.MinOrdinaryWalkableCellCountPerFloor > GridCellCount
+				|| Option.MinTotalWalkableCellCount < RequiredOrdinaryMinimum
+				|| Option.MaxPlayerToExitRouteLengthTiles <= 0
+				|| Option.MaxAdditionalTwoFloorStairCount < 0
+				|| Option.MaxAdditionalTwoFloorStairCount > 2 * (Option.FloorCount - 1))
+			{
+				return Fail(TEXT("FloorCountOption 的整栋总量、每层普通内容或额外楼梯上限非法。"));
+			}
+
+			const int32 RequiredTwoFloorStairs = Option.FloorCount - 1;
+			const int32 MaxNavigationPoints = 3
+				+ 2 * (RequiredTwoFloorStairs + Option.MaxAdditionalTwoFloorStairCount)
+				+ (Option.FloorCount >= 3
+					&& Definition.ThreeFloorStairwellChancePercent > 0 ? 3 : 0);
+			if (MaxNavigationPoints > Budget.MaxNavigationValidationPoints)
+			{
+				return Fail(TEXT("楼梯上限产生的导航验证点超过 SharedBudget。"));
+			}
+
+			const int64 MaxHighRoomCountForBuilding =
+				static_cast<int64>(HighRooms.MaxCountPerFloor) * Option.FloorCount;
+			if (HighRooms.MinimumTotalCount > MaxHighRoomCountForBuilding
+				|| Option.HighCeilingRoomTargetCounts.IsEmpty())
+			{
+				return Fail(TEXT("高天花板房间整栋最低数量或目标权重无法适配该楼层数。"));
+			}
+			TSet<int32> SeenHighRoomCounts;
+			int64 TotalHighRoomWeight = 0;
+			for (const FZeroEscapeWeightedCount& CountOption :
+				Option.HighCeilingRoomTargetCounts)
+			{
+				if (CountOption.Count < HighRooms.MinimumTotalCount
+					|| CountOption.Count > MaxHighRoomCountForBuilding
+					|| CountOption.Weight < 0
+					|| SeenHighRoomCounts.Contains(CountOption.Count))
+				{
+					return Fail(TEXT("高天花板房间目标数量必须唯一、可容纳且权重非负。"));
+				}
+				SeenHighRoomCounts.Add(CountOption.Count);
+				TotalHighRoomWeight += CountOption.Weight;
+				bAnyHighCeilingRoomRequested |=
+					CountOption.Count > 0 && CountOption.Weight > 0;
+			}
+			if (TotalHighRoomWeight <= 0 || TotalHighRoomWeight > MAX_int32)
+			{
+				return Fail(TEXT("高天花板房间目标数量权重总和必须位于 int32 抽样范围内。"));
+			}
+		}
+		if (!SeenFloorCounts[0] || !SeenFloorCounts[1] || !SeenFloorCounts[2]
+			|| TotalFloorSelectionWeight <= 0
+			|| TotalFloorSelectionWeight > MAX_int32)
+		{
+			return Fail(TEXT("每档难度的 2、3、4 层权重必须齐全且总和位于 int32 抽样范围内。"));
 		}
 	}
 
 	if (!SeenDifficulties[0] || !SeenDifficulties[1] || !SeenDifficulties[2])
 	{
-		OutError = TEXT("Difficulties 缺少 Easy、Normal 或 Hard。");
-		return false;
+		return Fail(TEXT("Difficulties 缺少 Easy、Normal 或 Hard。"));
 	}
-
-	// Profile 只声明共享上限；路线长度由完整 WFC 候选的最终 BFS 验收。
+	if (!SeenStructureKinds[static_cast<int32>(EZeroEscapeStructureKind::TwoFloorStair)]
+		|| (bAnyThreeFloorStairwellRequested
+			&& !SeenStructureKinds[
+				static_cast<int32>(EZeroEscapeStructureKind::ThreeFloorStairwell)])
+		|| (bAnyHighCeilingRoomRequested
+			&& !SeenStructureKinds[
+				static_cast<int32>(EZeroEscapeStructureKind::HighCeilingRoom)]))
+	{
+		return Fail(TEXT("StructureDefinitions 缺少当前难度配置实际需要的结构 Kind。"));
+	}
 	return true;
+}
+
+const FZeroEscapeStructurePresentationRecipe*
+UZeroEscapePresentationProfile::FindStructureRecipe(const FName DefinitionId) const
+{
+	return StructureRecipes.FindByPredicate(
+		[DefinitionId](const FZeroEscapeStructurePresentationRecipe& Recipe)
+		{
+			return Recipe.DefinitionId == DefinitionId;
+		});
 }
 
 bool UZeroEscapePresentationProfile::IsConfigured(
@@ -318,6 +799,72 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 		return false;
 	}
 
+	TSet<FName> SeenRecipeIds;
+	for (const FZeroEscapeStructurePresentationRecipe& Recipe : StructureRecipes)
+	{
+		if (Recipe.DefinitionId.IsNone() || SeenRecipeIds.Contains(Recipe.DefinitionId)
+			|| Recipe.OpeningSets.IsEmpty())
+		{
+			OutError = TEXT("完整结构表现 DefinitionId 必须唯一，且至少有一个开口组合。");
+			return false;
+		}
+		SeenRecipeIds.Add(Recipe.DefinitionId);
+
+		const int32 RequiredRampCount = Recipe.Kind == EZeroEscapeStructureKind::TwoFloorStair
+			? 2
+			: (Recipe.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 4 : 0);
+		if (Recipe.NavigationRampPieces.Num() != RequiredRampCount)
+		{
+			OutError = FString::Printf(
+				TEXT("结构 %s 的隐藏斜坡数量应为 %d。"),
+				*Recipe.DefinitionId.ToString(), RequiredRampCount);
+			return false;
+		}
+
+		auto ValidatePieceArray = [&OutError](
+			const TArray<FZeroEscapeStructurePresentationPiece>& Pieces,
+			const bool bNavigationRamps) -> bool
+		{
+			TSet<FName> SeenPieceIds;
+			for (const FZeroEscapeStructurePresentationPiece& Piece : Pieces)
+			{
+				if (SeenPieceIds.Contains(Piece.PieceId)
+					|| !ValidatePresentationPiece(Piece, bNavigationRamps, OutError))
+				{
+					if (OutError.IsEmpty())
+					{
+						OutError = TEXT("同一表现作用域内 PieceId 重复。");
+					}
+					return false;
+				}
+				SeenPieceIds.Add(Piece.PieceId);
+			}
+			return true;
+		};
+
+		if (!ValidatePieceArray(Recipe.CommonPieces, false)
+			|| !ValidatePieceArray(Recipe.NavigationRampPieces, true))
+		{
+			return false;
+		}
+
+		TSet<FName> SeenOpeningSets;
+		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet : Recipe.OpeningSets)
+		{
+			if (OpeningSet.OpeningSetId.IsNone()
+				|| SeenOpeningSets.Contains(OpeningSet.OpeningSetId)
+				|| !ValidatePieceArray(OpeningSet.Pieces, false))
+			{
+				if (OutError.IsEmpty())
+				{
+					OutError = TEXT("表现开口组合 ID 必须唯一且其 Piece 合法。");
+				}
+				return false;
+			}
+			SeenOpeningSets.Add(OpeningSet.OpeningSetId);
+		}
+	}
+
 	// 关闭顶灯时允许灯类为空，确保同一套结构表现可以无代码地回退到“不生成灯”。
 	if (bSpawnCeilingLights)
 	{
@@ -329,7 +876,8 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 			return false;
 		}
 
-		if (!IsFiniteUnitScaleTransform(CeilingLightCellTransform))
+		if (!ZeroEscape::LevelGeneration::FGenerationCore::IsFiniteUnitScaleTransform(
+				CeilingLightCellTransform))
 		{
 			OutError = TEXT(
 				"Presentation.CeilingLightCellTransform 必须是有限 Unit Scale Transform。");
@@ -337,5 +885,80 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 		}
 	}
 
+	return true;
+}
+
+bool ValidateZeroEscapeStructurePresentationBindings(
+	const UZeroEscapeLevelGenerationProfile& GenerationProfile,
+	const UZeroEscapePresentationProfile& PresentationProfile,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (GenerationProfile.StructureDefinitions.Num()
+		!= PresentationProfile.StructureRecipes.Num())
+	{
+		OutError = TEXT("逻辑结构定义与表现 recipe 数量不同，存在缺失或孤儿配置。");
+		return false;
+	}
+
+	TSet<FName> LogicalIds;
+	for (const FZeroEscapeStructureDefinition& Definition :
+		GenerationProfile.StructureDefinitions)
+	{
+		if (Definition.DefinitionId.IsNone()
+			|| LogicalIds.Contains(Definition.DefinitionId))
+		{
+			OutError = TEXT("逻辑 StructureDefinition 的 DefinitionId 非空且必须唯一。");
+			return false;
+		}
+		LogicalIds.Add(Definition.DefinitionId);
+
+		const FZeroEscapeStructurePresentationRecipe* Recipe =
+			PresentationProfile.FindStructureRecipe(Definition.DefinitionId);
+		if (Recipe == nullptr || Recipe->Kind != Definition.Kind)
+		{
+			OutError = FString::Printf(
+				TEXT("逻辑结构 %s 缺少同 Kind 的唯一表现 recipe。"),
+				*Definition.DefinitionId.ToString());
+			return false;
+		}
+
+		TSet<FName> LogicalOpeningSetIds;
+		for (const FZeroEscapeStructureOpeningSetDefinition& OpeningSet :
+			Definition.AllowedOpeningSets)
+		{
+			LogicalOpeningSetIds.Add(OpeningSet.SetId);
+		}
+		if (LogicalOpeningSetIds.Num() != Definition.AllowedOpeningSets.Num()
+			|| Recipe->OpeningSets.Num() != LogicalOpeningSetIds.Num())
+		{
+			OutError = TEXT("逻辑与表现的开口组合数量或唯一性不一致。");
+			return false;
+		}
+		for (const FZeroEscapeStructureOpeningSetPresentation& OpeningSet :
+			Recipe->OpeningSets)
+		{
+			if (!LogicalOpeningSetIds.Contains(OpeningSet.OpeningSetId))
+			{
+				OutError = FString::Printf(
+					TEXT("结构 %s 的表现包含逻辑层没有的开口组合 %s。"),
+					*Definition.DefinitionId.ToString(),
+					*OpeningSet.OpeningSetId.ToString());
+				return false;
+			}
+		}
+	}
+
+	for (const FZeroEscapeStructurePresentationRecipe& Recipe :
+		PresentationProfile.StructureRecipes)
+	{
+		if (!LogicalIds.Contains(Recipe.DefinitionId))
+		{
+			OutError = FString::Printf(
+				TEXT("表现 recipe %s 没有对应逻辑结构，是孤儿配置。"),
+				*Recipe.DefinitionId.ToString());
+			return false;
+		}
+	}
 	return true;
 }

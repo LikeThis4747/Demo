@@ -2,9 +2,9 @@
 
 /**
  * @file ZeroEscapeGameplayPopulator.h
- * 职责：在关联生成器完成后，按 Population Profile 确定性地把玩法对象 Actor 撒入生成结果。
+ * 职责：由 GameMode 在角色与出口就绪后显式调用，按 Profile 确定性放置玩法对象。
  * 边界：只消费生成器的只读空间查询与本局 Seed；不参与空间生成，不结算玩法后果。
- * 状态 Owner：只拥有自己本局已 Spawn 的对象集合，用于重生成/结束时清理。
+ * 状态 Owner：只拥有本局由自己 Spawn 的对象；任一规则失败会原子清空。
  */
 
 #pragma once
@@ -16,9 +16,8 @@
 
 class AZeroEscapeRuntimeLevelGenerator;
 class UZeroEscapePopulationProfile;
-struct FZeroEscapeGenerationReport;
 
-/** 订阅生成完成事件、把 Population Profile 里的对象确定性放置到关卡的独立放置器。 */
+/** 不订阅生成事件；正式开局的原子提交顺序只由 GameMode 编排。 */
 UCLASS(Blueprintable)
 class DEMO_API AZeroEscapeGameplayPopulator final : public AActor
 {
@@ -28,30 +27,25 @@ public:
 	/** 创建无 Tick 的放置器。 */
 	AZeroEscapeGameplayPopulator();
 
-protected:
-	/** 绑定关联生成器的完成事件；若绑定时已 Ready 立即补放一次。 */
-	virtual void BeginPlay() override;
+	/**
+	 * 清旧对象后执行全部规则。无候选或按密度计算为零目标时合法跳过；
+	 * 配置、加载或实际 Spawn 失败时清掉本次已放对象并返回 false。
+	 */
+	bool Populate(AZeroEscapeRuntimeLevelGenerator& Generator);
 
-	/** 结束时解绑事件并清理本局已放置对象。 */
+	/** GameMode 失败回滚与 EndPlay 共用的幂等清理入口。 */
+	void ClearPopulation();
+
+protected:
+	/** 结束时清理本局已放置对象。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 生成成功后清理旧对象并按规则重新放置；失败则不放置。 */
-	UFUNCTION()
-	void HandleGenerationFinished(bool bSuccess, const FZeroEscapeGenerationReport& Report);
-
-	/** 销毁本局已 Spawn 的全部对象并清空登记。 */
-	void ClearSpawnedActors();
-
-	/** 关联的空间生成器；关卡实例中指定，其完成事件驱动本放置器。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Population", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<AZeroEscapeRuntimeLevelGenerator> Generator;
-
-	/** 放置规则表；决定放哪些对象、放到哪类格、放多少。 */
+	/** 放置规则表；决定在普通候选格放哪些对象、放多少。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UZeroEscapePopulationProfile> PopulationProfile;
 
-	/** 本局已放置对象；重生成或结束时统一销毁。 */
+	/** 本局已放置对象；失败回滚或结束时统一销毁。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AActor>> SpawnedActors;
 };

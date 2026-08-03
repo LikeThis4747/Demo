@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGameMode.cpp
- * 职责：正式一局的开局编排实现——读请求、驱动 PCG 生成、摆放追猎者与玩家。
- * 边界：不做胜负、陷阱、AI 或磁力逻辑；生成失败或摆放失败时只记录错误，不做兜底重试。
+ * 职责：把正式 PCG、导航、玩家、追猎者、Exit 与 Population 原子编排成一局。
+ * 边界：只对换 Seed 可能改变结果的失败做有限跨 World 重试；其他失败回到配置的主菜单。
  */
 
 #include "GameFlow/ZeroEscapeGameMode.h"
@@ -11,22 +11,24 @@
 #include "Characters/PursuerCharacter.h"
 #include "Characters/ZeroEscapeCharacter.h"
 #include "Components/Attributes/HealthComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFlow/ZeroEscapeExitVolume.h"
+#include "GameFlow/ZeroEscapeGameSetupGate.h"
 #include "GameFlow/ZeroEscapeGameInstance.h"
-#include "GameFlow/ZeroEscapeGameState.h"
 #include "GameFlow/ZeroEscapePlayerController.h"
-#include "UI/ResultMenuWidget.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "PCG/Population/ZeroEscapeGameplayPopulator.h"
 #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
+#include "UI/ResultMenuWidget.h"
 #include "UI/ZeroEscapeHUD.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeGameMode, Log, All);
 
-/** 与原型一致的角色/Controller/HUD；完整角色资源仍由玩家角色蓝图装配。 */
 AZeroEscapeGameMode::AZeroEscapeGameMode()
 {
 	DefaultPawnClass = AZeroEscapeCharacter::StaticClass();
@@ -34,185 +36,237 @@ AZeroEscapeGameMode::AZeroEscapeGameMode()
 	HUDClass = AZeroEscapeHUD::StaticClass();
 }
 
-/** 读取本局请求，驱动 PCG 生成，成功后摆放追猎者与玩家。 */
 void AZeroEscapeGameMode::BeginPlay()
 {
 	Super::BeginPlay();
+	SetGameplayInputLocked(true);
 
-	// 从主菜单 OpenLevel 进来时，PlayerController 仍停留在主菜单设置的 UI-Only 输入模式，
-	// 会拦截所有游戏输入导致玩家无法操控；正式关卡必须显式切回 GameOnly 并隐藏鼠标。
-	if (APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0))
+	ActiveGenerator = FindLevelGenerator();
+	ActivePopulator = FindGameplayPopulator();
+	if (!IsValid(ActiveGenerator))
 	{
-		PlayerController->SetInputMode(FInputModeGameOnly());
-		PlayerController->SetShowMouseCursor(false);
+		AbortSetupAndReturnToMainMenu(TEXT("GeneratorNotUnique"));
+		return;
 	}
-
-	AZeroEscapeRuntimeLevelGenerator* Generator = FindLevelGenerator();
-	if (Generator == nullptr)
+	if (!IsValid(ActivePopulator))
 	{
-		UE_LOG(LogZeroEscapeGameMode, Error,
-			TEXT("ZE_GAME_SETUP result=Failure reason=GeneratorNotFound"));
+		AbortSetupAndReturnToMainMenu(TEXT("PopulationNotUnique"));
+		return;
+	}
+	if (MainMenuLevel.IsNull())
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("MainMenuLevelUnset"));
+		return;
+	}
+	if (GameLevel.IsNull())
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("GameLevelUnset"));
+		return;
+	}
+	if (PursuerClass == nullptr || ExitActorClass == nullptr
+		|| ResultMenuWidgetClass == nullptr)
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("RoundClassUnset"));
 		return;
 	}
 
-	// Seed/难度来自 GameInstance；单独运行 L_Game（未经主菜单）时回退到 Generator 自带的 DefaultRequest。
-	const UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>();
-	if (GameInstancePtr != nullptr)
+	const APursuerCharacter* PursuerDefaults =
+		PursuerClass->GetDefaultObject<APursuerCharacter>();
+	if (!IsValid(PursuerDefaults))
 	{
-		if (!Generator->GenerateFromRequest(GameInstancePtr->GetPendingRequest()))
+		AbortSetupAndReturnToMainMenu(TEXT("PursuerNavAgentInvalid"));
+		return;
+	}
+
+	// ACharacter normally resolves the movement component's -1 nav radius/height
+	// from its capsule in PostInitializeComponents. The class default object has
+	// not run that instance lifecycle, so reproduce that engine step on a local
+	// copy without mutating the Blueprint CDO.
+	FNavAgentProperties PursuerNavigationAgent =
+		PursuerDefaults->GetNavAgentPropertiesRef();
+	if (!PursuerNavigationAgent.IsValid())
+	{
+		const UCapsuleComponent* Capsule = PursuerDefaults->GetCapsuleComponent();
+		if (!IsValid(Capsule))
 		{
-			UE_LOG(LogZeroEscapeGameMode, Error,
-				TEXT("ZE_GAME_SETUP result=Failure reason=GenerationRejected"));
+			AbortSetupAndReturnToMainMenu(TEXT("PursuerNavAgentInvalid"));
 			return;
 		}
+		PursuerNavigationAgent.AgentRadius = Capsule->GetScaledCapsuleRadius();
+		PursuerNavigationAgent.AgentHeight =
+			Capsule->GetScaledCapsuleHalfHeight() * 2.0f;
 	}
-	else if (!Generator->Generate())
+	if (!ActiveGenerator->ConfigurePursuerNavigationAgent(PursuerNavigationAgent))
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("PursuerNavAgentInvalid"));
+		return;
+	}
+
+	ActiveGenerator->OnGenerationFinished.AddUniqueDynamic(
+		this, &AZeroEscapeGameMode::HandleGenerationFinished);
+	const UZeroEscapeGameInstance* GameInstancePtr =
+		GetGameInstance<UZeroEscapeGameInstance>();
+	const bool bAccepted = GameInstancePtr != nullptr
+		? ActiveGenerator->GenerateFromRequest(GameInstancePtr->GetPendingRequest())
+		: ActiveGenerator->Generate();
+	if (GameInstancePtr == nullptr)
 	{
 		UE_LOG(LogZeroEscapeGameMode, Warning,
-			TEXT("ZE_GAME_SETUP reason=NoGameInstanceFellBackToDefaultRequest"));
-		return;
+			TEXT("ZE_GAME_SETUP state=Waiting source=GeneratorDefaultRequest"));
 	}
-
-	if (Generator->State != EZeroEscapeRuntimeGenerationState::Ready
-		|| !PlacePlayerAndPursuer(*Generator)
-		|| !PlaceExit(*Generator))
+	if (!bAccepted && !bSetupTerminal)
 	{
-		UE_LOG(LogZeroEscapeGameMode, Error,
-			TEXT("ZE_GAME_SETUP result=Failure reason=PlacementFailed"));
-		return;
+		AbortSetupAndReturnToMainMenu(TEXT("GenerationRejected"));
 	}
-
-	BindPlayerDeath();
-	BindRoundStateForUI();
 }
 
-/** 遍历世界查找唯一 Generator；发现多于一个时选第一个并记录警告。 */
 AZeroEscapeRuntimeLevelGenerator* AZeroEscapeGameMode::FindLevelGenerator() const
 {
 	AZeroEscapeRuntimeLevelGenerator* Found = nullptr;
 	for (TActorIterator<AZeroEscapeRuntimeLevelGenerator> It(GetWorld()); It; ++It)
 	{
-		if (Found == nullptr)
+		if (Found != nullptr)
 		{
-			Found = *It;
+			UE_LOG(LogZeroEscapeGameMode, Error,
+				TEXT("ZE_GAME_SETUP result=Failure reason=MultipleGenerators"));
+			return nullptr;
 		}
-		else
-		{
-			UE_LOG(LogZeroEscapeGameMode, Warning,
-				TEXT("ZE_GAME_SETUP reason=MultipleGeneratorsUsingFirst"));
-			break;
-		}
+		Found = *It;
 	}
 	return Found;
 }
 
-/** 追猎者放起点、玩家放两格外，双方面向同一逃跑方向。 */
-bool AZeroEscapeGameMode::PlacePlayerAndPursuer(AZeroEscapeRuntimeLevelGenerator& Generator)
+AZeroEscapeGameplayPopulator* AZeroEscapeGameMode::FindGameplayPopulator() const
 {
-	FTransform StartTransform;
+	AZeroEscapeGameplayPopulator* Found = nullptr;
+	for (TActorIterator<AZeroEscapeGameplayPopulator> It(GetWorld()); It; ++It)
+	{
+		if (Found != nullptr)
+		{
+			UE_LOG(LogZeroEscapeGameMode, Error,
+				TEXT("ZE_GAME_SETUP result=Failure reason=MultiplePopulators"));
+			return nullptr;
+		}
+		Found = *It;
+	}
+	return Found;
+}
+
+void AZeroEscapeGameMode::HandleGenerationFinished(
+	const bool bSuccess,
+	const FZeroEscapeGenerationReport& Report)
+{
+	if (!IsValid(ActiveGenerator))
+	{
+		return;
+	}
+	ZeroEscape::GameFlow::FGameSetupGateSnapshot GateState;
+	GateState.ActiveOperationId = ActiveGenerator->GetActiveOperationId();
+	GateState.LastHandledOperationId = LastHandledGenerationOperationId;
+	GateState.bTerminal = bSetupTerminal;
+	GateState.bEndingPlay = bEndingPlay;
+	if (!ZeroEscape::GameFlow::FGameSetupGate::AcceptFinalReport(
+			GateState, Report.OperationId))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Warning,
+			TEXT("ZE_GAME_SETUP state=IgnoredCallback operation=%lld active=%lld"),
+			static_cast<long long>(Report.OperationId),
+			static_cast<long long>(ActiveGenerator->GetActiveOperationId()));
+		return;
+	}
+	LastHandledGenerationOperationId = Report.OperationId;
+
+	if (!bSuccess || ActiveGenerator->State != EZeroEscapeRuntimeGenerationState::Ready)
+	{
+		if (TryScheduleAutomaticGenerationRetry(Report))
+		{
+			return;
+		}
+		AbortSetupAndReturnToMainMenu(TEXT("GenerationFinalFailure"));
+		return;
+	}
+	if (!PlacePlayerAndPursuer(*ActiveGenerator))
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("PlayerOrPursuerPlacementFailed"));
+		return;
+	}
+	if (!PlaceExit(*ActiveGenerator))
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("ExitPlacementFailed"));
+		return;
+	}
+	if (!IsValid(ActivePopulator) || !ActivePopulator->Populate(*ActiveGenerator))
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("PopulationFailed"));
+		return;
+	}
+	if (!BindPlayerDeath() || !BindRoundStateForUI())
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("RoundDelegateBindingFailed"));
+		return;
+	}
+
+	ActiveGenerator->OnGenerationFinished.RemoveDynamic(
+		this, &AZeroEscapeGameMode::HandleGenerationFinished);
+	bRoundStarted = true;
+	bSetupTerminal = true;
+	SetGameplayInputLocked(false);
+	UE_LOG(LogZeroEscapeGameMode, Display,
+		TEXT("ZE_GAME_SETUP result=Success operation=%lld player=%s pursuer=%s exit=%s"),
+		static_cast<long long>(Report.OperationId),
+		*GetNameSafe(UGameplayStatics::GetPlayerPawn(this, 0)),
+		*GetNameSafe(SpawnedPursuer),
+		*GetNameSafe(SpawnedExit));
+}
+
+bool AZeroEscapeGameMode::PlacePlayerAndPursuer(
+	AZeroEscapeRuntimeLevelGenerator& Generator)
+{
 	FTransform PlayerTransform;
-	if (!Generator.GetGeneratedStartWorldTransform(StartTransform)
-		|| !FindPlayerSpawnTransform(Generator, StartTransform, PlayerTransform))
+	FTransform PursuerTransform;
+	if (!Generator.GetGeneratedPlayerSpawnWorldTransform(PlayerTransform)
+		|| !Generator.GetGeneratedPursuerSpawnWorldTransform(PursuerTransform))
 	{
 		return false;
 	}
 
-	// 逃跑正方向：从起点（追猎者）指向玩家；玩家背对追猎者向前逃，追猎者面向玩家追击。
-	const FRotator ForwardRotation =
-		(PlayerTransform.GetLocation() - StartTransform.GetLocation()).Rotation();
-	const FQuat ForwardYaw = FRotator(0.0, ForwardRotation.Yaw, 0.0).Quaternion();
-	StartTransform.SetRotation(ForwardYaw);
+	const FVector ChaseDirection =
+		PlayerTransform.GetLocation() - PursuerTransform.GetLocation();
+	if (ChaseDirection.SizeSquared2D() <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+	const FQuat ForwardYaw = FRotator(
+		0.0, ChaseDirection.Rotation().Yaw, 0.0).Quaternion();
 	PlayerTransform.SetRotation(ForwardYaw);
+	PursuerTransform.SetRotation(ForwardYaw);
 
-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	APlayerController* PlayerController =
+		UGameplayStatics::GetPlayerController(this, 0);
 	APawn* Player = IsValid(PlayerController) ? PlayerController->GetPawn() : nullptr;
 	if (!IsValid(Player))
 	{
 		return false;
 	}
-
 	if (UPawnMovementComponent* Movement = Player->GetMovementComponent())
 	{
 		Movement->StopMovementImmediately();
 	}
 	const FRotator PlayerRotation = PlayerTransform.GetRotation().Rotator();
-	if (!Player->TeleportTo(PlayerTransform.GetLocation(), PlayerRotation, false, false))
+	if (!Player->TeleportTo(
+			PlayerTransform.GetLocation(), PlayerRotation, false, false))
 	{
 		return false;
 	}
 	PlayerController->SetControlRotation(PlayerRotation);
 
-	if (PursuerClass == nullptr)
-	{
-		UE_LOG(LogZeroEscapeGameMode, Error,
-			TEXT("ZE_GAME_SETUP result=Failure reason=PursuerClassUnset"));
-		return false;
-	}
-
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
 	SpawnParameters.SpawnCollisionHandlingOverride =
-		ESpawnActorCollisionHandlingMethod::AdjustIfPossibleButAlwaysSpawn;
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	SpawnedPursuer = GetWorld()->SpawnActor<APursuerCharacter>(
-		PursuerClass,
-		StartTransform,
-		SpawnParameters);
-	if (!IsValid(SpawnedPursuer))
-	{
-		return false;
-	}
-
-	UE_LOG(LogZeroEscapeGameMode, Display,
-		TEXT("ZE_GAME_SETUP result=Success player=\"%s\" pursuer=\"%s\" separation_cm=%.0f"),
-		*GetNameSafe(Player),
-		*GetNameSafe(SpawnedPursuer),
-		FVector::Dist2D(Player->GetActorLocation(), SpawnedPursuer->GetActorLocation()));
-	return true;
-}
-
-/** 稳定顺序选出距起点最接近下限的走廊格；追猎者位于起点，故此点即玩家两格缓冲出生点。 */
-bool AZeroEscapeGameMode::FindPlayerSpawnTransform(
-	AZeroEscapeRuntimeLevelGenerator& Generator,
-	const FTransform& StartTransform,
-	FTransform& OutPlayerTransform) const
-{
-	OutPlayerTransform = FTransform::Identity;
-	TArray<FTransform> Candidates;
-	if (!Generator.GetGeneratedCellWorldTransforms(
-			EZeroEscapeGridRegionKind::Corridor,
-			false,
-			false,
-			Candidates))
-	{
-		return false;
-	}
-
-	const FVector StartLocation = StartTransform.GetLocation();
-	const double MinimumDistanceSquared = FMath::Square(PlayerStartSeparationCm);
-	double BestDistanceSquared = TNumericLimits<double>::Max();
-	int32 BestIndex = INDEX_NONE;
-
-	for (int32 Index = 0; Index < Candidates.Num(); ++Index)
-	{
-		const double DistanceSquared =
-			FVector::DistSquared2D(StartLocation, Candidates[Index].GetLocation());
-		if (DistanceSquared >= MinimumDistanceSquared && DistanceSquared < BestDistanceSquared)
-		{
-			BestDistanceSquared = DistanceSquared;
-			BestIndex = Index;
-		}
-	}
-
-	if (BestIndex == INDEX_NONE)
-	{
-		return false;
-	}
-
-	FVector PlayerLocation = Candidates[BestIndex].GetLocation();
-	// 候选位于地板表面；玩家复用起点的胶囊中心高度，避免半身陷入地板。
-	PlayerLocation.Z = StartLocation.Z;
-	OutPlayerTransform = FTransform(StartTransform.GetRotation(), PlayerLocation);
-	return true;
+		PursuerClass, PursuerTransform, SpawnParameters);
+	return IsValid(SpawnedPursuer);
 }
 
 bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
@@ -220,99 +274,282 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
 	FTransform ExitTransform;
 	if (!Generator.GetGeneratedExitWorldTransform(ExitTransform))
 	{
-		UE_LOG(LogZeroEscapeGameMode, Error,
-			TEXT("ZE_GAME_SETUP result=Failure reason=ExitTransformUnavailable"));
-		return false;
-	}
-
-	if (ExitActorClass == nullptr)
-	{
-		UE_LOG(LogZeroEscapeGameMode, Error,
-			TEXT("ZE_GAME_SETUP result=Failure reason=ExitActorClassUnset"));
 		return false;
 	}
 
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
+	SpawnParameters.SpawnCollisionHandlingOverride =
+		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	SpawnedExit = GetWorld()->SpawnActor<AZeroEscapeExitVolume>(
-		ExitActorClass,
-		ExitTransform,
-		SpawnParameters);
+		ExitActorClass, ExitTransform, SpawnParameters);
 	if (!IsValid(SpawnedExit))
 	{
 		return false;
 	}
-
-	SpawnedExit->OnExitReached.AddDynamic(this, &AZeroEscapeGameMode::HandleExitReached);
+	SpawnedExit->OnExitReached.AddUniqueDynamic(
+		this, &AZeroEscapeGameMode::HandleExitReached);
 	SpawnedExit->Activate(ExitTransform);
 	return true;
 }
 
-/** 找到玩家的生命组件，绑定归零事件用于判负转发。 */
-void AZeroEscapeGameMode::BindPlayerDeath()
+bool AZeroEscapeGameMode::BindPlayerDeath()
 {
 	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
-	if (!IsValid(Player))
+	BoundHealthComponent = IsValid(Player)
+		? Player->FindComponentByClass<UHealthComponent>()
+		: nullptr;
+	if (!IsValid(BoundHealthComponent))
 	{
-		return;
+		return false;
 	}
+	BoundHealthComponent->OnHealthDepleted.AddUniqueDynamic(
+		this, &AZeroEscapeGameMode::HandlePlayerDeath);
+	return true;
+}
 
-	if (UHealthComponent* Health = Player->FindComponentByClass<UHealthComponent>())
+bool AZeroEscapeGameMode::BindRoundStateForUI()
+{
+	BoundRoundState = GetGameState<AZeroEscapeGameState>();
+	if (!IsValid(BoundRoundState) || ResultMenuWidgetClass == nullptr)
 	{
-		Health->OnHealthDepleted.AddDynamic(this, &AZeroEscapeGameMode::HandlePlayerDeath);
+		return false;
 	}
+	BoundRoundState->OnRoundStateChanged.AddUniqueDynamic(
+		this, &AZeroEscapeGameMode::HandleRoundStateChanged);
+	return true;
 }
 
 void AZeroEscapeGameMode::HandleExitReached()
 {
-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
+	if (bRoundStarted && IsValid(BoundRoundState))
 	{
-		ZeState->SetRoundWon();
+		BoundRoundState->SetRoundWon();
 	}
 }
 
 void AZeroEscapeGameMode::HandlePlayerDeath()
 {
-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
+	if (bRoundStarted && IsValid(BoundRoundState))
 	{
-		ZeState->SetRoundLost();
+		BoundRoundState->SetRoundLost();
 	}
 }
 
-void AZeroEscapeGameMode::BindRoundStateForUI()
+void AZeroEscapeGameMode::HandleRoundStateChanged(
+	const EZeroEscapeRoundState NewState)
 {
-	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
-	{
-		ZeState->OnRoundStateChanged.AddDynamic(
-			this, &AZeroEscapeGameMode::HandleRoundStateChanged);
-	}
-}
-
-/** 局状态变化：非进行中时创建结算界面、切 UI 输入并暂停。 */
-void AZeroEscapeGameMode::HandleRoundStateChanged(EZeroEscapeRoundState NewState)
-{
-	if (NewState == EZeroEscapeRoundState::InProgress || ResultMenuWidgetClass == nullptr)
+	if (!bRoundStarted
+		|| NewState == EZeroEscapeRoundState::InProgress
+		|| ResultMenuWidgetClass == nullptr
+		|| IsValid(ResultMenuWidget))
 	{
 		return;
 	}
 
-	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	APlayerController* PlayerController =
+		UGameplayStatics::GetPlayerController(this, 0);
 	if (!IsValid(PlayerController))
 	{
 		return;
 	}
-
-	ResultMenuWidget = CreateWidget<UResultMenuWidget>(PlayerController, ResultMenuWidgetClass);
+	ResultMenuWidget = CreateWidget<UResultMenuWidget>(
+		PlayerController, ResultMenuWidgetClass);
 	if (!IsValid(ResultMenuWidget))
 	{
 		return;
 	}
-
 	ResultMenuWidget->ShowResult(NewState == EZeroEscapeRoundState::Won);
 	ResultMenuWidget->AddToViewport();
-
-	FInputModeUIOnly InputMode;
-	PlayerController->SetInputMode(InputMode);
+	PlayerController->SetInputMode(FInputModeUIOnly());
 	PlayerController->SetShowMouseCursor(true);
 	UGameplayStatics::SetGamePaused(this, true);
+}
+
+void AZeroEscapeGameMode::SetGameplayInputLocked(const bool bLocked) const
+{
+	APlayerController* PlayerController =
+		UGameplayStatics::GetPlayerController(this, 0);
+	if (!IsValid(PlayerController))
+	{
+		return;
+	}
+	if (AZeroEscapePlayerController* ZeroEscapeController =
+		Cast<AZeroEscapePlayerController>(PlayerController))
+	{
+		ZeroEscapeController->SetPauseMenuEnabled(!bLocked);
+	}
+	PlayerController->ResetIgnoreMoveInput();
+	PlayerController->ResetIgnoreLookInput();
+	if (bLocked)
+	{
+		PlayerController->SetIgnoreMoveInput(true);
+		PlayerController->SetIgnoreLookInput(true);
+	}
+	PlayerController->SetInputMode(FInputModeGameOnly());
+	PlayerController->SetShowMouseCursor(false);
+}
+
+void AZeroEscapeGameMode::AbortSetupAndReturnToMainMenu(const TCHAR* Reason)
+{
+	if (bSetupTerminal || bEndingPlay)
+	{
+		return;
+	}
+	const FString FailureReason = Reason != nullptr ? Reason : TEXT("Unknown");
+	UE_LOG(LogZeroEscapeGameMode, Error,
+		TEXT("ZE_GAME_SETUP result=Failure reason=%s operation=%lld"),
+		*FailureReason,
+		static_cast<long long>(LastHandledGenerationOperationId));
+	BeginSetupTransition(*FailureReason, MainMenuLevel);
+}
+
+bool AZeroEscapeGameMode::TryScheduleAutomaticGenerationRetry(
+	const FZeroEscapeGenerationReport& Report)
+{
+	if (!ZeroEscape::GameFlow::FGameSetupGate::IsRecoverableGenerationFailure(Report)
+		|| GameLevel.IsNull())
+	{
+		return false;
+	}
+
+	UZeroEscapeGameInstance* GameInstancePtr =
+		GetGameInstance<UZeroEscapeGameInstance>();
+	if (!IsValid(GameInstancePtr))
+	{
+		return false;
+	}
+
+	int32 RetryNumber = 0;
+	int32 PreviousSeed = 0;
+	int32 NextSeed = 0;
+	if (!GameInstancePtr->TryAdvancePendingRequestForAutomaticRetry(
+			RetryNumber, PreviousSeed, NextSeed))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Warning,
+			TEXT("ZE_GAME_SETUP state=RetryExhausted max_retry=%d seed=%d stage=%d failure=%d"),
+			UZeroEscapeGameInstance::MaxAutomaticGenerationRetryCount,
+			GameInstancePtr->GetPendingRequest().Seed,
+			static_cast<int32>(Report.Stage),
+			static_cast<int32>(Report.Failure));
+		return false;
+	}
+
+	UE_LOG(LogZeroEscapeGameMode, Warning,
+		TEXT("ZE_GAME_SETUP state=AutomaticRetry retry=%d max_retry=%d previous_seed=%d next_seed=%d stage=%d failure=%d"),
+		RetryNumber,
+		UZeroEscapeGameInstance::MaxAutomaticGenerationRetryCount,
+		PreviousSeed,
+		NextSeed,
+		static_cast<int32>(Report.Stage),
+		static_cast<int32>(Report.Failure));
+	BeginSetupTransition(TEXT("RecoverableGenerationFailure"), GameLevel);
+	return true;
+}
+
+void AZeroEscapeGameMode::BeginSetupTransition(
+	const TCHAR* Reason,
+	const TSoftObjectPtr<UWorld>& TargetLevel)
+{
+	if (bSetupTerminal || bEndingPlay)
+	{
+		return;
+	}
+	bSetupTerminal = true;
+	bSetupTransitionScheduled = true;
+	PendingTransitionReason = Reason != nullptr ? Reason : TEXT("Unknown");
+	PendingTransitionLevel = TargetLevel;
+	SetGameplayInputLocked(true);
+	UnbindRuntimeDelegates();
+	CleanupRoundActors();
+
+	if (UWorld* World = GetWorld())
+	{
+		SetupTransitionTimer = World->GetTimerManager().SetTimerForNextTick(
+			this, &AZeroEscapeGameMode::FinalizeSetupTransition);
+	}
+}
+
+void AZeroEscapeGameMode::FinalizeSetupTransition()
+{
+	if (bEndingPlay || !bSetupTransitionScheduled)
+	{
+		return;
+	}
+	if (IsValid(ActiveGenerator) && !ActiveGenerator->ClearGeneratedScene())
+	{
+		UE_LOG(LogZeroEscapeGameMode, Warning,
+			TEXT("ZE_GAME_SETUP reason=GeneratorClearDeferredOrRejected"));
+	}
+	if (PendingTransitionLevel.IsNull())
+	{
+		UE_LOG(LogZeroEscapeGameMode, Error,
+			TEXT("ZE_GAME_SETUP reason=TransitionLevelUnset transition=%s"),
+			*PendingTransitionReason);
+		return;
+	}
+	UGameplayStatics::OpenLevelBySoftObjectPtr(this, PendingTransitionLevel);
+}
+
+void AZeroEscapeGameMode::UnbindRuntimeDelegates()
+{
+	if (IsValid(ActiveGenerator))
+	{
+		ActiveGenerator->OnGenerationFinished.RemoveDynamic(
+			this, &AZeroEscapeGameMode::HandleGenerationFinished);
+	}
+	if (IsValid(BoundHealthComponent))
+	{
+		BoundHealthComponent->OnHealthDepleted.RemoveDynamic(
+			this, &AZeroEscapeGameMode::HandlePlayerDeath);
+	}
+	BoundHealthComponent = nullptr;
+	if (IsValid(BoundRoundState))
+	{
+		BoundRoundState->OnRoundStateChanged.RemoveDynamic(
+			this, &AZeroEscapeGameMode::HandleRoundStateChanged);
+	}
+	BoundRoundState = nullptr;
+	if (IsValid(SpawnedExit))
+	{
+		SpawnedExit->OnExitReached.RemoveDynamic(
+			this, &AZeroEscapeGameMode::HandleExitReached);
+	}
+}
+
+void AZeroEscapeGameMode::CleanupRoundActors()
+{
+	if (IsValid(ActivePopulator))
+	{
+		ActivePopulator->ClearPopulation();
+	}
+	if (IsValid(SpawnedExit))
+	{
+		SpawnedExit->Destroy();
+	}
+	SpawnedExit = nullptr;
+	if (IsValid(SpawnedPursuer))
+	{
+		SpawnedPursuer->Destroy();
+	}
+	SpawnedPursuer = nullptr;
+}
+
+void AZeroEscapeGameMode::EndPlay(
+	const EEndPlayReason::Type EndPlayReason)
+{
+	bEndingPlay = true;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(SetupTransitionTimer);
+	}
+	UnbindRuntimeDelegates();
+	CleanupRoundActors();
+	if (IsValid(ResultMenuWidget))
+	{
+		ResultMenuWidget->RemoveFromParent();
+	}
+	ResultMenuWidget = nullptr;
+	SetGameplayInputLocked(false);
+	Super::EndPlay(EndPlayReason);
 }

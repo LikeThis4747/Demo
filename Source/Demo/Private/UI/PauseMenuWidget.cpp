@@ -11,6 +11,7 @@
 #include "Components/Button.h"
 #include "Components/TextBlock.h"
 #include "Components/Widget.h"
+#include "GameFlow/ZeroEscapePlayerController.h"
 #include "Kismet/GameplayStatics.h"
 #include "UI/LevelSetupWidget.h"
 
@@ -19,6 +20,7 @@ DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePauseMenu, Log, All);
 void UPauseMenuWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	SetIsFocusable(true);
 
 	ResumeButton->OnClicked.AddDynamic(this, &UPauseMenuWidget::HandleResumeClicked);
 	SelectLevelButton->OnClicked.AddDynamic(this, &UPauseMenuWidget::HandleSelectLevelClicked);
@@ -42,13 +44,15 @@ void UPauseMenuWidget::ShowMainChoice()
 void UPauseMenuWidget::HandleResumeClicked()
 {
 	// 关闭暂停菜单由 PlayerController 负责（它持有 Widget 实例并管理输入模式）。
-	if (APlayerController* PC = GetOwningPlayer())
+	if (AZeroEscapePlayerController* PC =
+		Cast<AZeroEscapePlayerController>(GetOwningPlayer()))
 	{
-		PC->SetShowMouseCursor(false);
-		PC->SetInputMode(FInputModeGameOnly());
-		UGameplayStatics::SetGamePaused(this, false);
+		PC->ClosePauseMenu();
+		return;
 	}
-	RemoveFromParent();
+
+	UE_LOG(LogZeroEscapePauseMenu, Error,
+		TEXT("ZE_PAUSE_MENU result=Failure reason=UnexpectedPlayerController"));
 }
 
 void UPauseMenuWidget::HandleSelectLevelClicked()

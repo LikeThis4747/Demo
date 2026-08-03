@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGenerationCore.h
- * 职责：把 Request 与 Generation Profile 解析为一次不可变纯值输入，并提供确定性随机域和 Hash。
- * 边界：除解析入口外不访问 UObject；不保存玩法规则、World、Mesh 或求解状态。
+ * 职责：把 Request 与多层 Generation Profile 解析为不可变纯值输入，并提供随机子流和规范 Hash。
+ * 边界：除解析入口外不访问 UObject；不访问 World、Mesh、导航或求解状态。
  */
 
 #pragma once
@@ -14,13 +14,20 @@
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** V5 移除玩法流程链，空间结果的确定性版本随之递增。 */
-	inline constexpr int32 GAlgorithmVersion = 5;
+	/** V6 引入多层完整结构与三维通行结果，确定性版本随之递增。 */
+	inline constexpr int32 GAlgorithmVersion = 6;
 
-	/** 相互隔离的随机子流；房间抽样变化不会扰动 WFC 的随机序列。 */
+	/** 相互隔离的随机子流；结构数量或放置变化不会扰动 WFC 的随机序列。 */
 	enum class ERandomDomain : uint32
 	{
-		RoomPlacement = 0x20B8A51Du,
+		FloorCount = 0x1F5A57C3u,
+		RequiredTwoFloorStairPlacement = 0x20B8A51Du,
+		AdditionalTwoFloorStairCount = 0x39A781E5u,
+		AdditionalTwoFloorStairPlacement = 0x4C267A91u,
+		ThreeFloorStairwellPlacement = 0x55E1B3A7u,
+		HighCeilingRoomCount = 0x6A943D2Bu,
+		HighCeilingRoomPlacement = 0x73C80E4Fu,
+		PlayerPursuerSpawn = 0x84D26B19u,
 		WfcLayout = 0x95E27B43u
 	};
 
@@ -28,7 +35,10 @@ namespace ZeroEscape::LevelGeneration
 	struct FResolvedGenerationInput
 	{
 		FZeroEscapeGenerationSignature Signature;
-		FZeroEscapeSharedRouteConstraints Rules;
+		FZeroEscapeSharedRouteConstraints SharedRules;
+		FZeroEscapeSharedGenerationBudget Budget;
+		FZeroEscapeDifficultyDefinition Difficulty;
+		TArray<FZeroEscapeStructureDefinition> StructureDefinitions;
 		FZeroEscapeWfcShapeWeights WfcShapeWeights;
 	};
 
@@ -56,5 +66,8 @@ namespace ZeroEscape::LevelGeneration
 
 		/** 判断 Transform 全部分量有限、旋转已归一且 Scale 为 1。 */
 		static bool IsFiniteUnitScaleTransform(const FTransform& Transform);
+
+		/** 判断 Transform 全部分量有限、旋转已归一且三个 Scale 分量均为正。 */
+		static bool IsFinitePositiveScaleTransform(const FTransform& Transform);
 	};
 }

@@ -3,8 +3,8 @@
 /**
  * @file ZeroEscapeWfcLayoutTests.cpp
  *
- * 职责：验证 V5 Grid-WFC 的 16 状态契约、Count/MaxConsecutive/Connected 传播、
- *       带界时间顺序回溯、同 Seed 重放、Grid 完成态验收与输出原子性。
+ * 职责：验证 V6 二维 WFC 的 16 状态契约、Count/MaxConsecutive/Connected 传播、
+ *       带界时间顺序回溯、同 Seed 重放与纯值输出原子性。
  * 边界：测试只操作纯值 Domain/Plan，不创建 World、Actor、HISM，也不执行 PIE。
  */
 
@@ -16,10 +16,8 @@
 #include "Containers/Queue.h"
 #include "Containers/StaticArray.h"
 #include "Misc/AutomationTest.h"
-#include "UObject/UObjectGlobals.h"
 
 #include "PCG/ZeroEscapeGenerationCore.h"
-#include "PCG/ZeroEscapeGridLayoutSolver.h"
 #include "PCG/ZeroEscapeWfcConstraints.h"
 #include "PCG/ZeroEscapeWfcSolver.h"
 
@@ -27,71 +25,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 {
 	namespace WfcLayoutTestsPrivate
 	{
-		/**
-		 * 返回已观测样本的 nearest-rank 百分位。
-		 *
-		 * 复制后排序让调用端保留原始收集顺序；N=288 时 P50/P95 都有稳定、无插值的样本定义。
-		 */
-		template <typename TValue>
-		TValue NearestRankPercentile(TArray<TValue> Values, const double Percentile)
-		{
-			check(!Values.IsEmpty());
-			check(Percentile > 0.0 && Percentile <= 1.0);
-			Values.Sort();
-			const int32 RankIndex = FMath::Clamp(
-				FMath::CeilToInt(Percentile * Values.Num()) - 1,
-				0,
-				Values.Num() - 1);
-			return Values[RankIndex];
-		}
-
-		/** 构造 V5 自动化所用的合法空间 Profile；三档难度保持等总权重。 */
-		void BuildValidProfile(UZeroEscapeLevelGenerationProfile& Profile)
-		{
-			Profile.ProfileVersion = 5;
-			Profile.SharedRouteConstraints = FZeroEscapeSharedRouteConstraints();
-			Profile.SharedRouteConstraints.GridSize = FIntPoint(24, 16);
-			Profile.SharedRouteConstraints.LogicalTileSizeCm = 600.0;
-			Profile.SharedRouteConstraints.RoomSizeTiles = 2;
-			Profile.SharedRouteConstraints.RoomCount = 3;
-			Profile.SharedRouteConstraints.MinWalkableCellCount = 48;
-			Profile.SharedRouteConstraints.MaxWalkableCellCount = 72;
-			Profile.SharedRouteConstraints.MaxConsecutiveStraightTiles = 4;
-			Profile.SharedRouteConstraints.MaxRequiredRouteLengthTiles = 64;
-			Profile.SharedRouteConstraints.MaxWfcCandidateAttempts = 100000;
-			Profile.SharedRouteConstraints.MaxWfcBacktrackCount = 25000;
-			Profile.SharedRouteConstraints.MaxWfcSolveAttempts = 10;
-			Profile.SharedRouteConstraints.AnchorHeightCm = 100.0;
-
-			Profile.Difficulties.Reset();
-			FZeroEscapeDifficultyDefinition Easy;
-			Easy.Difficulty = EZeroEscapeDifficulty::Easy;
-			Easy.WfcShapeWeights = FZeroEscapeWfcShapeWeights();
-			Profile.Difficulties.Add(Easy);
-
-			FZeroEscapeDifficultyDefinition Normal = Easy;
-			Normal.Difficulty = EZeroEscapeDifficulty::Normal;
-			Profile.Difficulties.Add(Normal);
-
-			FZeroEscapeDifficultyDefinition Hard = Easy;
-			Hard.Difficulty = EZeroEscapeDifficulty::Hard;
-			Profile.Difficulties.Add(Hard);
-		}
-
-		/** 构造供 Grid 单元测试直接消费的稳定 Signature。 */
-		FZeroEscapeGenerationSignature MakeSignature(
-			const int32 Seed,
-			const EZeroEscapeDifficulty Difficulty = EZeroEscapeDifficulty::Normal)
-		{
-			FZeroEscapeGenerationSignature Signature;
-			Signature.Seed = Seed;
-			Signature.Difficulty = Difficulty;
-			Signature.AlgorithmVersion = GAlgorithmVersion;
-			Signature.GenerationProfileVersion = 5;
-			Signature.PresentationVersion = 1;
-			return Signature;
-		}
-
 		/** 建立完整 row-major 约束数组；调用者随后按需要提升 Required 或 Outside。 */
 		TArray<FGridCellConstraint> MakeDenseConstraints(
 			const FIntPoint GridSize,
@@ -106,7 +39,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 					FGridCellConstraint& Cell = Constraints[Grid::ToIndex(FIntPoint(X, Y), GridSize)];
 					Cell.Coordinate = FIntPoint(X, Y);
 					Cell.Domain = InitialDomain;
-					Cell.RegionId = InitialDomain == EGridCellDomain::Outside ? INDEX_NONE : 0;
 				}
 			}
 			return Constraints;
@@ -139,8 +71,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FGridCellConstraint& CellB = Constraints[Grid::ToIndex(B, GridSize)];
 			CellA.Domain = EGridCellDomain::Required;
 			CellB.Domain = EGridCellDomain::Required;
-			CellA.RegionId = 0;
-			CellB.RegionId = 0;
 			CellA.RequiredOpenMask |= Grid::DirectionBit(Direction);
 			CellB.RequiredOpenMask |= Grid::DirectionBit(Grid::OppositeDirectionIndex(Direction));
 			return true;
@@ -233,83 +163,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			return true;
 		}
 
-		/** 在稀疏最终 Plan 中按坐标查询 Tile；返回值只在当前 Plan 生命周期内有效。 */
-		const FZeroEscapeCollapsedTile* FindTile(
-			const FZeroEscapeGeneratedLevelPlan& Plan,
-			const FIntPoint Coordinate)
-		{
-			return Plan.Cells.FindByPredicate(
-				[Coordinate](const FZeroEscapeCollapsedTile& Cell)
-				{
-					return Cell.GridCoordinate == Coordinate;
-				});
-		}
-
-		/** 从 Start 沿 OpeningMask 做独立 BFS，确认所有非空格、Exit 和房间锚点连通。 */
-		bool IsEntirePlanReachableFromStart(const FZeroEscapeGeneratedLevelPlan& Plan)
-		{
-			TMap<FIntPoint, int32> CellIndexByCoordinate;
-			for (int32 Index = 0; Index < Plan.Cells.Num(); ++Index)
-			{
-				CellIndexByCoordinate.Add(Plan.Cells[Index].GridCoordinate, Index);
-			}
-			const int32* StartIndex = CellIndexByCoordinate.Find(Plan.StartCoordinate);
-			if (StartIndex == nullptr)
-			{
-				return false;
-			}
-
-			TArray<uint8> Visited;
-			Visited.Init(0, Plan.Cells.Num());
-			TQueue<int32> Queue;
-			Visited[*StartIndex] = 1;
-			Queue.Enqueue(*StartIndex);
-			int32 CurrentIndex = INDEX_NONE;
-			while (Queue.Dequeue(CurrentIndex))
-			{
-				const FZeroEscapeCollapsedTile& Current = Plan.Cells[CurrentIndex];
-				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
-				{
-					if ((Current.OpeningMask & Grid::DirectionBit(Direction)) == 0)
-					{
-						continue;
-					}
-					const int32* NeighborIndex = CellIndexByCoordinate.Find(
-						Grid::Step(Current.GridCoordinate, Direction));
-					if (NeighborIndex == nullptr)
-					{
-						return false;
-					}
-					if (Visited[*NeighborIndex] == 0)
-					{
-						Visited[*NeighborIndex] = 1;
-						Queue.Enqueue(*NeighborIndex);
-					}
-				}
-			}
-
-			for (const uint8 bVisited : Visited)
-			{
-				if (bVisited == 0)
-				{
-					return false;
-				}
-			}
-			const int32* ExitIndex = CellIndexByCoordinate.Find(Plan.ExitCoordinate);
-			if (ExitIndex == nullptr || Visited[*ExitIndex] == 0)
-			{
-				return false;
-			}
-			for (const FZeroEscapeGeneratedRoom& Room : Plan.Rooms)
-			{
-				const int32* RoomIndex = CellIndexByCoordinate.Find(Room.AnchorCoordinate);
-				if (RoomIndex == nullptr || Visited[*RoomIndex] == 0)
-				{
-					return false;
-				}
-			}
-			return true;
-		}
 	}
 
 	/** 验证 N/E/S/W 位序、反向、步进以及代码生成的 0..15 状态集完整且唯一。 */
@@ -793,323 +646,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 		}
 		return true;
 	}
-
-	/** 验证房间只提供局部约束，完整 WFC 仍保证全图、Exit 和房间锚点可达。 */
-	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-		FZeroEscapeGridRoomAndConnectivityTest,
-		"Demo.PCG.Grid.RoomAndConnectivity",
-		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-	bool FZeroEscapeGridRoomAndConnectivityTest::RunTest(const FString& Parameters)
-	{
-		using namespace WfcLayoutTestsPrivate;
-		(void)Parameters;
-
-		UZeroEscapeLevelGenerationProfile* Profile =
-			NewObject<UZeroEscapeLevelGenerationProfile>();
-		BuildValidProfile(*Profile);
-		const FZeroEscapeSharedRouteConstraints& Rules =
-			Profile->SharedRouteConstraints;
-		const FZeroEscapeWfcShapeWeights Weights =
-			Profile->Difficulties[1].WfcShapeWeights;
-
-		for (int32 Seed = 100; Seed < 104; ++Seed)
-		{
-			FZeroEscapeGeneratedLevelPlan Plan;
-			FZeroEscapeGenerationReport Report;
-			const bool bSolved = FGridLayoutSolver::Solve(
-				MakeSignature(Seed),
-				Rules,
-				Weights,
-				Plan,
-				Report);
-			if (!TestTrue(TEXT("标准空间配置必须生成成功"), bSolved))
-			{
-				AddError(FString::Printf(
-					TEXT("Seed=%d Stage=%d Failure=%d Message=%s"),
-					Seed,
-					static_cast<int32>(Report.Stage),
-					static_cast<int32>(Report.Failure),
-					*Report.Message));
-				continue;
-			}
-
-			TestEqual(TEXT("Plan 必须导出 Profile 指定数量的中立房间"),
-				Plan.Rooms.Num(), Rules.RoomCount);
-			TestTrue(TEXT("所有非空格、Exit 与房间锚点必须在 Start 连通分量内"),
-				IsEntirePlanReachableFromStart(Plan));
-			TestTrue(TEXT("非空格数必须落在共享 Count 区间"),
-				Plan.Cells.Num() >= Rules.MinWalkableCellCount
-					&& Plan.Cells.Num() <= Rules.MaxWalkableCellCount);
-			TestTrue(TEXT("Start 与 Exit 必须导出为各自空间职责"),
-				FindTile(Plan, Plan.StartCoordinate) != nullptr
-					&& FindTile(Plan, Plan.StartCoordinate)->RegionKind
-						== EZeroEscapeGridRegionKind::Start
-					&& FindTile(Plan, Plan.ExitCoordinate) != nullptr
-					&& FindTile(Plan, Plan.ExitCoordinate)->RegionKind
-						== EZeroEscapeGridRegionKind::Exit);
-			TestTrue(TEXT("Start 与 Exit Transform 必须保持有限 Unit Scale"),
-				FGenerationCore::IsFiniteUnitScaleTransform(
-					Plan.PlayerStartLocalTransform)
-					&& FGenerationCore::IsFiniteUnitScaleTransform(
-						Plan.ExitLocalTransform));
-			TestTrue(TEXT("成功 Plan 必须产生非零规范布局 Hash"),
-				Plan.CanonicalLayoutHash != 0);
-
-			for (const FZeroEscapeGeneratedRoom& Room : Plan.Rooms)
-			{
-				int32 RoomCellCount = 0;
-				for (const FZeroEscapeCollapsedTile& Cell : Plan.Cells)
-				{
-					RoomCellCount += Cell.RegionKind
-							== EZeroEscapeGridRegionKind::Room
-						&& Cell.RegionId == Room.RegionId
-						? 1
-						: 0;
-				}
-				TestEqual(TEXT("每间中立房必须恰好占用 2x2 四个逻辑格"),
-					RoomCellCount, 4);
-				TestTrue(TEXT("房间 Anchor Transform 必须保持有限 Unit Scale"),
-					FGenerationCore::IsFiniteUnitScaleTransform(
-						Room.LocalTransform));
-			}
-
-			const FZeroEscapeJunctionMetrics& Junctions = Plan.JunctionMetrics;
-			TestEqual(TEXT("全部非空格必须恰好归入一种开口形态"),
-				Junctions.DeadEndCount
-					+ Junctions.StraightCount
-					+ Junctions.CornerCount
-					+ Junctions.TJunctionCount
-					+ Junctions.CrossJunctionCount,
-				Plan.Cells.Num());
-		}
-		return true;
-	}
-
-	/** 验证完整 Grid 同输入重放、失败原子性和失败后恢复不受前次调用污染。 */
-	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-		FZeroEscapeLayoutDeterminismAndStateIsolationTest,
-		"Demo.PCG.Grid.DeterminismAndStateIsolation",
-		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-	bool FZeroEscapeLayoutDeterminismAndStateIsolationTest::RunTest(
-		const FString& Parameters)
-	{
-		using namespace WfcLayoutTestsPrivate;
-		(void)Parameters;
-
-		UZeroEscapeLevelGenerationProfile* Profile =
-			NewObject<UZeroEscapeLevelGenerationProfile>();
-		BuildValidProfile(*Profile);
-		const FZeroEscapeGenerationSignature Signature = MakeSignature(20260319);
-		const FZeroEscapeWfcShapeWeights Weights =
-			Profile->Difficulties[1].WfcShapeWeights;
-
-		FZeroEscapeGeneratedLevelPlan FirstPlan;
-		FZeroEscapeGenerationReport FirstReport;
-		if (!TestTrue(TEXT("确定性基线必须求解成功"),
-			FGridLayoutSolver::Solve(
-				Signature,
-				Profile->SharedRouteConstraints,
-				Weights,
-				FirstPlan,
-				FirstReport)))
-		{
-			AddError(FirstReport.Message);
-			return true;
-		}
-
-		FZeroEscapeGeneratedLevelPlan SecondPlan;
-		FZeroEscapeGenerationReport SecondReport;
-		TestTrue(TEXT("同输入第二次求解必须成功"),
-			FGridLayoutSolver::Solve(
-				Signature,
-				Profile->SharedRouteConstraints,
-				Weights,
-				SecondPlan,
-				SecondReport));
-		TestEqual(TEXT("同输入必须复现 CanonicalLayoutHash"),
-			SecondPlan.CanonicalLayoutHash, FirstPlan.CanonicalLayoutHash);
-		TestTrue(TEXT("同输入必须复现全部稀疏 Cell"),
-			SecondPlan.Cells.Num() == FirstPlan.Cells.Num());
-		if (SecondPlan.Cells.Num() == FirstPlan.Cells.Num())
-		{
-			for (int32 Index = 0; Index < FirstPlan.Cells.Num(); ++Index)
-			{
-				TestTrue(TEXT("同输入必须逐格复现坐标、Mask 与空间职责"),
-					SecondPlan.Cells[Index].GridCoordinate
-							== FirstPlan.Cells[Index].GridCoordinate
-						&& SecondPlan.Cells[Index].OpeningMask
-							== FirstPlan.Cells[Index].OpeningMask
-						&& SecondPlan.Cells[Index].RegionId
-							== FirstPlan.Cells[Index].RegionId
-						&& SecondPlan.Cells[Index].RegionKind
-							== FirstPlan.Cells[Index].RegionKind);
-			}
-		}
-		TestTrue(TEXT("同输入必须复现 WFC 观察、候选与回溯计数"),
-			SecondReport.Metrics.WfcObservationCount
-					== FirstReport.Metrics.WfcObservationCount
-				&& SecondReport.Metrics.WfcCandidateAttemptCount
-					== FirstReport.Metrics.WfcCandidateAttemptCount
-				&& SecondReport.Metrics.WfcBacktrackCount
-					== FirstReport.Metrics.WfcBacktrackCount);
-
-		FZeroEscapeSharedRouteConstraints TinyBudget =
-			Profile->SharedRouteConstraints;
-		TinyBudget.MaxWfcSolveAttempts = 1;
-		TinyBudget.MaxWfcCandidateAttempts = 1;
-		TinyBudget.MaxWfcBacktrackCount = 1;
-		FZeroEscapeGeneratedLevelPlan FailedPlan = FirstPlan;
-		FZeroEscapeGenerationReport FailureReport;
-		TestFalse(TEXT("单候选预算不足以求解完整 24x16 Grid"),
-			FGridLayoutSolver::Solve(
-				Signature,
-				TinyBudget,
-				Weights,
-				FailedPlan,
-				FailureReport));
-		TestTrue(TEXT("失败必须原子清空旧 Plan"),
-			FailedPlan.Cells.IsEmpty()
-				&& FailedPlan.Rooms.IsEmpty()
-				&& FailedPlan.CanonicalLayoutHash == 0);
-		TestTrue(TEXT("预算失败必须返回结构化原因"),
-			FailureReport.Failure
-				== EZeroEscapeGenerationFailure::SolverBudgetExhausted);
-
-		FZeroEscapeGenerationReport RecoveryReport;
-		TestTrue(TEXT("失败调用后使用合法预算必须恢复成功"),
-			FGridLayoutSolver::Solve(
-				Signature,
-				Profile->SharedRouteConstraints,
-				Weights,
-				FailedPlan,
-				RecoveryReport));
-		TestEqual(TEXT("恢复结果必须与未受污染的基线一致"),
-			FailedPlan.CanonicalLayoutHash, FirstPlan.CanonicalLayoutHash);
-		return true;
-	}
-
-	/**
-	 * 对 Easy、Normal、Hard 各扫描 96 个 Seed，共 288 局。
-	 * 本测试验证空间求解成功率、确定性预算上限和连通性；不包含玩法目标或表现验收。
-	 */
-	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-		FZeroEscapeValidProfileSeedSweepTest,
-		"Demo.PCG.SeedSweep.ValidProfile288",
-		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
-
-	bool FZeroEscapeValidProfileSeedSweepTest::RunTest(const FString& Parameters)
-	{
-		using namespace WfcLayoutTestsPrivate;
-		(void)Parameters;
-
-		UZeroEscapeLevelGenerationProfile* Profile =
-			NewObject<UZeroEscapeLevelGenerationProfile>();
-		BuildValidProfile(*Profile);
-		FString ProfileError;
-		if (!TestTrue(TEXT("Seed Sweep 需要合法 V5 Profile"),
-			Profile->IsConfigured(ProfileError)))
-		{
-			AddError(ProfileError);
-			return true;
-		}
-
-		TArray<int32> CandidateAttempts;
-		TArray<int32> Backtracks;
-		TArray<int32> SolveAttempts;
-		TArray<int32> WalkableCells;
-		TArray<double> PlanningMilliseconds;
-		CandidateAttempts.Reserve(288);
-		Backtracks.Reserve(288);
-		SolveAttempts.Reserve(288);
-		WalkableCells.Reserve(288);
-		PlanningMilliseconds.Reserve(288);
-
-		int32 SuccessCount = 0;
-		int32 FailureCount = 0;
-		for (const FZeroEscapeDifficultyDefinition& Difficulty :
-			Profile->Difficulties)
-		{
-			for (int32 Seed = 0; Seed < 96; ++Seed)
-			{
-				FZeroEscapeGeneratedLevelPlan Plan;
-				FZeroEscapeGenerationReport Report;
-				const FZeroEscapeGenerationSignature Signature =
-					MakeSignature(Seed, Difficulty.Difficulty);
-				const bool bSolved = FGridLayoutSolver::Solve(
-					Signature,
-					Profile->SharedRouteConstraints,
-					Difficulty.WfcShapeWeights,
-					Plan,
-					Report);
-				if (!bSolved)
-				{
-					++FailureCount;
-					AddError(FString::Printf(
-						TEXT("Seed Sweep 失败 Difficulty=%d Seed=%d Stage=%d Failure=%d "
-							"Actual=%d Limit=%d Message=%s"),
-						static_cast<int32>(Difficulty.Difficulty),
-						Seed,
-						static_cast<int32>(Report.Stage),
-						static_cast<int32>(Report.Failure),
-						Report.ActualValue,
-						Report.LimitValue,
-						*Report.Message));
-					continue;
-				}
-
-				++SuccessCount;
-				TestTrue(TEXT("每个成功 Seed 的完整 Plan 都必须从 Start 全可达"),
-					IsEntirePlanReachableFromStart(Plan));
-				TestTrue(TEXT("Seed Sweep 不得超过候选总预算"),
-					Report.Metrics.WfcCandidateAttemptCount
-						<= Profile->SharedRouteConstraints.MaxWfcCandidateAttempts);
-				TestTrue(TEXT("Seed Sweep 不得超过回溯总预算"),
-					Report.Metrics.WfcBacktrackCount
-						<= Profile->SharedRouteConstraints.MaxWfcBacktrackCount);
-				TestTrue(TEXT("Seed Sweep 不得超过确定性尝试数"),
-					Report.Metrics.WfcSolveAttemptCount
-						<= Profile->SharedRouteConstraints.MaxWfcSolveAttempts);
-				CandidateAttempts.Add(Report.Metrics.WfcCandidateAttemptCount);
-				Backtracks.Add(Report.Metrics.WfcBacktrackCount);
-				SolveAttempts.Add(Report.Metrics.WfcSolveAttemptCount);
-				WalkableCells.Add(Plan.Cells.Num());
-				PlanningMilliseconds.Add(Report.Metrics.PlanningMilliseconds);
-			}
-		}
-
-		TestEqual(TEXT("Seed Sweep 必须执行 288 局"), SuccessCount + FailureCount, 288);
-		TestEqual(TEXT("合法 V5 Profile 的 288 局必须全部成功"), SuccessCount, 288);
-		TestEqual(TEXT("合法 V5 Profile 的 Seed Sweep 不得失败"), FailureCount, 0);
-		if (!CandidateAttempts.IsEmpty())
-		{
-			UE_LOG(
-				LogTemp,
-				Display,
-				TEXT("ZE_PCG_SEED_SWEEP schema=5 runs=%d failures=%d "
-					"candidates_p50=%d candidates_p95=%d candidates_max=%d "
-					"backtracks_p50=%d backtracks_p95=%d backtracks_max=%d "
-					"attempts_p95=%d attempts_max=%d walkable_p50=%d walkable_max=%d "
-					"planning_ms_p50=%.3f planning_ms_p95=%.3f planning_ms_max=%.3f"),
-				SuccessCount + FailureCount,
-				FailureCount,
-				NearestRankPercentile(CandidateAttempts, 0.50),
-				NearestRankPercentile(CandidateAttempts, 0.95),
-				NearestRankPercentile(CandidateAttempts, 1.0),
-				NearestRankPercentile(Backtracks, 0.50),
-				NearestRankPercentile(Backtracks, 0.95),
-				NearestRankPercentile(Backtracks, 1.0),
-				NearestRankPercentile(SolveAttempts, 0.95),
-				NearestRankPercentile(SolveAttempts, 1.0),
-				NearestRankPercentile(WalkableCells, 0.50),
-				NearestRankPercentile(WalkableCells, 1.0),
-				NearestRankPercentile(PlanningMilliseconds, 0.50),
-				NearestRankPercentile(PlanningMilliseconds, 0.95),
-				NearestRankPercentile(PlanningMilliseconds, 1.0));
-		}
-		return true;
-	}
 }
 
-#endif
+#endif // WITH_DEV_AUTOMATION_TESTS

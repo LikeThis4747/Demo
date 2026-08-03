@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGenerationTypes.h
- * 职责：定义运行时空间 PCG 的请求、逻辑网格、房间锚点、结果与失败报告。
- * 边界：这里只保存纯值；不引用具体素材，不执行 WFC，也不表达尚未确定的玩法目标。
+ * 职责：定义运行时空间 PCG 的请求、三维逻辑地址、完整结构、最终 Plan 与失败报告。
+ * 边界：这里只保存纯值；不引用具体素材，不执行 WFC，也不访问 World 或导航系统。
  */
 
 #pragma once
@@ -15,13 +15,21 @@
 /** 运行时安全上限用于拒绝误配置，不是策划调参项。 */
 namespace ZeroEscape::GenerationLimits
 {
-	inline constexpr int32 MaxRoomCount = 6;
 	inline constexpr int32 MaxGridCells = 1024;
 	inline constexpr int32 MinGridAxis = 6;
 	inline constexpr int32 MaxGridAxis = 64;
+	inline constexpr int32 MinFloorCount = 2;
+	inline constexpr int32 MaxFloorCount = 4;
+	inline constexpr int32 MaxWholeLayoutAttempts = 4;
+	inline constexpr int32 MaxStructureCandidateEvaluations = 250000;
+	inline constexpr int32 MaxWfcCandidateAttemptsPerFloor = 100000;
+	inline constexpr int32 MaxWfcBacktrackCountPerFloor = 25000;
+	inline constexpr int32 MaxWfcSolveAttemptsPerFloor = 10;
+	inline constexpr int32 MaxNavigationValidationPoints = 20;
+	inline constexpr double MaxNavigationBuildTimeoutSeconds = 10.0;
 }
 
-/** 一局开始时固定的难度；当前只选择 WFC 形态权重。 */
+/** 一局开始时固定的难度；决定楼层、额外楼梯、高天花板房间和路线目标等可调配置。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeDifficulty : uint8
 {
@@ -42,26 +50,18 @@ enum class EZeroEscapeOpenEdge : uint8
 };
 ENUM_CLASS_FLAGS(EZeroEscapeOpenEdge);
 
-/** 一个有效逻辑格在最终空间布局中的职责。 */
-UENUM(BlueprintType)
-enum class EZeroEscapeGridRegionKind : uint8
-{
-	Corridor = 0,
-	Room = 1,
-	Start = 2,
-	Exit = 3
-};
-
 /** 失败发生的生成阶段；自动化应断言枚举而不是解析日志文本。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeGenerationStage : uint8
 {
 	None = 0,
 	Configuration = 1,
-	GridLayout = 2,
+	StructurePlacement = 2,
 	WfcLayout = 3,
 	GlobalValidation = 4,
-	Instantiation = 5
+	Instantiation = 5,
+	NavigationBuild = 6,
+	NavigationValidation = 7
 };
 
 /** 空间生成公开入口的结构化失败原因。 */
@@ -71,11 +71,25 @@ enum class EZeroEscapeGenerationFailure : uint8
 	None = 0,
 	InvalidConfiguration = 1,
 	CapacityInsufficient = 2,
-	SolverInvariantViolation = 3,
-	RequiredRouteTooLong = 4,
-	InstantiationFailed = 5,
-	NoValidWfcSolution = 6,
-	SolverBudgetExhausted = 7
+	StructurePlacementFailed = 3,
+	SolverInvariantViolation = 4,
+	RequiredRouteTooLong = 5,
+	RequiredRouteTooShort = 6,
+	NoValidWfcSolution = 7,
+	SolverBudgetExhausted = 8,
+	GlobalConnectivityFailed = 9,
+	InstantiationFailed = 10,
+	NavigationBuildTimeout = 11,
+	NavigationValidationFailed = 12
+};
+
+/** 首版能够整体放置的三种项目结构；不是 UE 或 WFC 官方类型。 */
+UENUM(BlueprintType)
+enum class EZeroEscapeStructureKind : uint8
+{
+	TwoFloorStair = 0,
+	ThreeFloorStairwell = 1,
+	HighCeilingRoom = 2
 };
 
 /** 四方向帮助函数的唯一实现，WFC、Grid、结构展开和测试必须复用。 */
@@ -170,48 +184,111 @@ struct DEMO_API FZeroEscapeGenerationSignature
 	}
 };
 
-/** WFC 坍缩后的单格结果；Cells 按完整 Grid 稠密下标顺序导出非空格。 */
+/** 普通二维 WFC 生成的可走格；结构自带的格子保存在结构记录中。 */
 USTRUCT(BlueprintType)
-struct DEMO_API FZeroEscapeCollapsedTile
+struct DEMO_API FZeroEscapeGeneratedOrdinaryCell
 {
 	GENERATED_BODY()
 
-	/** 仅对当前 Plan 稳定，等于该格在 Cells 数组中的下标。 */
+	/** X/Y 是层内坐标，Z 是从 0 开始的楼层序号。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	int32 StableCellId = INDEX_NONE;
+	FIntVector Coordinate = FIntVector::ZeroValue;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FIntPoint GridCoordinate = FIntPoint::ZeroValue;
-
+	/** 只表示同层 North/East/South/West；跨层连接单独保存。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated",
 		meta = (Bitmask, BitmaskEnum = "/Script/Demo.EZeroEscapeOpenEdge"))
 	uint8 OpeningMask = 0;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	int32 RegionId = INDEX_NONE;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	EZeroEscapeGridRegionKind RegionKind = EZeroEscapeGridRegionKind::Corridor;
 };
 
-/** 玩法层以后可选择的中立房间；PCG 不决定房间里放什么。 */
+/** 楼梯或房间内部的一条无向通行连接。 */
 USTRUCT(BlueprintType)
-struct DEMO_API FZeroEscapeGeneratedRoom
+struct DEMO_API FZeroEscapeGeneratedCellConnection
 {
 	GENERATED_BODY()
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	int32 RegionId = INDEX_NONE;
+	FIntVector FirstCoordinate = FIntVector::ZeroValue;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FIntPoint AnchorCoordinate = FIntPoint::ZeroValue;
-
-	/** 相对 Generator.GeneratedRoot 的有限 Unit Scale Transform。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FTransform LocalTransform = FTransform::Identity;
+	FIntVector SecondCoordinate = FIntVector::ZeroValue;
 };
 
-/** 最终有效格中各种路口形态的观测计数，不是硬性配额。 */
+/** 一座已放置结构实际开放的连接口。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeGeneratedStructureOpening
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FName OpeningId = NAME_None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector StructureCoordinate = FIntVector::ZeroValue;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector ConnectedOrdinaryCoordinate = FIntVector::ZeroValue;
+};
+
+/** 每个楼梯落脚平台用于距离、表现和导航检查的唯一代表点。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeGeneratedStructureLanding
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FName LandingId = NAME_None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector Coordinate = FIntVector::ZeroValue;
+};
+
+/** 一座不可拆开的双层楼梯、三层楼梯间或高天花板房间。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeGeneratedStructure
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 StableStructureId = INDEX_NONE;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FName DefinitionId = NAME_None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	EZeroEscapeStructureKind Kind = EZeroEscapeStructureKind::TwoFloorStair;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector BaseCoordinate = FIntVector::ZeroValue;
+
+	/** 绕 Z 轴顺时针旋转 0、1、2、3 个 90 度。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	uint8 QuarterTurnCount = 0;
+
+	/** 使用稳定 FName，而不是依赖 AllowedOpeningSets 的数组下标。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FName ActiveOpeningSetId = NAME_None;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FIntVector> WalkableCells;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FIntVector> SolidCells;
+
+	/** 只包含本局真实存在楼层内的净空地址，不保存顶层以上的虚构地址。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FIntVector> ClearanceCells;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FZeroEscapeGeneratedCellConnection> InternalConnections;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FZeroEscapeGeneratedStructureOpening> Openings;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FZeroEscapeGeneratedStructureLanding> Landings;
+};
+
+/** 可走图中各类平面开口形态的观测计数，不是硬配额。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeJunctionMetrics
 {
@@ -233,6 +310,47 @@ struct DEMO_API FZeroEscapeJunctionMetrics
 	int32 CrossJunctionCount = 0;
 };
 
+/** 每层保证通关的进入点、离开点和验收结果。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeGeneratedFloorSummary
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 FloorIndex = INDEX_NONE;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector RequiredEnterCoordinate = FIntVector::ZeroValue;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector RequiredLeaveCoordinate = FIntVector::ZeroValue;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 OrdinaryWalkableCellCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 TotalWalkableCellCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 RequiredRouteLengthTiles = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 FarthestRouteLengthTiles = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	double SpatialSeparationRatio = 0.0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	double RouteCoverageRatio = 0.0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FZeroEscapeJunctionMetrics JunctionMetrics;
+
+	/** 连通无向图使用 E-V+1；0 表示无循环。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 CycleRank = 0;
+};
+
 /** 一次成功求解的纯空间结果，不包含 UObject、组件或第三方资源路径。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeGeneratedLevelPlan
@@ -246,31 +364,83 @@ struct DEMO_API FZeroEscapeGeneratedLevelPlan
 	int64 CanonicalLayoutHash = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 FloorCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	FIntPoint GridSize = FIntPoint::ZeroValue;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	double LogicalTileSizeCm = 0.0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	TArray<FZeroEscapeCollapsedTile> Cells;
+	double FloorHeightCm = 0.0;
+
+	/** 地址转局部位置所需高度；生成后不得重新回读可变 DataAsset。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	double AnchorHeightCm = 0.0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FIntPoint StartCoordinate = FIntPoint::ZeroValue;
+	TArray<FZeroEscapeGeneratedOrdinaryCell> OrdinaryCells;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FIntPoint ExitCoordinate = FIntPoint::ZeroValue;
+	TArray<FZeroEscapeGeneratedStructure> Structures;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FTransform PlayerStartLocalTransform = FTransform::Identity;
+	FIntVector PlayerSpawnCoordinate = FIntVector::ZeroValue;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	FTransform ExitLocalTransform = FTransform::Identity;
+	FIntVector PursuerSpawnCoordinate = FIntVector::ZeroValue;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
-	TArray<FZeroEscapeGeneratedRoom> Rooms;
+	FIntVector ExitCoordinate = FIntVector::ZeroValue;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FZeroEscapeGeneratedFloorSummary> Floors;
+
+	/** 下标是较低楼层，值是该相邻楼层对的必需双层楼梯 StableStructureId。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<int32> RequiredTwoFloorStairStableIdByLowerFloor;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 PlayerToExitRouteLengthTiles = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 VerticalTransitionCountOnShortestRoute = 0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	FZeroEscapeJunctionMetrics JunctionMetrics;
+
+	/** 整栋三维通行图的 E-V+1；成功 Plan 必须是单一连通分量。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 CycleRank = 0;
+};
+
+/** 单层二维 WFC 的搜索统计；只进入生成报告，不属于 Plan 或规范 Hash。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeFloorWfcMetrics
+{
+	GENERATED_BODY()
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 FloorIndex = INDEX_NONE;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcObservationCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcSolveAttemptCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcCandidateAttemptCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcPropagationCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcContradictionCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WfcBacktrackCount = 0;
 };
 
 /** 搜索、实例化和耗时指标；回溯恢复 Domain 时不得回滚这些累计值。 */
@@ -280,7 +450,32 @@ struct DEMO_API FZeroEscapeGenerationMetrics
 	GENERATED_BODY()
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 WholeLayoutAttemptCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 StructureCandidateEvaluationCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 GeneratedFloorCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 RequiredTwoFloorStairCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 AdditionalTwoFloorStairCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 ThreeFloorStairwellCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 HighCeilingRoomCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WalkableCellCount = 0;
+
+	/** 按 FloorIndex 升序保存；整栋累计字段仍保留，方便运行时快速读取。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	TArray<FZeroEscapeFloorWfcMetrics> FloorWfcMetrics;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WfcObservationCount = 0;
@@ -336,6 +531,18 @@ struct DEMO_API FZeroEscapeGenerationMetrics
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	double TotalMilliseconds = 0.0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 NavigationProjectionCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 NavigationPathTestCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int32 NavigationVisitedNodeCount = 0;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	double NavigationValidationMilliseconds = 0.0;
 };
 
 /** 公开生成入口的报告；失败必须保留首个不可恢复检查点。 */
@@ -344,13 +551,17 @@ struct DEMO_API FZeroEscapeGenerationReport
 {
 	GENERATED_BODY()
 
+	/** 只由 Runtime Generator 在最终终态写入；纯 Resolve/Solve 阶段保持为 0。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
+	int64 OperationId = 0;
+
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	EZeroEscapeGenerationStage Stage = EZeroEscapeGenerationStage::None;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	EZeroEscapeGenerationFailure Failure = EZeroEscapeGenerationFailure::None;
 
-	/** 与错误相关的房间、格子或结构类别 Id；无明确对象时为 INDEX_NONE。 */
+	/** 与错误相关的已生成结构稳定 Id；无明确结构时为 INDEX_NONE。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 RelatedStableId = INDEX_NONE;
 

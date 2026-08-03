@@ -3,44 +3,42 @@
 ## M0 基础设施与 UE 5.8
 
 - [x] C++ 优先单机 Demo、项目 Memory MCP、Git LFS 与内部工蜂备份
-- [x] UE 5.8 DemoEditor 历史构建成功；本地 UE Editor MCP 与官方 MCP 协同规范已归档
-- [ ] 当前工作区完整构建与自动化回归；GameFlow/UI 仅有 2026-07-31 白天构建产物证据，2026-08-03 夜间无新变更且未重跑完整构建
+- [x] UE 5.8 DemoEditor 构建与双 MCP 协同规范
+- [x] 2026-08-03 当前工作区完整构建成功；`Demo.PCG` 21/21、`Demo.GameFlow` 2/2
 - [ ] UE 5.8 下磁力 PIE 手感回归
 
 ## M1 实时 PCG 场景
 
 - [x] 全图 16 OpeningMask Grid-WFC；最低带权熵、Domain Trail、有界时间序回溯
 - [x] Count、MaxConsecutive、Connected/Tarjan 全局约束与确定性有限重试
-- [x] 600 cm 逻辑 Tile 展开为 300 cm Floor/Ceiling/Wall/Trim/Pillar，Runtime HISM 实例化
-- [x] HydroLab Presentation、Generation Profile、根材质 HISM Usage 与运行时顶灯
-- [x] 独立 Population 层；支持区域、Start/Exit 邻域规避、直走廊筛选、横向并排和 Z 偏移
-- [x] 历史 UE 5.8 构建、Demo.PCG 19/19 与 288/288 Seed Sweep
-- [x] Level0 三层静态样板 V2 第一轮精修：V1 冻结 1836、V2 保存重载 1857；外墙、斜栏杆、平台护栏、高厅和 Preview 标记已静态复核
-- [x] Level0 V2 楼梯导航原型与手感碰撞精修：中央塔 4 段、A/B/C/D 各 2 段；可见楼梯忽略 Pawn/导航，隐藏坡面独占 Pawn/Recast 并忽略 Camera/Visibility，端点约高出基准 0.5cm；Recast、真实 BP_Pursuer 与保存重载通过
-- [ ] 当前 18 项 Demo.PCG、完整构建与 Seed Sweep 回归基线
-- [ ] 至少 10 Seed 玩家路线、接缝、碰撞、净空与 Start→Exit 验收
-- [ ] Runtime 动态导航与真实追猎者多 Seed 寻路证据；Level0 当前导航体 X=-17600..22400 cm，不覆盖约 X=45000 cm 的 V2
-- [ ] Level0 V5 与 V2 的玩家手动实走验收，以及多层 WFC 数据合同与求解器方案确认；V2 Recast 与真实追猎者双向验证已通过
+- [x] 600 cm 逻辑 Tile 展开为 300 cm 结构并用 Runtime HISM 实例化
+- [x] HydroLab Presentation、Generation Profile、根材质 HISM Usage、运行时灯光与独立 Population
+- [x] 多层合同与正式实现：完整楼梯/高厅预放置、三维占用/净空、逐层二维 WFC、整栋逻辑连通、明确 Start/Pursuer/Exit、结构表现与动态导航门
+- [x] 2026-08-03 代表性 PIE：跨 World 换 Seed 后成功生成 3 层，11 点投射、10 条路径、24 个玩法对象
+- [ ] 玩家连续实走双层楼梯与贯通三层楼梯间，检查碰撞、净空、护栏、相机和最终视觉
+- [ ] 正式追逐中的真实追猎者跨层上/下楼；开局路径存在性检查不能替代此项
+- [ ] Easy/Normal/Hard 各至少 300 Seed 的成功率、楼层/楼梯/高厅分布、重试和耗时统计
 - [ ] 目标机软件 Lumen 与无 Lumen 室内补光双档验收
 
 ## M2 玩法压力与追猎者
 
 - [x] 追猎者 C++ Timer 状态机、追击/攻击时机、DataAsset 与 BP 装配
-- [x] Physics Control 局部受击源码、调参 DataAsset 与 BP 引用；历史日志确认 ready 和多肢体命中
-- [x] 最小 locomotion AnimBP/BlendSpace 资产存在且历史 Blueprint 状态 UpToDate
-- [x] 地刺 Timeline/Overlap/ApplyDamage 与玩家 HealthComponent 已接入；历史日志确认 100→0
+- [x] Physics Control 局部受击源码、调参 DataAsset 与历史多肢体命中
+- [x] 最小 locomotion AnimBP/BlendSpace 资产与历史 UpToDate 证据
+- [x] 地刺、玩家 HealthComponent 与生命归零广播接入正式胜负流程
 - [ ] 近战/方向受击、AttackProjectile Tag、磁力 Camera 通道与重复投掷边界的当前验收
 - [ ] Physics Control 连续至少 10 次命中、目标区域与恢复压力验收
-- [ ] 生命归零后的失败/重开闭环
 - [ ] 追猎者对地刺的免疫、受伤或受阻语义
 
 ## M3 正式一局流程
 
-- [ ] 阶段一已有白天构建与资产/日志证据：菜单 Seed 12345→单次 PCG→4 地刺/8 磁性物→玩家/追猎者就位；仍待玩家实操和联合验收后标记完成
-- [ ] 修正开局实际 separation_cm=1138 小于配置 1200 cm 的验证风险
-- [ ] 阶段二：正式 GameMode 尚无 Exit/生命归零结算、下一把/同 Seed 重开/回主菜单与暂停菜单入口
-- [ ] 阶段三：把胜负、重开与 UI 完成联合验收
+- [x] 主菜单 Seed/难度 → PCG → 玩家/追猎者/陷阱/资源装配
+- [x] GameState 局状态机、ExitVolume 判胜、Health 归零判负
+- [x] 结算界面下一把/重开/选择关卡/回主菜单、ESC 暂停菜单；2026-08-03 用户验收
+- [x] 多层生成完成导航验收后再装配玩法对象；可恢复失败确定性换 Seed 跨 World 重试
+- [ ] 生成失败重试、暂停/恢复、胜负、同 Seed 重开与新 Seed 下一把的多层联合回归
+- [ ] UI 审美统一打磨（排期最后）
 
 ## 当前边界
 
-Generator 拥有空间，Population 拥有批量玩法对象，正式 GameMode 负责开局编排。Level0 V2 是多层模块的静态设计样板，不是 Runtime WFC 已实现的证明；当前 1x1 同层 OpeningMask 仍需扩展多格垂直占用、保留区、带类型接口和求解后边界派生。静态截图不能替代玩家、导航与真实 AI 验收。
+正式多层实现已落入工作区并有构建、23 项自动化与代表性 PIE 证据，但仍属于“已实现、待可玩验收”。静态路径查询、自动化和夜间快照都不能替代玩家实际行走、真实追猎者追逐与用户验收。

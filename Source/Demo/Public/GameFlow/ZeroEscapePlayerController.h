@@ -29,6 +29,9 @@ class DEMO_API AZeroEscapePlayerController final : public APlayerController
 public:
 	virtual void SetupInputComponent() override;
 
+	/** Enables or blocks opening the pause menu while the round is being set up. */
+	void SetPauseMenuEnabled(bool bEnabled);
+
 	/** 关闭暂停菜单：移除界面+切回游戏输入+取消暂停。供 PauseMenuWidget 的"继续"调用。 */
 	void ClosePauseMenu();
 
@@ -48,4 +51,6 @@ private:
 	/** 当前暂停菜单实例。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UPauseMenuWidget> PauseMenuWidget;
+
+	bool bPauseMenuEnabled = true;
 };

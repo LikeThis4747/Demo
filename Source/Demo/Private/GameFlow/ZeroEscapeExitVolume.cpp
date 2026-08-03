@@ -58,7 +58,8 @@ void AZeroEscapeExitVolume::HandleGoalBeginOverlap(
 	bool /*bFromSweep*/,
 	const FHitResult& /*SweepResult*/)
 {
-	if (bReached || Cast<APawn>(OtherActor) == nullptr)
+	const APawn* Pawn = Cast<APawn>(OtherActor);
+	if (bReached || !IsValid(Pawn) || !Pawn->IsPlayerControlled())
 	{
 		return;
 	}

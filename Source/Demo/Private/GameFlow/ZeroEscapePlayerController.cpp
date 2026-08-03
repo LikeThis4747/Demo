@@ -31,6 +31,11 @@ void AZeroEscapePlayerController::SetupInputComponent()
 
 void AZeroEscapePlayerController::HandlePausePressed()
 {
+	if (!bPauseMenuEnabled)
+	{
+		return;
+	}
+
 	// 已有暂停菜单则忽略（防重复弹）。
 	if (PauseMenuWidget != nullptr)
 	{
@@ -54,9 +59,15 @@ void AZeroEscapePlayerController::HandlePausePressed()
 	PauseMenuWidget->AddToViewport();
 
 	FInputModeUIOnly InputMode;
+	InputMode.SetWidgetToFocus(PauseMenuWidget->TakeWidget());
 	SetInputMode(InputMode);
 	SetShowMouseCursor(true);
 	UGameplayStatics::SetGamePaused(this, true);
+}
+
+void AZeroEscapePlayerController::SetPauseMenuEnabled(const bool bEnabled)
+{
+	bPauseMenuEnabled = bEnabled;
 }
 
 void AZeroEscapePlayerController::ClosePauseMenu()

@@ -113,3 +113,22 @@
 - 拒绝拆分职责内聚的 Planner、新状态子系统/组件、加载界面、同 World 原地重生成、删除累计 Spawn 预算和弱化实际路径验收。
 - 复审版五片补丁顺序应用与 diff check 通过；UE 5.8 UHT、Demo 模块编译/DLL 生成通过；Demo.PCG 24/24、Demo.GameFlow 2/2 通过。完整 Build 仅受运行中 Editor 的引擎 DLL 文件锁影响。
 - 首轮审查已标记完成并归档；正式 Source/Content/Config 未应用该方案，真实资产、PIE、RecastNavMesh、玩家与追猎者验收仍待落盘授权后执行。
+
+
+## 2026-08-03 — 局流程三阶段闭环完成 + UI 文档整理
+
+- 暂停菜单用户验收通过：ESC 弹/关、继续、选择关卡开新局、返回主菜单；至此 GAME_LOOP_PLAN 三阶段（主菜单进游戏 / 结算重开暂停 / 胜负判定）全部完成。
+- 决策：保留内嵌 `ULevelSetupWidget`（中途换种子/难度不退主菜单），审美统一打磨排期到最后；用户确认老主菜单样式暂时可接受。
+- 正式文档落盘 `DOC/Design/UI/GAME_FLOW_UI.md`（闭环、类分工、胜负链、ESC 双路径、LevelSetup 复用、资产清单、踩坑）；`DOC/README.md` 同步索引；`claude/plans/` 三份规划稿标记完成留痕；`progress.md` M3 更新。
+- 分工确认：多层 PCG 落盘由另一对话负责，本对话不负责；下一候选任务为追猎者攻击玩家的伤害系统补齐。
+
+<!-- written by shiqiqiwang at 2026-08-03 17:05 UTC -->
+
+
+## 2026-08-04 — 夜间只读审计
+
+- 审计确认 2026-08-03 白天完成正式一局三阶段闭环，并将多层 PCG 正式实现落入当前工作区；开始时 main 与 origin/main 分歧 0/0，但实现、4 个 UE 资产及相关记录尚未提交。
+- 当前 Demo DLL 与日志证明完整构建成功；`Demo.PCG` 21/21、`Demo.GameFlow` 2/2，合计 23/23。代表性白天 PIE 经一次确定性换 Seed 后成功生成 3 层并完成 10 条导航路径和玩法装配。
+- 本地 UE Editor MCP 返回 pong=false，官方 UE5.8 MCP 工具未暴露；蓝图审计未执行，不推断关卡、蓝图、DataAsset、资产引用或配置。
+- 当前状态为“已实现、待验收”：下一步先玩家连续实走与真实追猎者跨层追逐，再联合回归，最后 Easy/Normal/Hard 各至少 300 Seed 校准。
+- 夜报：`claude/artifacts/nightly/2026-08-04.md`；本轮未修改项目代码、资产、配置或规范。

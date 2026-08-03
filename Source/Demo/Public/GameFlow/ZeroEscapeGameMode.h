@@ -2,10 +2,9 @@
 
 /**
  * @file ZeroEscapeGameMode.h
- * 职责：正式一局的开局编排——读取本局请求、驱动 PCG 生成、把追猎者放在起点、玩家放在起点两格外、放置出口。
- * 边界：不做局状态机（由 GameState 承接胜负真相）；不撒放陷阱/奖励、不接管追猎者 AI 或磁力手感；
- *       只在开局摆好人和出口，把胜负触发源（出口到达、玩家死亡）转发给 GameState，并在分出胜负时弹结算界面。
- * 状态 Owner：本类只在开局临时持有对 Generator、本局追猎者与出口的引用，不长期拥有局状态。
+ * 职责：锁输入并编排正式异步开局；Generator、角色、出口、Population 全部成功后才开放一局。
+ * 边界：GameState 仍拥有胜负真相；本类不求解 PCG、不接管追猎者 AI 或玩法对象行为。
+ * 状态 Owner：只拥有开局事务、生成对象引用与失败后的关卡切换收口。
  */
 
 #pragma once
@@ -13,14 +12,19 @@
 #include "CoreMinimal.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFlow/ZeroEscapeGameState.h"
+#include "PCG/ZeroEscapeGenerationTypes.h"
+#include "TimerManager.h"
 
 #include "ZeroEscapeGameMode.generated.h"
 
 class APawn;
 class APursuerCharacter;
+class AZeroEscapeGameplayPopulator;
 class AZeroEscapeExitVolume;
 class AZeroEscapeRuntimeLevelGenerator;
+class UHealthComponent;
 class UResultMenuWidget;
+class UWorld;
 
 /** 正式游戏关卡的 GameMode：开局读参数生成 PCG，并完成追猎者/玩家的初始摆放。 */
 UCLASS()
@@ -33,27 +37,29 @@ public:
 	AZeroEscapeGameMode();
 
 protected:
-	/** 读取 GameInstance 请求、驱动本局生成并摆放角色。 */
+	/** 请求前绑定最终事件并锁输入；直接运行正式游戏关卡也走同一异步流程。 */
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 按类型定位关卡中唯一的空间 Generator；缺失或多于一个都记为错误。 */
+	/** 按类型定位关卡中唯一的对象；缺失或多于一个都失败，不选择“第一个”。 */
 	AZeroEscapeRuntimeLevelGenerator* FindLevelGenerator() const;
+	AZeroEscapeGameplayPopulator* FindGameplayPopulator() const;
 
-	/** 生成成功后：追猎者放起点、玩家放两格外；任一步失败记录错误并返回 false。 */
+	/** Generator 的唯一最终回调；只接受当前 Generator 的最终报告，OperationId 负责去重。 */
+	UFUNCTION()
+	void HandleGenerationFinished(
+		bool bSuccess,
+		const FZeroEscapeGenerationReport& Report);
+
+	/** 读取 Plan 明确给出的玩家/追猎者出生点，不再从普通格二次猜选。 */
 	bool PlacePlayerAndPursuer(AZeroEscapeRuntimeLevelGenerator& Generator);
-
-	/** 从走廊候选中选出与起点直线距离达到下限、且额外距离最小的玩家出生点。 */
-	bool FindPlayerSpawnTransform(
-		AZeroEscapeRuntimeLevelGenerator& Generator,
-		const FTransform& StartTransform,
-		FTransform& OutPlayerTransform) const;
 
 	/** 生成成功后在出口坐标放置出口体积并激活；失败记录错误并返回 false。 */
 	bool PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator);
 
-	/** 绑定玩家生命归零事件，用于判负转发。 */
-	void BindPlayerDeath();
+	/** 必需绑定失败也让本局回滚，避免生成一局无法判负的半成品。 */
+	bool BindPlayerDeath();
 
 	/** 出口到达回调：转发判胜给 GameState。 */
 	UFUNCTION()
@@ -64,19 +70,26 @@ private:
 	void HandlePlayerDeath();
 
 	/** 订阅 GameState 状态变化，用于分出胜负时弹结算界面。 */
-	void BindRoundStateForUI();
+	bool BindRoundStateForUI();
 
 	/** 局状态变化回调：非进行中时创建结算界面、切 UI 输入并暂停。 */
 	UFUNCTION()
 	void HandleRoundStateChanged(EZeroEscapeRoundState NewState);
 
+	void SetGameplayInputLocked(bool bLocked) const;
+	bool TryScheduleAutomaticGenerationRetry(
+		const FZeroEscapeGenerationReport& Report);
+	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
+	void BeginSetupTransition(
+		const TCHAR* Reason,
+		const TSoftObjectPtr<UWorld>& TargetLevel);
+	void FinalizeSetupTransition();
+	void CleanupRoundActors();
+	void UnbindRuntimeDelegates();
+
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
 	TSubclassOf<APursuerCharacter> PursuerClass;
-
-	/** 玩家与起点（追猎者所在）的最小二维距离；1200 cm 等于当前两个 600 cm 逻辑格。 */
-	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round", meta = (ClampMin = "600.0", Units = "cm"))
-	double PlayerStartSeparationCm = 1200.0;
 
 	/** 本局生成的唯一追猎者；仅用于开局摆放记录，不承担后续状态管理。 */
 	UPROPERTY(Transient)
@@ -90,6 +103,14 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<AZeroEscapeExitVolume> SpawnedExit;
 
+	/** 失败时返回的主菜单软引用；由正式 GameMode 蓝图显式装配，不按关卡名猜测。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
+	TSoftObjectPtr<UWorld> MainMenuLevel;
+
+	/** 可恢复失败时重载的正式游戏关卡；显式软引用，禁止依赖关卡名或路径约定。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
+	TSoftObjectPtr<UWorld> GameLevel;
+
 	/** 结算界面 Widget 类；由正式 GameMode 蓝图指定。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
 	TSubclassOf<UResultMenuWidget> ResultMenuWidgetClass;
@@ -97,4 +118,25 @@ private:
 	/** 本局创建的结算界面实例。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UResultMenuWidget> ResultMenuWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AZeroEscapeRuntimeLevelGenerator> ActiveGenerator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AZeroEscapeGameplayPopulator> ActivePopulator;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UHealthComponent> BoundHealthComponent;
+
+	UPROPERTY(Transient)
+	TObjectPtr<AZeroEscapeGameState> BoundRoundState;
+
+	FTimerHandle SetupTransitionTimer;
+	TSoftObjectPtr<UWorld> PendingTransitionLevel;
+	FString PendingTransitionReason;
+	int64 LastHandledGenerationOperationId = 0;
+	bool bSetupTerminal = false;
+	bool bRoundStarted = false;
+	bool bSetupTransitionScheduled = false;
+	bool bEndingPlay = false;
 };

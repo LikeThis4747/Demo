@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGridLayoutSolver.h
- * 职责：声明单层 Grid/WFC 空间布局入口，以及逻辑 Tile 到 300 cm 结构件的展开契约。
- * 边界：不读取 UObject、不创建 Actor/HISM；中间态只存在于 Solve 调用栈。
+ * 职责：在调用方提供的固定格、禁用格和固定边上复用二维 FWfcSolver，并验收单层路线覆盖。
+ * 边界：不放置跨层结构，不读取 UObject，不创建表现对象，不修改二维 WFC 内部算法。
  */
 
 #pragma once
@@ -12,59 +12,63 @@
 
 #include "PCG/ZeroEscapeGenerationAssets.h"
 #include "PCG/ZeroEscapeGenerationTypes.h"
+#include "PCG/ZeroEscapeWfcSolver.h"
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** 规范结构件种类；运行时表现层据此选择具体 Mesh Binding。 */
-	enum class EStructurePieceKind : uint8
+	/** 所有楼层和完整布局重试共享；调用失败也不会自动刷新。 */
+	struct FZeroEscapeSharedWfcBudget
 	{
-		Floor,
-		Ceiling,
-		Wall,
-		WallTopTrim,
-		Pillar
+		int32 RemainingSolveAttempts = 0;
+		int32 RemainingCandidateAttempts = 0;
+		int32 RemainingBacktracks = 0;
+		int32 ConsumedSolveAttempts = 0;
+		int32 ConsumedCandidateAttempts = 0;
+		int32 ConsumedBacktracks = 0;
 	};
 
-	/** 逻辑 Tile 展开为结构件时使用的纯值坐标设置。 */
-	struct FCanonicalStructureSettings
+	/** 一层已经由完整结构投影完成的稠密二维求解输入。 */
+	struct FZeroEscapeConstrainedFloorInput
 	{
-		int32 LogicalTileSizeCm = 600;
-		int32 StructureUnitSizeCm = 300;
-		double FloorTopZCm = 0.0;
-		double WallBaseZCm = 0.0;
-		double CeilingPivotZCm = 300.0;
+		FZeroEscapeGenerationSignature Signature;
+		int32 WholeLayoutAttemptIndex = 0;
+		int32 FloorIndex = 0;
+		FIntPoint GridSize = FIntPoint::ZeroValue;
+		FIntPoint RequiredEnterCoordinate = FIntPoint::ZeroValue;
+		FIntPoint RequiredLeaveCoordinate = FIntPoint::ZeroValue;
+		TArray<FGridCellConstraint> Constraints;
+		TArray<uint8> StructureWalkableByCell;
+		int32 MinTotalWalkableCellCount = 1;
+		int32 MaxTotalWalkableCellCount = 1;
+		int32 MinOrdinaryWalkableCellCount = 1;
+		int32 MaxConsecutiveStraightTiles = 1;
+		int32 MaxSolveAttemptsForThisFloor = 1;
+		double MinRouteCoverageRatio = 0.0;
 	};
 
-	/** 一个已去重、不带资产引用的结构实例。 */
-	struct FStructureInstance
+	/** 一层成功叶子的稠密 OpeningMask 和同一次 BFS 派生指标。 */
+	struct FZeroEscapeConstrainedFloorResult
 	{
-		EStructurePieceKind Kind = EStructurePieceKind::Floor;
-		FTransform CanonicalLocalTransform = FTransform::Identity;
+		TArray<uint8> OpeningMaskByCell;
+		int32 OrdinaryWalkableCellCount = 0;
+		int32 TotalWalkableCellCount = 0;
+		int32 RequiredRouteLengthTiles = 0;
+		int32 FarthestRouteLengthTiles = 0;
+		double RouteCoverageRatio = 0.0;
 	};
 
-	/** Start/Exit/中立房间局部约束与完整 16-mask WFC 的纯值布局求解器。 */
 	class FGridLayoutSolver final
 	{
 	public:
 		/**
-		 * 成功时原子移交完整 Plan；失败时 OutPlan 保持空值。
-		 * 单棵树内由时间序回溯处理候选失败，分片预算耗尽时才使用同一 Seed 的下一确定性子流。
+		 * 成功时原子提交完整稠密结果；失败时 OutResult 为空。
+		 * 每棵二维搜索树只领取共享剩余预算的确定性份额，实际消耗立即从共享账本扣除。
 		 */
-		static bool Solve(
-			const FZeroEscapeGenerationSignature& Signature,
-			const FZeroEscapeSharedRouteConstraints& Rules,
+		static bool SolveConstrainedFloor(
+			const FZeroEscapeConstrainedFloorInput& Input,
 			const FZeroEscapeWfcShapeWeights& Weights,
-			FZeroEscapeGeneratedLevelPlan& OutPlan,
+			FZeroEscapeSharedWfcBudget& InOutBudget,
+			FZeroEscapeConstrainedFloorResult& OutResult,
 			FZeroEscapeGenerationReport& OutReport);
 	};
-
-	/**
-	 * 把已验证 Plan 展开为规范结构件。
-	 * 共享闭边以 300 cm Edge Key 去重；柱子只放在端点、转角和 T/Cross 墙图顶点。
-	 */
-	bool BuildCanonicalStructureInstances(
-		const FZeroEscapeGeneratedLevelPlan& Plan,
-		const FCanonicalStructureSettings& Settings,
-		TArray<FStructureInstance>& OutInstances,
-		FString& OutError);
 }

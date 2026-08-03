@@ -2,24 +2,28 @@
 
 /**
  * @file ZeroEscapeRuntimeLevelGenerator.h
- * 职责：拥有一局实时 Grid/WFC 生成事务、已提交结构/顶灯场景和空间结果查询。
- * 边界：算法留在 Private/PCG；蓝图只装配 Generation/Profile 两个 DataAsset、触发并读取结果。
+ * 职责：拥有一局多层 PCG 从纯数据、场景事务到正式导航验收的完整生命周期。
+ * 边界：二维/多层求解和表现展开留在 Private/PCG；玩法对象只读取最终 Ready 结果。
  */
 
 #pragma once
 
+#include "AI/Navigation/NavigationTypes.h"
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "PCG/ZeroEscapeGenerationTypes.h"
+#include "TimerManager.h"
 
 #include "ZeroEscapeRuntimeLevelGenerator.generated.h"
 
+class ANavigationData;
 class UHierarchicalInstancedStaticMeshComponent;
 class USceneComponent;
 class UZeroEscapeLevelGenerationProfile;
 class UZeroEscapePresentationProfile;
+struct FZeroEscapeSharedGenerationBudget;
 
-/** 当前同步生成事务实际使用的公开生命周期。 */
+/** WaitingForNavigation 是跨帧状态；GenerateFromRequest 返回 true 时不代表已经 Ready。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeRuntimeGenerationState : uint8
 {
@@ -27,11 +31,11 @@ enum class EZeroEscapeRuntimeGenerationState : uint8
 	Planning = 1,
 	Validating = 2,
 	Instantiating = 3,
-	Ready = 4,
-	Failed = 5
+	WaitingForNavigation = 4,
+	Ready = 5,
+	Failed = 6
 };
 
-/** 生成只允许在 BeginPlay 或明确函数调用发生，禁止 Construction Script 隐式改图。 */
 UENUM(BlueprintType)
 enum class EZeroEscapeGenerationTrigger : uint8
 {
@@ -47,10 +51,8 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
 	Report);
 
 /**
- * 实时非工具型整关 PCG 的世界边界 Actor。
- * 求解器先构造完整纯数据 Plan，Actor 再一次性提交 HISM 与顶灯 Actor；
- * 任一检查点失败都会回滚本次全部表现对象。
- * 玩法对象、敌人、陷阱和奖励不会在这里生成；其他系统只读取 Ready 后的 Start/Exit/Rooms。
+ * 正式运行时整关生成器；只有导航路径验收成功才广播成功并进入 Ready。
+ * 每个 Actor 生命周期只接受一次生成请求；需要重试时由 GameMode 重载关卡创建新 World。
  */
 UCLASS(Blueprintable)
 class DEMO_API AZeroEscapeRuntimeLevelGenerator : public AActor
@@ -61,123 +63,170 @@ public:
 	/** 创建无 Tick 的生成器和统一 GeneratedRoot。 */
 	AZeroEscapeRuntimeLevelGenerator();
 
-	/** 使用 DefaultRequest 同步生成；拒绝重入并通过 LastReport/Delegate 提供结果。 */
+	/** 使用 DefaultRequest 发起流程；true 只表示请求被接受。 */
 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
 	bool Generate();
 
-	/** 使用显式请求同步生成；请求一旦被接受，旧场景立即失效。 */
+	/** 发起显式请求；最终成功/失败只通过 OnGenerationFinished 和 Report.OperationId 判断。 */
 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
 	bool GenerateFromRequest(const FZeroEscapeGenerationRequest& Request);
 
-	/** 只检查线程、World、Construction Script、重入和 EndPlay 门禁，不预跑算法。 */
+	/** GameMode 在发起请求前提供真实追猎者 CDO 的导航代理尺寸。 */
+	bool ConfigurePursuerNavigationAgent(const FNavAgentProperties& AgentProperties);
+
+	/** 检查线程、World、Construction Script、单局一次、持久等待、重入和 EndPlay 门禁。 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool CanAcceptGenerationRequest() const;
 
-	/** 非生成期间幂等清空 HISM 与 Plan 并回到 Idle；忙碌时不修改状态。 */
+	/**
+	 * 非生成/等待期间幂等清空场景和 Plan。
+	 * 此操作不会解除单次请求门禁；再次生成必须重载关卡并创建新的生成器 Actor。
+	 */
 	UFUNCTION(BlueprintCallable, Category = "PCG", meta = (UnsafeDuringActorConstruction = "true"))
 	bool ClearGeneratedScene();
 
-	/** Ready 时返回玩家出生锚点世界 Transform。 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
-	bool GetGeneratedStartWorldTransform(FTransform& OutTransform) const;
+	bool GetGeneratedPlayerSpawnWorldTransform(FTransform& OutTransform) const;
 
-	/** Ready 时返回出口锚点世界 Transform。 */
+	UFUNCTION(BlueprintPure, Category = "PCG")
+	bool GetGeneratedPursuerSpawnWorldTransform(FTransform& OutTransform) const;
+
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool GetGeneratedExitWorldTransform(FTransform& OutTransform) const;
 
-	/** Ready 时按 RegionId 稳定顺序返回全部中立房间世界 Transform。 */
+	/**
+	 * 返回普通二维 WFC 格的玩法放置候选；完整结构、实体和净空从不进入此查询。
+	 * 保护区按同层曼哈顿距离计算，Transform 贴当前层地面且 X 轴沿走廊。
+	 * 返回 true 时，全部输出都已通过有限值、规范旋转与 Unit Scale 校验。
+	 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
-	bool GetGeneratedRoomWorldTransforms(TArray<FTransform>& OutTransforms) const;
-
-	/** Ready 时按区域语义返回候选放置点世界 Transform（地板高度）；可排除 Start/Exit 及相邻格、只留直走廊格。 */
-	UFUNCTION(BlueprintPure, Category = "PCG")
-	bool GetGeneratedCellWorldTransforms(
-		EZeroEscapeGridRegionKind RegionKind,
-		bool bExcludeStartExitAdjacent,
+	bool GetGeneratedOrdinaryGameplayCellWorldTransforms(
+		bool bAvoidSpawnExitNeighbors,
 		bool bStraightCorridorOnly,
 		TArray<FTransform>& OutTransforms) const;
 
-	/** Ready 时返回本局布局 Seed，供下游放置层复现确定性随机。 */
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	int32 GetGeneratedSeed() const;
 
-	/** 一次同步请求结束时广播；广播期间仍保持防重入锁。 */
+	UFUNCTION(BlueprintPure, Category = "PCG")
+	int64 GetActiveOperationId() const { return ActiveOperationId; }
+
+	/** 只在最终成功或确定失败时广播一次；导航等待中不广播。 */
 	UPROPERTY(BlueprintAssignable, Category = "PCG")
 	FZeroEscapeGenerationFinished OnGenerationFinished;
 
-	/** 最近一次已结束请求的结构化报告。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category = "PCG")
 	FZeroEscapeGenerationReport LastReport;
 
-	/** 只有完整 Plan 和全部组件成功提交后才进入 Ready。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Transient, Category = "PCG")
 	EZeroEscapeRuntimeGenerationState State = EZeroEscapeRuntimeGenerationState::Idle;
 
 protected:
-	/** 根据 TriggerMode 可选生成首局。 */
 	virtual void BeginPlay() override;
-
-	/** EndPlay 时无条件使 Plan、空间查询结果与组件失效。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 内部无条件回滚 HISM、顶灯和 Plan；调用者负责合法状态转换。 */
+	/** 销毁全部已登记 HISM/灯，清空 Plan，并取消导航等待。 */
 	void ClearGeneratedSceneInternal();
 
-	/** 把已验证逻辑 Plan 展开并事务式提交为五类结构 HISM 与可选顶灯。 */
+	/** 委托 StructureBuilder 提交 HISM，再原样生成普通格顶灯。 */
 	bool InstantiateValidatedPlan(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		FZeroEscapeGenerationReport& InOutReport);
 
-	/**
-	 * 按四方向方格的棋盘奇偶性选择约半数有效格并生成顶灯。
-	 * 每个成功 Spawn 的 Actor 会立即登记；任一失败由调用者走统一事务回滚。
-	 */
 	bool SpawnCeilingLights(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		FZeroEscapeGenerationReport& InOutReport);
 
-	/** 提交最终状态与单条结构化证据后广播完成事件。 */
-	void FinishGeneration(
-		bool bSuccess,
-		const FZeroEscapeGenerationReport& Report,
-		const FZeroEscapeGenerationRequest& Request);
+	/** 在实例化前解析本次追猎者对应的 Dynamic RecastNavMesh 并先绑定完成事件。 */
+	bool PrepareNavigationWait(
+		const FZeroEscapeGeneratedLevelPlan& Plan,
+		const FZeroEscapeSharedGenerationBudget& Budget,
+		FZeroEscapeGenerationReport& InOutReport);
 
-	/** 所有结构 HISM 与空间结果的共同局部空间。 */
+	/** HISM 全部提交后启动事件+Timer 等待；AddInstance 自己通知导航系统。 */
+	void StartNavigationWait();
+
+	UFUNCTION()
+	void HandleNavigationGenerationFinished(ANavigationData* NavigationData);
+
+	void HandleNavigationBuildTimeout(int64 CallbackOperationId);
+	void TryCompleteNavigationWait(int64 CallbackOperationId);
+
+	/** 最多 20 个点投射，再从追猎者点执行最多 19 次 Regular TestPathSync。 */
+	bool ValidateNavigationEndpoints(FZeroEscapeGenerationReport& InOutReport);
+
+	bool BuildNavigationValidationAddresses(
+		TArray<FIntVector>& OutAddresses,
+		FZeroEscapeGenerationReport& InOutReport) const;
+
+	/** 清理事件和 Timer；不销毁场景，也不改变最终 State。 */
+	void CancelNavigationWait();
+
+	/** 写最终状态、日志和唯一完成广播；广播期间保持防重入。 */
+	void FinishGeneration(bool bSuccess, const FZeroEscapeGenerationReport& Report);
+
+	FVector AddressToLocalLocation(
+		const FZeroEscapeGeneratedLevelPlan& Plan,
+		const FIntVector& Address,
+		bool bUseAnchorHeight) const;
+	bool AddressToWorldTransform(
+		const FZeroEscapeGeneratedLevelPlan& Plan,
+		const FIntVector& Address,
+		bool bUseAnchorHeight,
+		FTransform& OutTransform) const;
+
 	UPROPERTY(VisibleAnywhere, Category = "PCG")
 	TObjectPtr<USceneComponent> GeneratedRoot;
 
-	/** BeginPlay 自动生成或仅允许外部显式触发。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	EZeroEscapeGenerationTrigger TriggerMode = EZeroEscapeGenerationTrigger::ExplicitOnly;
 
-	/** Generate() 每次复制的稳定请求。 */
 	UPROPERTY(EditAnywhere, Category = "PCG", meta = (ShowOnlyInnerProperties))
 	FZeroEscapeGenerationRequest DefaultRequest;
 
-	/** 格网、房间、路线预算和难度 WFC 权重的唯一权威配置。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapeLevelGenerationProfile> GenerationProfile;
 
-	/** 五类规范结构与可选顶灯到当前素材的直接表现绑定。 */
 	UPROPERTY(EditAnywhere, Category = "PCG")
 	TObjectPtr<UZeroEscapePresentationProfile> PresentationProfile;
 
-	/** 最近一次成功提交的纯数据 Plan；失败或 Clear 后为空。 */
 	UPROPERTY(VisibleAnywhere, Transient, Category = "PCG")
 	FZeroEscapeGeneratedLevelPlan LastPlan;
 
-	/** 本次实例化事务已登记的全部 HISM；创建后立即入数组以保证可回滚。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UHierarchicalInstancedStaticMeshComponent>> GeneratedHismComponents;
 
-	/** 本次实例化事务已登记的全部顶灯；由 Generator 写入并在 Clear/失败/EndPlay 清空。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AActor>> GeneratedLightActors;
 
-	/** 同步重入锁；完成 Delegate 广播期间也保持为 true。 */
-	bool bGenerationInProgress = false;
+	/** 本次等待的目标导航数据；仅在 WaitingForNavigation 有效。 */
+	UPROPERTY(Transient)
+	TObjectPtr<ANavigationData> ExpectedNavigationData;
 
-	/** EndPlay 开始后永久置 true，阻止销毁回调再次生成。 */
+	FNavAgentProperties PursuerNavigationAgentProperties;
+	bool bHasPursuerNavigationAgent = false;
+
+	FZeroEscapeGenerationRequest ActiveRequest;
+	FZeroEscapeGenerationReport PendingReport;
+	double ActiveGenerationStartSeconds = 0.0;
+	int64 ActiveCanonicalLayoutHash = 0;
+	int32 ActiveOrdinaryCellCount = 0;
+	int32 ActiveStructureCount = 0;
+	double ActiveNavigationTimeoutSeconds = 10.0;
+	int32 ActiveMaxNavigationValidationPoints = 20;
+
+	FTimerHandle NavigationTimeoutTimer;
+	int64 NextOperationId = 1;
+	int64 ActiveOperationId = 0;
+	bool bNavigationWaitActive = false;
+	bool bNavigationGeometryRegistrationStarted = false;
+	bool bNavigationGeometrySubmitted = false;
+	bool bObservedNavigationBuild = false;
+	bool bReceivedTargetNavigationCompletion = false;
+	bool bNavigationWaitTerminal = false;
+	bool bGenerationInProgress = false;
+	/** 正式游戏关卡中一次 Actor 生命周期只接受一局；重开通过关卡切换创建新 World。 */
+	bool bHasAcceptedGenerationRequest = false;
 	bool bEndingPlay = false;
 };

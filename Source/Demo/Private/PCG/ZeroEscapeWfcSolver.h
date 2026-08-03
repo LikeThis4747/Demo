@@ -50,8 +50,6 @@ namespace ZeroEscape::LevelGeneration
 		EGridCellDomain Domain = EGridCellDomain::Outside;
 		uint8 RequiredOpenMask = 0;
 		uint8 RequiredClosedMask = 0;
-		int32 RegionId = INDEX_NONE;
-		EZeroEscapeGridRegionKind RegionKind = EZeroEscapeGridRegionKind::Corridor;
 	};
 
 	/**
