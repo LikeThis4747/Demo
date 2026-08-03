@@ -16,8 +16,8 @@
 
 - 允许修改：`D:\UE5projects\Demo\Content\Levels\Level0.umap`
 - AI 工作记录：`D:\UE5projects\Demo\claude\tasks\active\TASK-20260728-002-HydroLab错层房间装配验证.md`
-- 当日计划：`D:\UE5projects\Demo\DOC\DailyPlan\2026-07-28-HydroLab错层房间装配验证.md`
-- 导航补齐计划：`D:\UE5projects\Demo\DOC\DailyPlan\2026-07-29-Level0-PCG组合导航补齐.md`
+- 已归档的样板计划：`D:\UE5projects\Demo\DOC\DailyPlan\archive\Done-2026-07-28-HydroLab错层房间装配验证.md`
+- 已归档的导航补齐计划：`D:\UE5projects\Demo\DOC\DailyPlan\archive\Done-2026-07-29-Level0-PCG组合导航补齐.md`
 - 会话结束时按规范更新：`.ai-context/current-task.md`、`memory-bank/activeContext.md`、`memory-bank/daily.md`；形成稳定结论后再更新 `memory-bank/progress.md` 或 `memory-bank/decisions.md`。
 - 共享/潜在冲突：Level0 可能已有用户或其他任务的未保存修改；切图和保存前必须核对 Dirty 状态，不覆盖无关 Actor。
 - 并行拆分/依赖：不并行修改 Level0；Demonstration/Overview 仅只读分析，Level0 是唯一资产写入目标。
@@ -289,3 +289,12 @@
 - Level0 试验配方：V1 保持冻结，V2 先以 A 楼梯单模块验证；可见 `StairsB` 实例保留物理/其他通道但忽略 Pawn、关闭导航影响，隐藏坡面成为唯一 Pawn 平滑行走面并保留导航影响；坡面忽略 Camera/Visibility，端点由高出基准约 `4cm` 调整为仅高出约 `0.5cm`。转向平台继续使用真实水平地板，每一跑独立一块坡面。
 - 放大顺序：A 单模块写入 → 属性回读 → 仅保存 Level0 → 切图重载回读 → Recast/Pawn 通行复核；全部稳定后才扩展到其余 11 跑。若自定义通道响应再次无法跨重载保持，则立即回退该试验，不把半稳定配置批量写入。
 - 完成边界：AI/Recast 和静态属性只能证明技术通行；最终仍需用户在关闭玩家“保持水平地面速度”后手动实走，确认无突然加速、明显脚底悬空、平台接缝跳变或镜头异常回缩。
+
+### 2026-08-03 手感精修实际结果
+
+- [x] 先在 A 楼梯验证并保存/切图重载回读，随后扩展到 V2 全部 12 跑；V1 未改动。12/12 可见 `StairsB` 实例均持久化为 `Custom + QueryAndPhysics`、`WorldStatic`、`Pawn=Ignore`、`bCanEverAffectNavigation=false`，因此不再让角色胶囊和 Recast 同时接触逐级凸包。
+- [x] 12/12 `ZE_NavOnlyRamp` 均持久化为 `Custom + QueryAndPhysics`、`WorldStatic`、`Pawn=Block`、`Visibility/Camera=Ignore`、`bCanEverAffectNavigation=true`；它们是角色和 Recast 的唯一连续坡面，不会再触发相机弹簧臂回缩或遮挡可见性射线。
+- [x] 12 段坡面整体下压 `3.5cm`，保持 `34.9025°`、约 `(3.932318, 2.05, 0.08)` 的旋转/缩放和各自朝向；端点顶面由约高出基准 `4cm` 收敛到约 `0.5cm`。两跑之间仍使用真实水平平台，没有用斜面跨过 180° 转角。
+- [x] 保存并重新加载 `/Game/Levels/Level0` 后，12 个坡面标签、12 组可见楼梯响应、完整 Transform 与组件导航属性异常项均为 0；最终关卡非脏，`ZE_TemporaryNavTest` 临时 Actor 为 0。
+- [x] 当前配方下，真实 `BP_Pursuer` 完成 A 楼梯上行；中央四跑塔完成 G0→F3 上行，并在短预热反向测试中由 `Z≈1010` 到达 `Z≈109`，证明四跑下行连通。此前 A/B/C/D/T 原配方的双向路线证据继续保留，本轮额外验证针对新的碰撞职责拆分。
+- [ ] 玩家蓝图仍待用户手动关闭 Character Movement 的 `Maintain Horizontal Ground Velocity`（保持水平地面速度）并进行键盘往返。该项用于消除约 `34.90°` 坡面把 `450cm/s` 水平速度换算成约 `548.7cm/s` 沿坡速度的加速感；在用户实走通过前任务继续保持 Active。

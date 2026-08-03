@@ -59,7 +59,7 @@
 - `memory-bank/activeContext.md`
 - 本交接
 - `DOC/AI_WORK_GUIDELINES/PROJECT_ARCHITECTURE_RULES.md`
-- `DOC/DailyPlan/2026-07-27-PCG玩法对象放置层最小实现.md`
+- `DOC/DailyPlan/archive/Done-2026-07-27-PCG玩法对象放置层最小实现.md`
 - 当前 `Source/Demo/Public/PCG`、`Source/Demo/Private/PCG` 与 `Source/Demo/*/GameFlow/ZeroEscapePrototypeRoundFlow.*`
 
 默认不要读取 `claude/tasks/archive`、`claude/docs/archive`、`claude/handoffs/archive` 或 `claude/reviews/archive`；只有追溯历史决定时再按关键词定位单个文件。

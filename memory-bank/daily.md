@@ -19,6 +19,11 @@
 - 真实 `BP_Pursuer` 以 1.2 倍缩放完成 A/B 的 G0↔F2 和 C/D 的 F2↔F3 双向移动。C 首次下行因目标处于攻击距离而提前停在坡面尾部，移远目标后完整落到二层平面；测试结束后 PIE 停止、临时 Actor 为 0、Level0 非脏。
 - 隐藏坡面方法已记录到 PCG 模块表第 11 节：它是本项目 HydroLab 楼梯宏模块内部配方，不是 UE 官方概念或独立 WFC Tile。玩家手动连续实走仍待用户验收，任务保持 Active。
 
+- 玩家手感精修定位到双地面竞争与斜坡速度换算：可见 StairsB 的 22 个逐级凸包和隐藏坡面同时阻挡 Pawn；玩家 Maintain Horizontal Ground Velocity=true 会把 34.90° 坡面上的 450cm/s 水平速度换算为约 548.7cm/s 沿坡速度。
+- V2 全部 12 跑改为职责分离：可见楼梯 Custom、Pawn Ignore、导航关闭；隐藏坡面 Custom、Pawn Block、Visibility/Camera Ignore、导航开启。坡面整体下压 3.5cm，端点高出基准由约 4cm 收敛到约 0.5cm，转向仍使用真实水平平台。
+- 保存并重新加载 Level0 后 12/12 属性、Transform 与标签一致；精修后真实 BP_Pursuer 通过 A 上行及中央塔四跑上下行。PIE 停止、临时 Actor 为 0、Level0 非脏。
+- 玩家下一步是在 BP_ZeroEscapeCharacter 的 Character Movement 关闭 Maintain Horizontal Ground Velocity 后实走；Camera Lag 暂不启用。未修改蓝图、C++、第三方素材、其他地图或 Recast 全局配置。
+
 ## 2026-08-02
 
 - 夜间只读审计确认白天提交 `1571eba7` 只更新 Level0、HydroLab 任务卡与记忆；无 C++ 变更，开始时工作区无未提交文件、main 超前 origin/main 1 个提交。

@@ -1,5 +1,7 @@
 # 2026-07-31 UE5.8 官方 MCP 持久化连接
 
+> 状态：停止继续推进并归档；项目级配置和端点验证已完成，Codex/CodeBuddy 重载及 UE 重启后的同任务复测未完成，不记为验收通过。
+
 ## 目标
 
 为 Codex 与 CodeBuddy 增加项目级 UE5.8 官方 MCP 配置，并验证首次加载及 UE 重启后的会话恢复行为。
@@ -8,7 +10,7 @@
 
 - `D:\UE5projects\Demo\.codex\config.toml`
 - `D:\UE5projects\Demo\.vscode\mcp.json`
-- `D:\UE5projects\Demo\claude\tasks\active\TASK-20260731-001-UE官方MCP持久化连接.md`
+- `D:\UE5projects\Demo\claude\tasks\archive\TASK-20260731-001-UE官方MCP持久化连接.md`
 - 本计划文件
 
 不修改 UE C++、资产、引擎插件、端口和 `bAutoStartServer`。

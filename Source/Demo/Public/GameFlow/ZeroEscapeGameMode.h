@@ -2,9 +2,10 @@
 
 /**
  * @file ZeroEscapeGameMode.h
- * 职责：正式一局的开局编排——读取本局请求、驱动 PCG 生成、把追猎者放在起点、玩家放在起点两格外。
- * 边界：不做胜负判定、不撒放陷阱/奖励、不接管追猎者 AI 或磁力手感；只负责"开局把人和图摆好"。
- * 状态 Owner：本类只在开局临时持有对 Generator 与本局追猎者的引用，不长期拥有局状态。
+ * 职责：正式一局的开局编排——读取本局请求、驱动 PCG 生成、把追猎者放在起点、玩家放在起点两格外、放置出口。
+ * 边界：不做局状态机（由 GameState 承接胜负真相）；不撒放陷阱/奖励、不接管追猎者 AI 或磁力手感；
+ *       只在开局摆好人和出口，并把胜负触发源（出口到达、玩家死亡）转发给 GameState。
+ * 状态 Owner：本类只在开局临时持有对 Generator、本局追猎者与出口的引用，不长期拥有局状态。
  */
 
 #pragma once
@@ -16,6 +17,7 @@
 
 class APawn;
 class APursuerCharacter;
+class AZeroEscapeExitVolume;
 class AZeroEscapeRuntimeLevelGenerator;
 
 /** 正式游戏关卡的 GameMode：开局读参数生成 PCG，并完成追猎者/玩家的初始摆放。 */
@@ -45,6 +47,20 @@ private:
 		const FTransform& StartTransform,
 		FTransform& OutPlayerTransform) const;
 
+	/** 生成成功后在出口坐标放置出口体积并激活；失败记录错误并返回 false。 */
+	bool PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator);
+
+	/** 绑定玩家生命归零事件，用于判负转发。 */
+	void BindPlayerDeath();
+
+	/** 出口到达回调：转发判胜给 GameState。 */
+	UFUNCTION()
+	void HandleExitReached();
+
+	/** 玩家生命归零回调：转发判负给 GameState。 */
+	UFUNCTION()
+	void HandlePlayerDeath();
+
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
 	TSubclassOf<APursuerCharacter> PursuerClass;
@@ -56,4 +72,12 @@ private:
 	/** 本局生成的唯一追猎者；仅用于开局摆放记录，不承担后续状态管理。 */
 	UPROPERTY(Transient)
 	TObjectPtr<APursuerCharacter> SpawnedPursuer;
+
+	/** 出口 Actor 类；由正式 GameMode 蓝图在类默认值中指定。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
+	TSubclassOf<AZeroEscapeExitVolume> ExitActorClass;
+
+	/** 本局生成的出口体积；仅用于开局摆放记录。 */
+	UPROPERTY(Transient)
+	TObjectPtr<AZeroEscapeExitVolume> SpawnedExit;
 };

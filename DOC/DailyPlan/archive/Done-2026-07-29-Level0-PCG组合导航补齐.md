@@ -1,5 +1,7 @@
 # 2026-07-29 Level0 PCG 组合导航补齐
 
+> 状态：已被后续计划取代并归档；导航补齐和样板搭建记录已完成，剩余楼梯玩家实走由 2026-08-03 隐藏导航坡面计划继续跟踪。
+
 ## 目标
 
 在不改动 V3 HydroLab 积木、PCG/WFC 代码或第三方资产的前提下，让 Level0 现有导航边界同时覆盖原测试区与 `HydroLab_WFCBrickStudyV3/C_PlayableComposition`，为入口到 Deck135 错层平台的玩家/AI 验收建立导航前提。

@@ -26,3 +26,6 @@ PCG 必须“实时、非工具”：最终打包游戏在每局开始时根据 
 
 ## ADR-009：PCG 空间、批量放置与单局流程分层
 WFC/Generator 是空间结果的唯一 Owner；Population 只消费只读空间查询，放置可重复陷阱/奖励；GameFlow 消费 Start/Exit 和空间候选，负责唯一玩家、追猎者及胜负状态。新增玩法对象先判断属于“可重复放置”还是“唯一局状态”，不得默认扩张 Generator。
+
+## ADR-010：楼梯宏模块使用单一平滑 Pawn/Recast 行走面
+HydroLab 楼梯的可见踏步只负责外观与非 Pawn 碰撞，并忽略 Pawn、关闭导航影响；每一跑随宏模块生成一块不可见坡面，独占 Pawn 阻挡与 Recast 采样，同时忽略 Visibility/Camera。转向平台保持真实水平地板。玩家在当前约 34.90° 配方中关闭 Character Movement 的 Maintain Horizontal Ground Velocity，避免沿坡速度突增。该配方属于项目模块合同，不是 UE 官方 WFC 概念；最终仍需玩家手感验收。

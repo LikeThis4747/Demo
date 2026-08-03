@@ -265,7 +265,7 @@ Demonstration 的 `Part_1` 到 `Part_5` 是供应商场景分区，不等同于�
 - 坡面长度：`sqrt(322.5² + 225²) ≈ 393.23cm`。
 - 坡度：`atan(225 / 322.5) ≈ 34.90°`，低于当前 Recast 最大坡度 `44°`。
 - 净宽：`205cm`，相对两侧楼梯/栏杆各收进约 `10cm`。
-- 厚度：`8cm`；主体嵌入可见踏步，最终端点顶面只比楼层/平台基准高约 `4cm`。
+- 厚度：`8cm`；主体嵌入可见踏步，最终端点顶面只比楼层/平台基准高约 `0.5cm`。
 - 基础件：`/Engine/BasicShapes/Cube`，当前缩放约为 `(3.932318, 2.05, 0.08)`；旋转和中心点由该跑的起终点与朝向派生。
 - 每一跑单独生成一块坡面；180° 转向平台继续使用真实水平地板，禁止用一块斜面跨过两跑和转角。
 
@@ -273,8 +273,10 @@ Demonstration 的 `Part_1` 到 `Part_5` 是供应商场景分区，不等同于�
 
 - `bVisible=false`、`bHiddenInGame=true`；关闭反射捕获、实时天空捕获、反射、光追和投影。
 - `bCanEverAffectNavigation=true`。
-- 碰撞配置为 `InvisibleWall`，`CollisionEnabled=QueryAndPhysics`。这是当前保存、重载和角色试跑均稳定的配置。
+- 碰撞从 `InvisibleWall` 预设出发后冻结为实例级 `Custom`：`CollisionEnabled=QueryAndPhysics`、`ObjectType=WorldStatic`、`Pawn=Block`、`Visibility=Ignore`、`Camera=Ignore`。坡面是 Pawn 与 Recast 的唯一连续楼梯行走面，但不会让相机弹簧臂回缩或遮挡可见性射线。
 - 坡面必须位于楼梯宏模块自己的 `NavigationTrial` 子文件夹中，便于审计和定向回退。
+
+对应的可见 `StairsB` 实例仍保留渲染和非 Pawn 物理职责，但碰撞冻结为实例级 `Custom + QueryAndPhysics`、`ObjectType=WorldStatic`、`Pawn=Ignore`，并设置 `bCanEverAffectNavigation=false`。这样角色胶囊和 Recast 不再同时接触楼梯网格的 22 个逐级凸包与隐藏坡面，避免双地面竞争导致的脚底抖动。
 
 ### 11.3 WFC/PCG 数据边界
 
@@ -293,6 +295,12 @@ Demonstration 的 `Part_1` 到 `Part_5` 是供应商场景分区，不等同于�
 3. 使用真实玩家胶囊和真实 AI 角色双向走完整个连接，检查起收步、转角、平台唇边、护栏碰撞和脚底高度。
 4. 若出现问题，先修正该宏块的坡面高度、宽度、端点或护栏边界；不先修改全局 Recast 参数。
 
-截至 2026-08-03，Level0 的 V2 示例共有 12 段 `ZE_NavOnlyRamp`：中央三层塔 4 段，A/B/C/D 四座双层楼梯各 2 段。保存重载后 12/12 的隐藏、碰撞与导航属性一致，临时测试 Actor 为 0。真实 `/Game/ZeroEscape/Enemies/BP_Pursuer` 以 `1.2` 倍缩放完成：中央塔 G0↔F3，以及 A/B 的 G0↔F2、C/D 的 F2↔F3 双向移动。四座双层楼梯各一处约 `21.571cm` 的平台尾栏缺口也已收敛到约 `0.0000003cm` 的浮点误差。
+截至 2026-08-03，Level0 的 V2 示例共有 12 段 `ZE_NavOnlyRamp`：中央三层塔 4 段，A/B/C/D 四座双层楼梯各 2 段。保存重载后 12/12 的隐藏、碰撞与导航属性一致，临时测试 Actor 为 0。真实 `/Game/ZeroEscape/Enemies/BP_Pursuer` 以 `1.2` 倍缩放完成：中央塔 G0↔F3，以及 A/B 的 G0↔F2、C/D 的 F2↔F3 双向移动；在上述碰撞职责精修后，又复验了 A 上行与中央塔四跑双向移动。四座双层楼梯各一处约 `21.571cm` 的平台尾栏缺口也已收敛到约 `0.0000003cm` 的浮点误差。
 
 玩家键盘连续实走和第一人称/第三人称脚底观感仍保留为用户最终验收项；在该项通过前，任务保持 Active。
+
+### 11.5 玩家移动手感配套
+
+本节的 `Maintain Horizontal Ground Velocity` 是 Unreal Character Movement 组件的现有布尔属性，不是本项目自造术语。其含义是：角色上坡时维持水平面速度分量；在本例约 `34.90°` 的坡面上，`450cm/s` 的水平速度会对应约 `450 / cos(34.90°) ≈ 548.7cm/s` 的沿坡速度，因此会产生突然加速感。
+
+对当前玩家蓝图关闭该属性，让 `MaxWalkSpeed=450cm/s` 约束实际沿地面移动速度。先完成这一步与上述碰撞职责拆分，再判断是否需要相机平滑；当前相机弹簧臂的 Camera Lag 保持关闭，避免同时引入第二个手感变量。

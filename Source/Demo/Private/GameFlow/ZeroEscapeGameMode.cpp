@@ -10,8 +10,11 @@
 
 #include "Characters/PursuerCharacter.h"
 #include "Characters/ZeroEscapeCharacter.h"
+#include "Components/Attributes/HealthComponent.h"
 #include "EngineUtils.h"
+#include "GameFlow/ZeroEscapeExitVolume.h"
 #include "GameFlow/ZeroEscapeGameInstance.h"
+#include "GameFlow/ZeroEscapeGameState.h"
 #include "GameFlow/ZeroEscapePlayerController.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PawnMovementComponent.h"
@@ -70,11 +73,15 @@ void AZeroEscapeGameMode::BeginPlay()
 	}
 
 	if (Generator->State != EZeroEscapeRuntimeGenerationState::Ready
-		|| !PlacePlayerAndPursuer(*Generator))
+		|| !PlacePlayerAndPursuer(*Generator)
+		|| !PlaceExit(*Generator))
 	{
 		UE_LOG(LogZeroEscapeGameMode, Error,
 			TEXT("ZE_GAME_SETUP result=Failure reason=PlacementFailed"));
+		return;
 	}
+
+	BindPlayerDeath();
 }
 
 /** 遍历世界查找唯一 Generator；发现多于一个时选第一个并记录警告。 */
@@ -204,4 +211,68 @@ bool AZeroEscapeGameMode::FindPlayerSpawnTransform(
 	PlayerLocation.Z = StartLocation.Z;
 	OutPlayerTransform = FTransform(StartTransform.GetRotation(), PlayerLocation);
 	return true;
+}
+
+bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
+{
+	FTransform ExitTransform;
+	if (!Generator.GetGeneratedExitWorldTransform(ExitTransform))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Error,
+			TEXT("ZE_GAME_SETUP result=Failure reason=ExitTransformUnavailable"));
+		return false;
+	}
+
+	if (ExitActorClass == nullptr)
+	{
+		UE_LOG(LogZeroEscapeGameMode, Error,
+			TEXT("ZE_GAME_SETUP result=Failure reason=ExitActorClassUnset"));
+		return false;
+	}
+
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = this;
+	SpawnedExit = GetWorld()->SpawnActor<AZeroEscapeExitVolume>(
+		ExitActorClass,
+		ExitTransform,
+		SpawnParameters);
+	if (!IsValid(SpawnedExit))
+	{
+		return false;
+	}
+
+	SpawnedExit->OnExitReached.AddDynamic(this, &AZeroEscapeGameMode::HandleExitReached);
+	SpawnedExit->Activate(ExitTransform);
+	return true;
+}
+
+/** 找到玩家的生命组件，绑定归零事件用于判负转发。 */
+void AZeroEscapeGameMode::BindPlayerDeath()
+{
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (!IsValid(Player))
+	{
+		return;
+	}
+
+	if (UHealthComponent* Health = Player->FindComponentByClass<UHealthComponent>())
+	{
+		Health->OnHealthDepleted.AddDynamic(this, &AZeroEscapeGameMode::HandlePlayerDeath);
+	}
+}
+
+void AZeroEscapeGameMode::HandleExitReached()
+{
+	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
+	{
+		ZeState->SetRoundWon();
+	}
+}
+
+void AZeroEscapeGameMode::HandlePlayerDeath()
+{
+	if (AZeroEscapeGameState* ZeState = GetGameState<AZeroEscapeGameState>())
+	{
+		ZeState->SetRoundLost();
+	}
 }

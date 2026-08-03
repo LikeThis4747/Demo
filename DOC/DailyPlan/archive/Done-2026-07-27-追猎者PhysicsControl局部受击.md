@@ -1,5 +1,7 @@
 # 2026-07-27 追猎者 Physics Control 局部受击实施计划
 
+> 状态：已完成并归档；实现、构建、资产装配和用户 PIE 验收均已完成。
+
 ## 目标
 
 让现有 `BP_Pursuer` 在保持 Capsule、CharacterMovement 和 AI 权威的前提下，对真实模拟物理道具命中产生短时局部 Physics Control 反馈，并可靠恢复动画。

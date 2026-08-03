@@ -52,7 +52,7 @@ void UHealthComponent::HandleTakeAnyDamage(
 
 	if (CurrentHealth <= 0.0f)
 	{
-		// [临时] 死亡后果（倒地/失败/重开）尚未设计，此处仅记录归零时机。
-		UE_LOG(LogHealth, Warning, TEXT("%s 生命归零（死亡逻辑暂未实现）。"), *OwnerName);
+		UE_LOG(LogHealth, Warning, TEXT("%s 生命归零。"), *OwnerName);
+		OnHealthDepleted.Broadcast();
 	}
 }

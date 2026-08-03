@@ -26,5 +26,3 @@ DailyPlan 完成或被后续主线取代后，**移入 `DailyPlan/archive/` 子�
 
 - `DailyPlan/2026-08-03-PCG多层关卡正式实施计划.md`：多层 PCG 正式方案；先放完整楼梯和高天花板房间，再逐层运行现有二维 WFC，最后统一检查整栋可达性、楼梯间距和运行时导航。当前待用户批准，尚未进入代码落盘。
 - `DailyPlan/2026-08-03-Level0三层楼梯隐藏导航坡面验证.md`：在 Level0 的 V2 贯通三层楼梯间与四座双层楼梯中验证隐藏行走坡面、护栏闭合、Recast 与真实追猎者通行；不改第三方素材与 PCG/WFC 代码。
-- `DailyPlan/2026-07-29-Level0-PCG组合导航补齐.md`：已扩展 Level0 NavMeshBounds 并补齐 StairsC→Deck135 导航拼缝；五段静态路径通过，等待玩家连续实走与实际 AI 验收。
-- `DailyPlan/2026-07-27-PCG玩法对象放置层最小实现.md`：当前仍有并行改动的 Population/地刺放置层；PCG 完整代码分析已归档到 `Outputs/PCG/archive/`，下一项功能确认前不新建实施计划。

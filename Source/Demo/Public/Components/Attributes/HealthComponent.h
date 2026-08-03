@@ -3,7 +3,7 @@
 /**
  * @file HealthComponent.h
  * 职责：为所属 Actor 维护当前/最大生命，监听官方 OnTakeAnyDamage 并在受击时扣血与记录。
- * 边界：不做死亡流程、UI、再生、失衡或网络复制；不主动施加伤害，只结算被动受伤。
+ * 边界：不做死亡流程、UI、再生、失衡或网络复制；不主动施加伤害，只结算被动受伤；归零时广播 OnHealthDepleted。
  * 状态 Owner：唯一拥有 Owner 的生命数值。
  */
 
@@ -17,6 +17,9 @@
 class AController;
 class UDamageType;
 
+/** 生命归零事件；组件只广播事实，后果由外部（如 GameMode）处理。 */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnHealthDepleted);
+
 /** 事件驱动的最小生命组件：绑定 Owner 受伤委托，扣血并记录，暂不处理死亡后果。 */
 UCLASS(ClassGroup = (Attributes), meta = (BlueprintSpawnableComponent))
 class DEMO_API UHealthComponent final : public UActorComponent
@@ -26,6 +29,10 @@ class DEMO_API UHealthComponent final : public UActorComponent
 public:
 	/** 创建默认关闭 Tick 的生命组件。 */
 	UHealthComponent();
+
+	/** 生命归零时广播一次；由外部（GameMode）决定后果，组件自身不处理死亡。 */
+	UPROPERTY(BlueprintAssignable, Category = "属性|生命")
+	FOnHealthDepleted OnHealthDepleted;
 
 protected:
 	/** 初始化当前生命并绑定 Owner 的 OnTakeAnyDamage。 */
