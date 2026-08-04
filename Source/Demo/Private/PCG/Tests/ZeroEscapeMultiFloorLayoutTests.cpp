@@ -149,7 +149,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Input.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
 			Input.Signature.AlgorithmVersion = GAlgorithmVersion;
 			Input.Signature.GenerationProfileVersion = 6;
-			Input.Signature.PresentationVersion = 3;
 			Input.SharedRules.GridSize = FIntPoint(14, 10);
 			Input.SharedRules.LogicalTileSizeCm = 600.0;
 			Input.SharedRules.FloorHeightCm = 450.0;
@@ -241,9 +240,14 @@ namespace ZeroEscape::LevelGeneration::Tests
 			const FZeroEscapeGeneratedLevelPlan& Plan,
 			const FIntVector Start,
 			const FIntVector Goal,
-			int32& OutDistance)
+			int32& OutDistance,
+			int32* OutVerticalTransitions = nullptr)
 		{
 			OutDistance = INDEX_NONE;
+			if (OutVerticalTransitions != nullptr)
+			{
+				*OutVerticalTransitions = INDEX_NONE;
+			}
 			TSet<FIntVector> Walkable;
 			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
 			{
@@ -303,17 +307,14 @@ namespace ZeroEscape::LevelGeneration::Tests
 			}
 
 			TMap<FIntVector, int32> Distance;
+			TMap<FIntVector, int32> VerticalTransitions;
 			TQueue<FIntVector> Queue;
 			Distance.Add(Start, 0);
+			VerticalTransitions.Add(Start, 0);
 			Queue.Enqueue(Start);
 			FIntVector Current;
 			while (Queue.Dequeue(Current))
 			{
-				if (Current == Goal)
-				{
-					OutDistance = Distance[Current];
-					return true;
-				}
 				const TArray<FIntVector>* CurrentNeighbors = Neighbors.Find(Current);
 				if (CurrentNeighbors == nullptr)
 				{
@@ -321,14 +322,34 @@ namespace ZeroEscape::LevelGeneration::Tests
 				}
 				for (const FIntVector Neighbor : *CurrentNeighbors)
 				{
-					if (!Distance.Contains(Neighbor))
+					const int32 CandidateDistance = Distance[Current] + 1;
+					const int32 CandidateVertical = VerticalTransitions[Current]
+						+ (Current.Z == Neighbor.Z ? 0 : 1);
+					const int32* ExistingDistance = Distance.Find(Neighbor);
+					const int32* ExistingVertical = VerticalTransitions.Find(Neighbor);
+					if (ExistingDistance == nullptr
+						|| CandidateDistance < *ExistingDistance
+						|| (CandidateDistance == *ExistingDistance
+							&& CandidateVertical < *ExistingVertical))
 					{
-						Distance.Add(Neighbor, Distance[Current] + 1);
+						Distance.Add(Neighbor, CandidateDistance);
+						VerticalTransitions.Add(Neighbor, CandidateVertical);
 						Queue.Enqueue(Neighbor);
 					}
 				}
 			}
-			return false;
+			const int32* GoalDistance = Distance.Find(Goal);
+			const int32* GoalVertical = VerticalTransitions.Find(Goal);
+			if (GoalDistance == nullptr || GoalVertical == nullptr)
+			{
+				return false;
+			}
+			OutDistance = *GoalDistance;
+			if (OutVerticalTransitions != nullptr)
+			{
+				*OutVerticalTransitions = *GoalVertical;
+			}
+			return true;
 		}
 
 		bool HasOrdinaryOpeningTowardStructure(
@@ -481,12 +502,15 @@ namespace ZeroEscape::LevelGeneration::Tests
 				&& FloorContradictions
 					== FirstReport.Metrics.WfcContradictionCount);
 
-		TestTrue(TEXT("追猎者出生点必须是一楼普通可走格且不同于玩家"),
-			FirstPlan.PursuerSpawnCoordinate.Z == 0
+		TestTrue(TEXT("玩家必须是一楼普通可走格且不同于追猎者"),
+			FirstPlan.PlayerSpawnCoordinate.Z == 0
 				&& FirstPlan.PursuerSpawnCoordinate
 					!= FirstPlan.PlayerSpawnCoordinate
 				&& FindOrdinaryCell(
-					FirstPlan, FirstPlan.PursuerSpawnCoordinate) != nullptr);
+					FirstPlan, FirstPlan.PlayerSpawnCoordinate) != nullptr);
+		TestEqual(TEXT("追猎者必须占据一楼主路线起点"),
+			FirstPlan.PursuerSpawnCoordinate,
+			FirstPlan.Floors[0].RequiredEnterCoordinate);
 		int32 PlayerPursuerDistance = INDEX_NONE;
 		TestTrue(TEXT("独立整栋图必须能重算玩家到追猎者路线"),
 			ComputePlanRouteDistance(
@@ -494,19 +518,45 @@ namespace ZeroEscape::LevelGeneration::Tests
 				FirstPlan.PlayerSpawnCoordinate,
 				FirstPlan.PursuerSpawnCoordinate,
 				PlayerPursuerDistance));
-		TestTrue(TEXT("追猎者出生点必须满足实际路线距离而非二维直线距离"),
+		TestTrue(TEXT("玩家出生点必须满足实际路线距离而非二维直线距离"),
 			PlayerPursuerDistance * FirstPlan.LogicalTileSizeCm
 					+ UE_DOUBLE_SMALL_NUMBER
 				>= Input.Difficulty.MinPlayerPursuerRouteDistanceCm);
+		for (const FZeroEscapeGeneratedOrdinaryCell& Candidate : FirstPlan.OrdinaryCells)
+		{
+			if (Candidate.Coordinate.Z != 0
+				|| Candidate.Coordinate == FirstPlan.PursuerSpawnCoordinate)
+			{
+				continue;
+			}
+			int32 CandidateDistance = INDEX_NONE;
+			if (ComputePlanRouteDistance(
+					FirstPlan,
+					FirstPlan.PursuerSpawnCoordinate,
+					Candidate.Coordinate,
+					CandidateDistance)
+				&& CandidateDistance * FirstPlan.LogicalTileSizeCm
+						+ UE_DOUBLE_SMALL_NUMBER
+					>= Input.Difficulty.MinPlayerPursuerRouteDistanceCm)
+			{
+				TestTrue(TEXT("玩家必须是满足安全距离的最近普通格"),
+					PlayerPursuerDistance <= CandidateDistance);
+			}
+		}
 		int32 PlayerExitDistance = INDEX_NONE;
+		int32 PlayerExitVerticalTransitions = INDEX_NONE;
 		TestTrue(TEXT("独立整栋图必须能重算玩家到 Exit 路线"),
 			ComputePlanRouteDistance(
 				FirstPlan,
 				FirstPlan.PlayerSpawnCoordinate,
 				FirstPlan.ExitCoordinate,
-				PlayerExitDistance));
+				PlayerExitDistance,
+				&PlayerExitVerticalTransitions));
 		TestEqual(TEXT("Plan 保存的玩家到 Exit 最短路必须等于独立 BFS"),
 			FirstPlan.PlayerToExitRouteLengthTiles, PlayerExitDistance);
+		TestEqual(TEXT("等长最短路必须保存较少的跨层次数"),
+			FirstPlan.VerticalTransitionCountOnShortestRoute,
+			PlayerExitVerticalTransitions);
 
 		for (const FZeroEscapeGeneratedStructure& Structure : FirstPlan.Structures)
 		{

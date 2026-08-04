@@ -347,7 +347,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Plan.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
 			Plan.Signature.AlgorithmVersion = GAlgorithmVersion;
 			Plan.Signature.GenerationProfileVersion = 6;
-			Plan.Signature.PresentationVersion = 1;
 			Plan.FloorCount = 2;
 			Plan.GridSize = FIntPoint(6, 6);
 			Plan.LogicalTileSizeCm = 600.0;
@@ -589,9 +588,9 @@ namespace ZeroEscape::LevelGeneration::Tests
 		FZeroEscapeGenerationReport BaselineReport;
 		FZeroEscapeGenerationReport ReorderedReport;
 		TestTrue(TEXT("基准 Profile 必须成功解析"), FGenerationCore::ResolveGenerationInput(
-			*BaselineProfile, Request, 1, BaselineInput, BaselineReport));
+			*BaselineProfile, Request, BaselineInput, BaselineReport));
 		TestTrue(TEXT("仅重排数组的 Profile 必须成功解析"), FGenerationCore::ResolveGenerationInput(
-			*ReorderedProfile, Request, 1, ReorderedInput, ReorderedReport));
+			*ReorderedProfile, Request, ReorderedInput, ReorderedReport));
 		TestEqual(
 			TEXT("语义相同的 DataAsset 数组重排必须得到完全相同的规范化生成输入"),
 			BuildResolvedInputOrderFingerprint(ReorderedInput),
@@ -631,11 +630,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const int64 BaselineHash = FGenerationCore::ComputeCanonicalLayoutHash(Baseline);
 		TestTrue(TEXT("按 FName 词法顺序排列的混合大小写 ID 必须产生非零 Hash"),
 			BaselineHash != 0);
-
-		FZeroEscapeGeneratedLevelPlan PresentationOnly = Baseline;
-		PresentationOnly.Signature.PresentationVersion = 99;
-		TestEqual(TEXT("PresentationVersion 不进入纯布局 Hash"),
-			FGenerationCore::ComputeCanonicalLayoutHash(PresentationOnly), BaselineHash);
 
 		FZeroEscapeGeneratedLevelPlan DifferentOpeningSet = Baseline;
 		DifferentOpeningSet.Structures[0].ActiveOpeningSetId = TEXT("AnotherSet");

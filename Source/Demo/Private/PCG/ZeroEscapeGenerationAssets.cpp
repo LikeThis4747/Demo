@@ -768,15 +768,14 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 	FString& OutError) const
 {
 	OutError.Reset();
-	if (PresentationVersion <= 0
-		|| !FMath::IsFinite(StructureUnitSizeCm)
+	if (!FMath::IsFinite(StructureUnitSizeCm)
 		|| StructureUnitSizeCm <= 0.0
 		|| !FMath::IsNearlyEqual(LogicalTileSizeCm, StructureUnitSizeCm * 2.0)
 		|| !FMath::IsFinite(FloorTopZCm)
 		|| !FMath::IsFinite(WallBaseZCm)
 		|| !FMath::IsFinite(CeilingPivotZCm))
 	{
-		OutError = TEXT("Presentation 的版本、结构高度或 2:1 尺寸关系非法。");
+		OutError = TEXT("Presentation 的结构高度或 2:1 尺寸关系非法。");
 		return false;
 	}
 
@@ -819,6 +818,32 @@ bool UZeroEscapePresentationProfile::IsConfigured(
 				TEXT("结构 %s 的隐藏斜坡数量应为 %d。"),
 				*Recipe.DefinitionId.ToString(), RequiredRampCount);
 			return false;
+		}
+
+		if (bSpawnCeilingLights)
+		{
+			const int32 RequiredFixedLightCount =
+				Recipe.Kind == EZeroEscapeStructureKind::TwoFloorStair
+					? 2
+					: (Recipe.Kind == EZeroEscapeStructureKind::ThreeFloorStairwell ? 3 : 0);
+			if (Recipe.FixedLightRelativeTransforms.Num() < RequiredFixedLightCount)
+			{
+				OutError = FString::Printf(
+					TEXT("结构 %s 至少需要 %d 个固定灯位。"),
+					*Recipe.DefinitionId.ToString(), RequiredFixedLightCount);
+				return false;
+			}
+			for (const FTransform& LightTransform : Recipe.FixedLightRelativeTransforms)
+			{
+				if (!ZeroEscape::LevelGeneration::FGenerationCore::
+					IsFiniteUnitScaleTransform(LightTransform))
+				{
+					OutError = FString::Printf(
+						TEXT("结构 %s 包含非法的固定灯位 Transform。"),
+						*Recipe.DefinitionId.ToString());
+					return false;
+				}
+			}
 		}
 
 		auto ValidatePieceArray = [&OutError](

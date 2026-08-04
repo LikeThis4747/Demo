@@ -153,7 +153,7 @@ struct DEMO_API FZeroEscapeGenerationRequest
 	EZeroEscapeDifficulty Difficulty = EZeroEscapeDifficulty::Normal;
 };
 
-/** 记录一次结果由哪些稳定输入产生；表现版本不进入纯布局随机消费。 */
+/** 记录一次结果由哪些稳定布局输入产生。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeGenerationSignature
 {
@@ -171,16 +171,12 @@ struct DEMO_API FZeroEscapeGenerationSignature
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 GenerationProfileVersion = 0;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 PresentationVersion = 0;
-
 	bool operator==(const FZeroEscapeGenerationSignature& Other) const
 	{
 		return Seed == Other.Seed
 			&& Difficulty == Other.Difficulty
 			&& AlgorithmVersion == Other.AlgorithmVersion
-			&& GenerationProfileVersion == Other.GenerationProfileVersion
-			&& PresentationVersion == Other.PresentationVersion;
+			&& GenerationProfileVersion == Other.GenerationProfileVersion;
 	}
 };
 

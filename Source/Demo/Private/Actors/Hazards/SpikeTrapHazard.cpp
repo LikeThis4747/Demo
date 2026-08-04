@@ -8,6 +8,7 @@
 
 #include "Actors/Hazards/SpikeTrapHazard.h"
 
+#include "Characters/PursuerCharacter.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Curves/CurveFloat.h"
@@ -28,14 +29,17 @@ ASpikeTrapHazard::ASpikeTrapHazard()
 	// 格栅地板固定不动；刺网格运行时升降，必须为 Movable。父子 Mobility 需一致，故统一 Movable。
 	GrateMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("GrateMesh"));
 	GrateMesh->SetMobility(EComponentMobility::Movable);
+	GrateMesh->SetCanEverAffectNavigation(false);
 	GrateMesh->SetupAttachment(SceneRoot);
 
 	SpikeMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("SpikeMesh"));
 	SpikeMesh->SetMobility(EComponentMobility::Movable);
+	SpikeMesh->SetCanEverAffectNavigation(false);
 	SpikeMesh->SetupAttachment(SceneRoot);
 
 	HurtZone = CreateDefaultSubobject<UBoxComponent>(TEXT("HurtZone"));
 	HurtZone->SetMobility(EComponentMobility::Movable);
+	HurtZone->SetCanEverAffectNavigation(false);
 	HurtZone->SetupAttachment(SceneRoot);
 	// 按格栅 224x224 的占位默认；放置后按实际微调，使地面走过必触发、跳跃可越过。
 	HurtZone->SetBoxExtent(FVector(112.0f, 112.0f, 40.0f));
@@ -51,6 +55,8 @@ ASpikeTrapHazard::ASpikeTrapHazard()
 void ASpikeTrapHazard::BeginPlay()
 {
 	Super::BeginPlay();
+	// 尖刺只负责表现；Pawn 穿行与伤害统一由 HurtZone 处理，避免追猎者被升降网格卡住。
+	SpikeMesh->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 
 	// 以蓝图中摆好的刺相对位置为“伸出位”基准，升降在此基础上做 Z 偏移，不依赖网格自带坐标。
 	SpikeBaseLocation = SpikeMesh->GetRelativeLocation();
@@ -147,7 +153,7 @@ void ASpikeTrapHazard::HandleHurtZoneBeginOverlap(
 	bool /*bFromSweep*/,
 	const FHitResult& /*SweepResult*/)
 {
-	if (!IsValid(OtherActor))
+	if (!IsValid(OtherActor) || OtherActor->IsA<APursuerCharacter>())
 	{
 		return;
 	}

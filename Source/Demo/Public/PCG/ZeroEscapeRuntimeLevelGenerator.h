@@ -129,13 +129,14 @@ private:
 	/** 销毁全部已登记 HISM/灯，清空 Plan，并取消导航等待。 */
 	void ClearGeneratedSceneInternal();
 
-	/** 委托 StructureBuilder 提交 HISM，再原样生成普通格顶灯。 */
+	/** 委托 StructureBuilder 提交 HISM，再生成普通格顶灯与结构平台固定灯。 */
 	bool InstantiateValidatedPlan(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		FZeroEscapeGenerationReport& InOutReport);
 
-	bool SpawnCeilingLights(
+	bool SpawnConfiguredLights(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
+		TConstArrayView<FTransform> FixedLightLocalTransforms,
 		FZeroEscapeGenerationReport& InOutReport);
 
 	/** 在实例化前解析本次追猎者对应的 Dynamic RecastNavMesh 并先绑定完成事件。 */

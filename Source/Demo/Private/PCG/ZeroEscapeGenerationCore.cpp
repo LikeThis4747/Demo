@@ -126,19 +126,14 @@ namespace ZeroEscape::LevelGeneration
 	bool FGenerationCore::ResolveGenerationInput(
 		const UZeroEscapeLevelGenerationProfile& Profile,
 		const FZeroEscapeGenerationRequest& Request,
-		const int32 PresentationVersion,
 		FResolvedGenerationInput& OutInput,
 		FZeroEscapeGenerationReport& OutReport)
 	{
 		OutInput = {};
 		OutReport = {};
 		FString Error;
-		if (!Profile.IsConfigured(Error) || PresentationVersion <= 0)
+		if (!Profile.IsConfigured(Error))
 		{
-			if (Error.IsEmpty())
-			{
-				Error = TEXT("PresentationVersion 必须大于 0。");
-			}
 			return GenerationCorePrivate::FailCore(
 				OutReport,
 				EZeroEscapeGenerationStage::Configuration,
@@ -241,7 +236,6 @@ namespace ZeroEscape::LevelGeneration
 		OutInput.Signature.Difficulty = Request.Difficulty;
 		OutInput.Signature.AlgorithmVersion = GAlgorithmVersion;
 		OutInput.Signature.GenerationProfileVersion = Profile.ProfileVersion;
-		OutInput.Signature.PresentationVersion = PresentationVersion;
 		return true;
 	}
 

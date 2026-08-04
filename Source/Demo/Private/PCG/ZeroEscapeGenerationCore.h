@@ -14,8 +14,8 @@
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** V6 引入多层完整结构与三维通行结果，确定性版本随之递增。 */
-	inline constexpr int32 GAlgorithmVersion = 6;
+	/** V7 明确追猎者占主路线起点、玩家按安全路线距离就近出生。 */
+	inline constexpr int32 GAlgorithmVersion = 7;
 
 	/** 相互隔离的随机子流；结构数量或放置变化不会扰动 WFC 的随机序列。 */
 	enum class ERandomDomain : uint32
@@ -49,7 +49,6 @@ namespace ZeroEscape::LevelGeneration
 		static bool ResolveGenerationInput(
 			const UZeroEscapeLevelGenerationProfile& Profile,
 			const FZeroEscapeGenerationRequest& Request,
-			int32 PresentationVersion,
 			FResolvedGenerationInput& OutInput,
 			FZeroEscapeGenerationReport& OutReport);
 

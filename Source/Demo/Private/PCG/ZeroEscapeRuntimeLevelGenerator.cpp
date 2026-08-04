@@ -9,6 +9,8 @@
 #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Components/LightComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -211,7 +213,6 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 	if (!LevelGen::FGenerationCore::ResolveGenerationInput(
 			*GenerationProfile,
 			Request,
-			PresentationProfile->PresentationVersion,
 			Input,
 			Report))
 	{
@@ -343,11 +344,13 @@ bool AZeroEscapeRuntimeLevelGenerator::InstantiateValidatedPlan(
 			BuildResult.RelatedStableId,
 			MoveTemp(BuildResult.Error));
 	}
-	return SpawnCeilingLights(Plan, InOutReport);
+	return SpawnConfiguredLights(
+		Plan, BuildResult.FixedLightLocalTransforms, InOutReport);
 }
 
-bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
+bool AZeroEscapeRuntimeLevelGenerator::SpawnConfiguredLights(
 	const FZeroEscapeGeneratedLevelPlan& Plan,
+	const TConstArrayView<FTransform> FixedLightLocalTransforms,
 	FZeroEscapeGenerationReport& InOutReport)
 {
 	if (!PresentationProfile->bSpawnCeilingLights)
@@ -364,7 +367,7 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
 			EZeroEscapeGenerationStage::Instantiation,
 			EZeroEscapeGenerationFailure::InstantiationFailed,
 			INDEX_NONE,
-			TEXT("生成顶灯时 World、GeneratedRoot 或灯 Actor 类无效。"));
+			TEXT("生成灯光时 World、GeneratedRoot 或灯 Actor 类无效。"));
 	}
 
 	int32 ParityCellCounts[2] = {0, 0};
@@ -401,6 +404,55 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
 	SpawnParameters.Owner = this;
 	SpawnParameters.SpawnCollisionHandlingOverride =
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	auto SpawnLight = [this, World, LightActorClass, &SpawnParameters, &InOutReport](
+		const FTransform& LocalTransform) -> bool
+	{
+		FTransform WorldTransform;
+		if (!ConvertLocalToWorld(*GeneratedRoot, LocalTransform, WorldTransform))
+		{
+			return FailReport(
+				InOutReport,
+				EZeroEscapeGenerationStage::Instantiation,
+				EZeroEscapeGenerationFailure::InstantiationFailed,
+				INDEX_NONE,
+				TEXT("灯光局部 Transform 无法转换到世界空间。"));
+		}
+
+		AActor* Light = World->SpawnActor<AActor>(
+			LightActorClass, WorldTransform, SpawnParameters);
+		if (!IsValid(Light))
+		{
+			return FailReport(
+				InOutReport,
+				EZeroEscapeGenerationStage::Instantiation,
+				EZeroEscapeGenerationFailure::InstantiationFailed,
+				INDEX_NONE,
+				TEXT("生成灯光 Actor 失败。"));
+		}
+
+		TInlineComponentArray<UPrimitiveComponent*> PrimitiveComponents;
+		Light->GetComponents(PrimitiveComponents);
+		for (UPrimitiveComponent* PrimitiveComponent : PrimitiveComponents)
+		{
+			if (IsValid(PrimitiveComponent))
+			{
+				PrimitiveComponent->SetCanEverAffectNavigation(false);
+			}
+		}
+
+		TInlineComponentArray<ULightComponent*> LightComponents;
+		Light->GetComponents(LightComponents);
+		for (ULightComponent* LightComponent : LightComponents)
+		{
+			if (IsValid(LightComponent))
+			{
+				LightComponent->SetMobility(EComponentMobility::Movable);
+			}
+		}
+		GeneratedLightActors.Add(Light);
+		return true;
+	};
+
 	for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
 	{
 		const int32 Parity = (Cell.Coordinate.X + Cell.Coordinate.Y) & 1;
@@ -418,29 +470,18 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnCeilingLights(
 				+ PresentationProfile->CeilingPivotZCm);
 		const FTransform LocalTransform =
 			PresentationProfile->CeilingLightCellTransform * FTransform(CellCenter);
-		FTransform WorldTransform;
-		if (!ConvertLocalToWorld(*GeneratedRoot, LocalTransform, WorldTransform))
+		if (!SpawnLight(LocalTransform))
 		{
-			return FailReport(
-				InOutReport,
-				EZeroEscapeGenerationStage::Instantiation,
-				EZeroEscapeGenerationFailure::InstantiationFailed,
-				INDEX_NONE,
-				TEXT("顶灯局部 Transform 无法转换到世界空间。"));
+			return false;
 		}
+	}
 
-		AActor* Light = World->SpawnActor<AActor>(
-			LightActorClass, WorldTransform, SpawnParameters);
-		if (!IsValid(Light))
+	for (const FTransform& LocalTransform : FixedLightLocalTransforms)
+	{
+		if (!SpawnLight(LocalTransform))
 		{
-			return FailReport(
-				InOutReport,
-				EZeroEscapeGenerationStage::Instantiation,
-				EZeroEscapeGenerationFailure::InstantiationFailed,
-				INDEX_NONE,
-				TEXT("生成顶灯 Actor 失败。"));
+			return false;
 		}
-		GeneratedLightActors.Add(Light);
 	}
 	return true;
 }

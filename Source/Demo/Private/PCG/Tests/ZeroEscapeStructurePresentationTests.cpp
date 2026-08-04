@@ -78,6 +78,21 @@ namespace ZeroEscape::LevelGeneration::Tests
 			return Recipe;
 		}
 
+		FZeroEscapeStructurePresentationRecipe MakeTwoFloorStairRecipe(
+			UStaticMesh* Mesh,
+			const FTransform& FixedLightTransform)
+		{
+			FZeroEscapeStructurePresentationRecipe Recipe;
+			Recipe.DefinitionId = TEXT("Stair");
+			Recipe.Kind = EZeroEscapeStructureKind::TwoFloorStair;
+			Recipe.CommonPieces.Add(MakePiece(TEXT("StairMarker"), Mesh));
+			FZeroEscapeStructureOpeningSetPresentation& OpeningSet =
+				Recipe.OpeningSets.AddDefaulted_GetRef();
+			OpeningSet.OpeningSetId = TEXT("Default");
+			Recipe.FixedLightRelativeTransforms.Add(FixedLightTransform);
+			return Recipe;
+		}
+
 		FZeroEscapeGeneratedLevelPlan MakePlan()
 		{
 			FZeroEscapeGeneratedLevelPlan Plan;
@@ -120,6 +135,20 @@ namespace ZeroEscape::LevelGeneration::Tests
 			{
 				Structure.SolidCells.Add(ReservedCell);
 			}
+		}
+
+		void AddTwoFloorStair(
+			FZeroEscapeGeneratedLevelPlan& Plan,
+			const uint8 QuarterTurnCount)
+		{
+			FZeroEscapeGeneratedStructure& Structure =
+				Plan.Structures.AddDefaulted_GetRef();
+			Structure.StableStructureId = 0;
+			Structure.DefinitionId = TEXT("Stair");
+			Structure.Kind = EZeroEscapeStructureKind::TwoFloorStair;
+			Structure.BaseCoordinate = FIntVector(2, 2, 0);
+			Structure.QuarterTurnCount = QuarterTurnCount;
+			Structure.ActiveOpeningSetId = TEXT("Default");
 		}
 
 		int32 CountGroup(
@@ -296,6 +325,90 @@ namespace ZeroEscape::LevelGeneration::Tests
 					FMath::IsNearlyEqual(Pillar->LocalTransform.GetLocation().Z, 42.0));
 			}
 		}
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeStructureFixedLightTransformTest,
+		"Demo.PCG.Presentation.StructureFixedLightTransform",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeStructureFixedLightTransformTest::RunTest(const FString& Parameters)
+	{
+		(void)Parameters;
+		UStaticMesh* Mesh = NewTestMesh();
+		UZeroEscapePresentationProfile* Profile =
+			NewObject<UZeroEscapePresentationProfile>();
+		ConfigureBaseProfile(*Profile, Mesh);
+		Profile->bSpawnCeilingLights = true;
+		const FTransform RelativeLightTransform(
+			FRotator(0.0, 90.0, 180.0),
+			FVector(675.0, 450.0, 450.2));
+		const FTransform RoofLightTransform(
+			FRotator(0.0, 90.0, 180.0),
+			FVector(675.0, 450.0, 750.2));
+		Profile->StructureRecipes.Add(
+			MakeTwoFloorStairRecipe(Mesh, RelativeLightTransform));
+		Profile->StructureRecipes[0].FixedLightRelativeTransforms.Add(
+			RoofLightTransform);
+
+		for (uint8 QuarterTurn = 0; QuarterTurn < 4; ++QuarterTurn)
+		{
+			FZeroEscapeGeneratedLevelPlan Plan = MakePlan();
+			Plan.FloorCount = 2;
+			AddOrdinary(Plan, FIntVector(0, 0, 0), Grid::DirectionBit(0));
+			AddTwoFloorStair(Plan, QuarterTurn);
+			TArray<FStructurePresentationInstance> Instances;
+			FStructureBuildResult Result;
+			TestTrue(TEXT("楼梯固定灯位应随完整结构展开"),
+				FStructureBuilder::Expand(Plan, *Profile, Instances, Result));
+			TestEqual(TEXT("双层楼梯应输出平台灯和顶棚灯"),
+				Result.FixedLightLocalTransforms.Num(), 2);
+			if (Result.FixedLightLocalTransforms.Num() == 2)
+			{
+				const FTransform StructureTransform(
+					FRotator(0.0, QuarterTurn * -90.0, 0.0),
+					FVector(1200.0, 1200.0, Profile->FloorTopZCm));
+				const FTransform RelativeLightTransforms[] = {
+					RelativeLightTransform,
+					RoofLightTransform
+				};
+				for (int32 LightIndex = 0; LightIndex < 2; ++LightIndex)
+				{
+					const FTransform Expected =
+						RelativeLightTransforms[LightIndex] * StructureTransform;
+					const FTransform& Actual =
+						Result.FixedLightLocalTransforms[LightIndex];
+					TestTrue(TEXT("固定灯位置必须随楼梯顺时针旋转"),
+						Actual.GetLocation().Equals(Expected.GetLocation(), 0.1));
+					TestTrue(TEXT("固定灯朝向必须包含灯具修正与楼梯旋转"),
+						Actual.GetRotation().AngularDistance(Expected.GetRotation()) < 0.001);
+				}
+			}
+		}
+
+		FZeroEscapeGeneratedLevelPlan Plan = MakePlan();
+		Plan.FloorCount = 2;
+		AddOrdinary(Plan, FIntVector(0, 0, 0), Grid::DirectionBit(0));
+		AddTwoFloorStair(Plan, 0);
+		TArray<FStructurePresentationInstance> Instances;
+		FStructureBuildResult Result;
+		Profile->bSpawnCeilingLights = false;
+		TestTrue(TEXT("关闭灯光开关后结构仍应正常展开"),
+			FStructureBuilder::Expand(Plan, *Profile, Instances, Result));
+		TestTrue(TEXT("关闭灯光开关后不输出固定灯位"),
+			Result.FixedLightLocalTransforms.IsEmpty());
+
+		Profile->bSpawnCeilingLights = true;
+		Profile->StructureRecipes[0].FixedLightRelativeTransforms.Add(
+			FTransform(
+				FQuat::Identity,
+				FVector::ZeroVector,
+				FVector(2.0, 1.0, 1.0)));
+		TestFalse(TEXT("非法固定灯位必须令结构展开失败"),
+			FStructureBuilder::Expand(Plan, *Profile, Instances, Result));
+		TestTrue(TEXT("固定灯位展开失败后不得残留半份结果"),
+			Result.FixedLightLocalTransforms.IsEmpty());
 		return true;
 	}
 

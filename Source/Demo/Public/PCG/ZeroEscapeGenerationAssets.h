@@ -446,6 +446,13 @@ struct DEMO_API FZeroEscapeStructurePresentationRecipe
 	/** 首版数量合同：双层楼梯 2、三层楼梯间 4、高厅 0。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	TArray<FZeroEscapeStructurePresentationPiece> NavigationRampPieces;
+
+	/**
+	 * 灯 Actor 的最终结构相对 Transform，已包含灯具 Pivot 与朝向修正；
+	 * 不再叠加普通格使用的 CeilingLightCellTransform。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation|Lighting")
+	TArray<FTransform> FixedLightRelativeTransforms;
 };
 
 /** 五类规范结构的可替换表现配置；WFC 不知道任何具体 Mesh。 */
@@ -455,9 +462,6 @@ class DEMO_API UZeroEscapePresentationProfile final : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Version", meta = (ClampMin = "1"))
-	int32 PresentationVersion = 1;
-
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Structure", meta = (ClampMin = "1.0"))
 	double StructureUnitSizeCm = 300.0;
 
@@ -492,8 +496,8 @@ public:
 	TArray<FZeroEscapeStructurePresentationRecipe> StructureRecipes;
 
 	/**
-	 * 是否为本套表现生成室内顶灯。关闭后灯类与修正 Transform 不参与校验，
-	 * Generator 也不会创建灯 Actor，便于不改拓扑地临时回退照明表现。
+	 * 是否为本套表现生成普通格顶灯和完整结构固定灯。关闭后灯类与修正 Transform
+	 * 不参与校验，Generator 也不会创建灯 Actor，便于不改拓扑地临时回退照明表现。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Lighting")
 	bool bSpawnCeilingLights = true;
@@ -515,7 +519,7 @@ public:
 	const FZeroEscapeStructurePresentationRecipe* FindStructureRecipe(
 		FName DefinitionId) const;
 
-	/** 校验结构绑定，以及启用时的顶灯 Actor 类和 Pivot 修正。 */
+	/** 校验结构绑定，以及启用时的灯 Actor 类和普通格顶灯 Pivot 修正。 */
 	bool IsConfigured(double LogicalTileSizeCm, FString& OutError) const;
 };
 

@@ -3,7 +3,7 @@
 /**
  * @file ZeroEscapeStructureBuilder.h
  * 职责：把已经通过全局验证的多层 Plan 展开为普通结构与完整结构的 HISM 实例。
- * 边界：不求解布局、不修改 Plan/Hash、不生成顶灯或玩法对象，也不拥有回滚生命周期。
+ * 边界：不求解布局、不修改 Plan/Hash；只返回固定灯位描述，不生成 Actor，也不拥有回滚生命周期。
  */
 
 #pragma once
@@ -40,6 +40,7 @@ namespace ZeroEscape::LevelGeneration
 		int32 InstancedMeshCount = 0;
 		int32 HismComponentCount = 0;
 		int32 RelatedStableId = INDEX_NONE;
+		TArray<FTransform> FixedLightLocalTransforms;
 		FString Error;
 
 		void Reset()
@@ -47,6 +48,7 @@ namespace ZeroEscape::LevelGeneration
 			InstancedMeshCount = 0;
 			HismComponentCount = 0;
 			RelatedStableId = INDEX_NONE;
+			FixedLightLocalTransforms.Reset();
 			Error.Reset();
 		}
 	};

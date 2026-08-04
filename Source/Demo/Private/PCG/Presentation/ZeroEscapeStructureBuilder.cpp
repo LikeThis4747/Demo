@@ -62,6 +62,7 @@ namespace ZeroEscape::LevelGeneration
 			FString Message)
 		{
 			Result.RelatedStableId = RelatedStableId;
+			Result.FixedLightLocalTransforms.Reset();
 			Result.Error = MoveTemp(Message);
 			return false;
 		}
@@ -462,6 +463,25 @@ namespace ZeroEscape::LevelGeneration
 				const FTransform StructureTransform(
 					FRotator(0.0, Structure.QuarterTurnCount * -90.0, 0.0),
 					BaseLocation);
+
+				if (Profile.bSpawnCeilingLights)
+				{
+					for (const FTransform& RelativeLightTransform :
+						Recipe->FixedLightRelativeTransforms)
+					{
+						const FTransform LocalLightTransform =
+							RelativeLightTransform * StructureTransform;
+						if (!FGenerationCore::IsFiniteUnitScaleTransform(LocalLightTransform))
+						{
+							OutInstances.Reset();
+							return Fail(
+								OutResult,
+								Structure.StableStructureId,
+								TEXT("完整结构生成了非法的固定灯位 Transform。"));
+						}
+						OutResult.FixedLightLocalTransforms.Add(LocalLightTransform);
+					}
+				}
 
 				for (const FZeroEscapeStructurePresentationPiece& Piece : Recipe->CommonPieces)
 				{

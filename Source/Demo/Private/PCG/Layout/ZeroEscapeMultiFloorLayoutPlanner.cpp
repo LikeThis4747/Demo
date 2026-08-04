@@ -23,7 +23,7 @@ namespace ZeroEscape::LevelGeneration
 		enum class EReservedCellUse : uint8
 		{
 			Free,
-			PlayerSpawn,
+			PursuerSpawn,
 			Exit,
 			StructureWalkable,
 			StructureSolid,
@@ -55,7 +55,7 @@ namespace ZeroEscape::LevelGeneration
 			TArray<FIntVector> ProtectedEndpoints;
 			TMap<FIntVector, int32> ProtectedOpeningOrdinaryCells;
 			TArray<int32> HighCeilingRoomCountByFloor;
-			FIntVector PlayerSpawn = FIntVector::ZeroValue;
+			FIntVector PursuerSpawn = FIntVector::ZeroValue;
 			FIntVector Exit = FIntVector::ZeroValue;
 		};
 
@@ -93,8 +93,8 @@ namespace ZeroEscape::LevelGeneration
 
 		struct FWholeGraphResult
 		{
-			TArray<int32> DistanceByNode;
-			int32 PlayerToExitRouteLength = INDEX_NONE;
+			TArray<TArray<int32>> Neighbors;
+			TArray<int32> DistanceFromPursuerByNode;
 			int32 TotalWalkableCellCount = 0;
 		};
 
@@ -600,7 +600,7 @@ namespace ZeroEscape::LevelGeneration
 				}
 				const EReservedCellUse ConnectedUse = ConnectedCell->Use;
 				if (ConnectedUse != EReservedCellUse::Free
-					&& ConnectedUse != EReservedCellUse::PlayerSpawn
+					&& ConnectedUse != EReservedCellUse::PursuerSpawn
 					&& ConnectedUse != EReservedCellUse::Exit)
 				{
 					return false;
@@ -829,7 +829,7 @@ namespace ZeroEscape::LevelGeneration
 						}
 						const EReservedCellUse Use = Cell->Use;
 						Available[Floor] += Use == EReservedCellUse::Free
-							|| Use == EReservedCellUse::PlayerSpawn
+							|| Use == EReservedCellUse::PursuerSpawn
 							|| Use == EReservedCellUse::Exit
 							? 1 : 0;
 					}
@@ -889,7 +889,7 @@ namespace ZeroEscape::LevelGeneration
 				}
 				const EReservedCellUse Use = Cell->Use;
 				if (Use != EReservedCellUse::Free
-					&& Use != EReservedCellUse::PlayerSpawn
+					&& Use != EReservedCellUse::PursuerSpawn
 					&& Use != EReservedCellUse::Exit)
 				{
 					return false;
@@ -942,7 +942,7 @@ namespace ZeroEscape::LevelGeneration
 					State, Opening.ConnectedOrdinaryCoordinate);
 				const bool bConnectedUseIsOrdinary = ConnectedCell != nullptr
 					&& (ConnectedCell->Use == EReservedCellUse::Free
-						|| ConnectedCell->Use == EReservedCellUse::PlayerSpawn
+						|| ConnectedCell->Use == EReservedCellUse::PursuerSpawn
 						|| ConnectedCell->Use == EReservedCellUse::Exit);
 				if (!Candidate.WalkableCells.Contains(Opening.StructureCoordinate)
 					|| !bConnectedUseIsOrdinary
@@ -1469,7 +1469,7 @@ namespace ZeroEscape::LevelGeneration
 						Input,
 						WholeAttempt,
 						0,
-						FName(TEXT("PlayerSpawn")),
+						FName(TEXT("PursuerSpawn")),
 						Candidate.Address,
 						0,
 						NAME_None);
@@ -1496,8 +1496,8 @@ namespace ZeroEscape::LevelGeneration
 				{
 					continue;
 				}
-				Cell->Use = EReservedCellUse::PlayerSpawn;
-				State.PlayerSpawn = Start.Address;
+				Cell->Use = EReservedCellUse::PursuerSpawn;
+				State.PursuerSpawn = Start.Address;
 				State.FloorEndpoints[0].Enter = Start.Address;
 				State.FloorEndpoints[0].bHasEnter = true;
 				State.ProtectedEndpoints.Add(Start.Address);
@@ -1515,7 +1515,7 @@ namespace ZeroEscape::LevelGeneration
 				}
 
 				*Cell = {};
-				State.PlayerSpawn = FIntVector::ZeroValue;
+				State.PursuerSpawn = FIntVector::ZeroValue;
 				State.FloorEndpoints[0].Enter = FIntVector::ZeroValue;
 				State.FloorEndpoints[0].bHasEnter = false;
 				State.ProtectedEndpoints.Reset();
@@ -2618,8 +2618,52 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
+		bool ComputeShortestRoutes(
+			const TArray<TArray<int32>>& Neighbors,
+			const int32 StartNode,
+			const int32 CellsPerFloor,
+			TArray<int32>& OutDistanceByNode,
+			TArray<int32>& OutVerticalTransitionsByNode)
+		{
+			if (!Neighbors.IsValidIndex(StartNode) || CellsPerFloor <= 0)
+			{
+				OutDistanceByNode.Reset();
+				OutVerticalTransitionsByNode.Reset();
+				return false;
+			}
+
+			OutDistanceByNode.Init(INDEX_NONE, Neighbors.Num());
+			OutVerticalTransitionsByNode.Init(MAX_int32, Neighbors.Num());
+			TQueue<int32> Queue;
+			OutDistanceByNode[StartNode] = 0;
+			OutVerticalTransitionsByNode[StartNode] = 0;
+			Queue.Enqueue(StartNode);
+			int32 Current = INDEX_NONE;
+			while (Queue.Dequeue(Current))
+			{
+				for (const int32 Neighbor : Neighbors[Current])
+				{
+					const int32 CandidateDistance = OutDistanceByNode[Current] + 1;
+					const bool bCrossFloor =
+						Current / CellsPerFloor != Neighbor / CellsPerFloor;
+					const int32 CandidateVertical =
+						OutVerticalTransitionsByNode[Current] + (bCrossFloor ? 1 : 0);
+					if (OutDistanceByNode[Neighbor] == INDEX_NONE
+						|| CandidateDistance < OutDistanceByNode[Neighbor]
+						|| (CandidateDistance == OutDistanceByNode[Neighbor]
+							&& CandidateVertical
+								< OutVerticalTransitionsByNode[Neighbor]))
+					{
+						OutDistanceByNode[Neighbor] = CandidateDistance;
+						OutVerticalTransitionsByNode[Neighbor] = CandidateVertical;
+						Queue.Enqueue(Neighbor);
+					}
+				}
+			}
+			return true;
+		}
+
 		bool BuildAndValidateWholeGraph(
-			const FResolvedGenerationInput& Input,
 			const FZeroEscapeFloorCountOption& FloorOption,
 			const FPlacementState& State,
 			const TArray<FFloorSolveRecord>& Records,
@@ -2736,7 +2780,7 @@ namespace ZeroEscape::LevelGeneration
 				}
 			}
 
-			const int32 StartNode = ToBuildingIndex(State.PlayerSpawn, State.GridSize);
+			const int32 StartNode = ToBuildingIndex(State.PursuerSpawn, State.GridSize);
 			const int32 ExitNode = ToBuildingIndex(State.Exit, State.GridSize);
 			if (StartNode < 0 || StartNode >= NodeCount
 				|| ExitNode < 0 || ExitNode >= NodeCount
@@ -2747,37 +2791,22 @@ namespace ZeroEscape::LevelGeneration
 					OutReport,
 					EZeroEscapeGenerationStage::GlobalValidation,
 					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("玩家出生点或顶层终点没有落在整栋可走图上。"));
+					TEXT("追猎者起点或顶层终点没有落在整栋可走图上。"));
 			}
 
-			OutGraph.DistanceByNode.Init(INDEX_NONE, NodeCount);
 			TArray<int32> VerticalTransitions;
-			VerticalTransitions.Init(MAX_int32, NodeCount);
-			TQueue<int32> Queue;
-			OutGraph.DistanceByNode[StartNode] = 0;
-			VerticalTransitions[StartNode] = 0;
-			Queue.Enqueue(StartNode);
-			int32 Current = INDEX_NONE;
-			while (Queue.Dequeue(Current))
+			if (!ComputeShortestRoutes(
+					Neighbors,
+					StartNode,
+					CellsPerFloor,
+					OutGraph.DistanceFromPursuerByNode,
+					VerticalTransitions))
 			{
-				for (const int32 Neighbor : Neighbors[Current])
-				{
-					const int32 CandidateDistance =
-						OutGraph.DistanceByNode[Current] + 1;
-					const bool bCrossFloor =
-						Current / CellsPerFloor != Neighbor / CellsPerFloor;
-					const int32 CandidateVertical =
-						VerticalTransitions[Current] + (bCrossFloor ? 1 : 0);
-					if (OutGraph.DistanceByNode[Neighbor] == INDEX_NONE
-						|| CandidateDistance < OutGraph.DistanceByNode[Neighbor]
-						|| (CandidateDistance == OutGraph.DistanceByNode[Neighbor]
-							&& CandidateVertical < VerticalTransitions[Neighbor]))
-					{
-						OutGraph.DistanceByNode[Neighbor] = CandidateDistance;
-						VerticalTransitions[Neighbor] = CandidateVertical;
-						Queue.Enqueue(Neighbor);
-					}
-				}
+				return FailLayout(
+					OutReport,
+					EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::SolverInvariantViolation,
+					TEXT("整栋通行图无法从追猎者起点计算最短路线。"));
 			}
 
 			int32 ReachableCount = 0;
@@ -2788,7 +2817,8 @@ namespace ZeroEscape::LevelGeneration
 					continue;
 				}
 				++OutGraph.TotalWalkableCellCount;
-				ReachableCount += OutGraph.DistanceByNode[Node] != INDEX_NONE ? 1 : 0;
+				ReachableCount +=
+					OutGraph.DistanceFromPursuerByNode[Node] != INDEX_NONE ? 1 : 0;
 			}
 			if (ReachableCount != OutGraph.TotalWalkableCellCount)
 			{
@@ -2796,7 +2826,7 @@ namespace ZeroEscape::LevelGeneration
 					OutReport,
 					EZeroEscapeGenerationStage::GlobalValidation,
 					EZeroEscapeGenerationFailure::GlobalConnectivityFailed,
-					TEXT("整栋可走图存在从玩家出生点无法到达的节点。"),
+					TEXT("整栋可走图存在从追猎者起点无法到达的节点。"),
 					ReachableCount,
 					OutGraph.TotalWalkableCellCount);
 			}
@@ -2821,14 +2851,14 @@ namespace ZeroEscape::LevelGeneration
 				{
 					const int32 Node = ToBuildingIndex(
 						Landing.Coordinate, State.GridSize);
-					if (!OutGraph.DistanceByNode.IsValidIndex(Node)
-						|| OutGraph.DistanceByNode[Node] == INDEX_NONE)
+					if (!OutGraph.DistanceFromPursuerByNode.IsValidIndex(Node)
+						|| OutGraph.DistanceFromPursuerByNode[Node] == INDEX_NONE)
 					{
 						return FailLayout(
 							OutReport,
 							EZeroEscapeGenerationStage::GlobalValidation,
 							EZeroEscapeGenerationFailure::GlobalConnectivityFailed,
-							TEXT("至少一个楼梯落脚点不在玩家可达分量内。"),
+							TEXT("至少一个楼梯落脚点不在整栋连通分量内。"),
 							0,
 							0,
 							Structure.StableStructureId);
@@ -2887,31 +2917,6 @@ namespace ZeroEscape::LevelGeneration
 				}
 			}
 
-			OutGraph.PlayerToExitRouteLength = OutGraph.DistanceByNode[ExitNode];
-			if (OutGraph.PlayerToExitRouteLength < 0)
-			{
-				return FailLayout(
-					OutReport,
-					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::GlobalConnectivityFailed,
-					TEXT("玩家出生点无法到达顶层终点。"));
-			}
-			if (OutGraph.PlayerToExitRouteLength
-				> FloorOption.MaxPlayerToExitRouteLengthTiles)
-			{
-				return FailLayout(
-					OutReport,
-					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::RequiredRouteTooLong,
-					TEXT("玩家出生点到顶层终点的整栋最短路超过配置上限。"),
-					OutGraph.PlayerToExitRouteLength,
-					FloorOption.MaxPlayerToExitRouteLengthTiles);
-			}
-
-			InOutPlan.PlayerToExitRouteLengthTiles =
-				OutGraph.PlayerToExitRouteLength;
-			InOutPlan.VerticalTransitionCountOnShortestRoute =
-				VerticalTransitions[ExitNode];
 			InOutPlan.CycleRank = EdgeKeys.Num() - OutGraph.TotalWalkableCellCount + 1;
 			if (InOutPlan.CycleRank < 0)
 			{
@@ -2921,11 +2926,12 @@ namespace ZeroEscape::LevelGeneration
 					EZeroEscapeGenerationFailure::SolverInvariantViolation,
 					TEXT("整栋已连通无向图的 E-V+1 为负数。"));
 			}
+			OutGraph.Neighbors = MoveTemp(Neighbors);
 			return true;
 		}
 
-		// —— 一层追猎者出生点选择与玩家初始路线距离 ——
-		bool SelectPursuerSpawn(
+		// —— 追猎者占一层主路线起点；玩家选择满足安全距离的最近普通格 ——
+		bool SelectPlayerSpawn(
 			const FResolvedGenerationInput& Input,
 			const FPlacementState& State,
 			const TArray<FFloorSolveRecord>& Records,
@@ -2940,11 +2946,11 @@ namespace ZeroEscape::LevelGeneration
 					OutReport,
 					EZeroEscapeGenerationStage::Configuration,
 					EZeroEscapeGenerationFailure::InvalidConfiguration,
-					TEXT("追猎者出生点选择缺少一层结果或逻辑格边长无效。"));
+					TEXT("玩家出生点选择缺少一层结果或逻辑格边长无效。"));
 			}
 
 			int32 BestDenseIndex = INDEX_NONE;
-			int32 BestRouteDistance = INDEX_NONE;
+			int32 BestRouteDistance = MAX_int32;
 			uint32 BestTieBreak = MAX_uint32;
 			int32 FarthestOrdinaryDistance = 0;
 			const FFloorSolveRecord& GroundFloor = Records[0];
@@ -2954,8 +2960,8 @@ namespace ZeroEscape::LevelGeneration
 			{
 				if (GroundFloor.Result.OpeningMaskByCell[DenseIndex] == 0
 					|| GroundFloor.Input.StructureWalkableByCell[DenseIndex] != 0
-					|| !Graph.DistanceByNode.IsValidIndex(DenseIndex)
-					|| Graph.DistanceByNode[DenseIndex] == INDEX_NONE)
+					|| !Graph.DistanceFromPursuerByNode.IsValidIndex(DenseIndex)
+					|| Graph.DistanceFromPursuerByNode[DenseIndex] == INDEX_NONE)
 				{
 					continue;
 				}
@@ -2963,11 +2969,12 @@ namespace ZeroEscape::LevelGeneration
 					DenseIndex % State.GridSize.X,
 					DenseIndex / State.GridSize.X,
 					0);
-				if (Address == State.PlayerSpawn || Address == State.Exit)
+				if (Address == State.PursuerSpawn || Address == State.Exit)
 				{
 					continue;
 				}
-				const int32 RouteDistance = Graph.DistanceByNode[DenseIndex];
+				const int32 RouteDistance =
+					Graph.DistanceFromPursuerByNode[DenseIndex];
 				FarthestOrdinaryDistance = FMath::Max(
 					FarthestOrdinaryDistance, RouteDistance);
 				const double RouteDistanceCm =
@@ -2983,7 +2990,7 @@ namespace ZeroEscape::LevelGeneration
 					ERandomDomain::PlayerPursuerSpawn,
 					DenseIndex);
 				const uint32 TieBreak = TieRandom.GetUnsignedInt();
-				if (RouteDistance > BestRouteDistance
+				if (RouteDistance < BestRouteDistance
 					|| (RouteDistance == BestRouteDistance && TieBreak < BestTieBreak))
 				{
 					BestDenseIndex = DenseIndex;
@@ -3006,10 +3013,57 @@ namespace ZeroEscape::LevelGeneration
 						Input.Difficulty.MinPlayerPursuerRouteDistanceCm));
 			}
 
-			InOutPlan.PursuerSpawnCoordinate = FIntVector(
+			InOutPlan.PlayerSpawnCoordinate = FIntVector(
 				BestDenseIndex % State.GridSize.X,
 				BestDenseIndex / State.GridSize.X,
 				0);
+			return true;
+		}
+
+		bool ValidatePlayerToExitRoute(
+			const FZeroEscapeFloorCountOption& FloorOption,
+			const FPlacementState& State,
+			const FWholeGraphResult& Graph,
+			FZeroEscapeGeneratedLevelPlan& InOutPlan,
+			FZeroEscapeGenerationReport& OutReport)
+		{
+			const int32 CellsPerFloor = State.GridSize.X * State.GridSize.Y;
+			const int32 PlayerNode = ToBuildingIndex(
+				InOutPlan.PlayerSpawnCoordinate, State.GridSize);
+			const int32 ExitNode = ToBuildingIndex(State.Exit, State.GridSize);
+			TArray<int32> DistanceByNode;
+			TArray<int32> VerticalTransitionsByNode;
+			if (!ComputeShortestRoutes(
+					Graph.Neighbors,
+					PlayerNode,
+					CellsPerFloor,
+					DistanceByNode,
+					VerticalTransitionsByNode)
+				|| !DistanceByNode.IsValidIndex(ExitNode)
+				|| DistanceByNode[ExitNode] == INDEX_NONE)
+			{
+				return FailLayout(
+					OutReport,
+					EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::GlobalConnectivityFailed,
+					TEXT("玩家出生点无法到达顶层终点。"));
+			}
+
+			const int32 RouteLength = DistanceByNode[ExitNode];
+			if (RouteLength > FloorOption.MaxPlayerToExitRouteLengthTiles)
+			{
+				return FailLayout(
+					OutReport,
+					EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::RequiredRouteTooLong,
+					TEXT("玩家出生点到顶层终点的整栋最短路超过配置上限。"),
+					RouteLength,
+					FloorOption.MaxPlayerToExitRouteLengthTiles);
+			}
+
+			InOutPlan.PlayerToExitRouteLengthTiles = RouteLength;
+			InOutPlan.VerticalTransitionCountOnShortestRoute =
+				VerticalTransitionsByNode[ExitNode];
 			return true;
 		}
 
@@ -3435,7 +3489,7 @@ namespace ZeroEscape::LevelGeneration
 			CandidatePlan.FloorHeightCm = Input.SharedRules.FloorHeightCm;
 			CandidatePlan.AnchorHeightCm = Input.SharedRules.AnchorHeightCm;
 			CandidatePlan.Structures = State.Structures;
-			CandidatePlan.PlayerSpawnCoordinate = State.PlayerSpawn;
+			CandidatePlan.PursuerSpawnCoordinate = State.PursuerSpawn;
 			CandidatePlan.ExitCoordinate = State.Exit;
 			CandidatePlan.RequiredTwoFloorStairStableIdByLowerFloor =
 				State.RequiredTwoFloorStairStableIdByLowerFloor;
@@ -3456,17 +3510,22 @@ namespace ZeroEscape::LevelGeneration
 
 			FWholeGraphResult Graph;
 			if (!BuildAndValidateWholeGraph(
-					Input,
 					*FloorOption,
 					State,
 					Records,
 					Graph,
 					CandidatePlan,
 					AttemptReport)
-				|| !SelectPursuerSpawn(
+				|| !SelectPlayerSpawn(
 					Input,
 					State,
 					Records,
+					Graph,
+					CandidatePlan,
+					AttemptReport)
+				|| !ValidatePlayerToExitRoute(
+					*FloorOption,
+					State,
 					Graph,
 					CandidatePlan,
 					AttemptReport))
