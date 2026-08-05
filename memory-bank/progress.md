@@ -93,3 +93,11 @@
 - 旧追猎者局部受击完整保留，只暂停运行装配；未修改 Physics Asset、AnimGraph、Level、PCG Population、Content 或 Config。
 - UHT 与 Demo 模块 no-link 编译多轮通过，最终 4 个动作成功；静态复核无剩余 P0/P1。
 - 未完成：完整 DLL 链接、两份 PCA 创建/Compile、DA/CDO/Blueprint 装配、自动化、PIE 与用户画面验收。不得把本项标为功能完成。
+
+
+## 2026-08-06 夜间核对
+
+- [x] Level0 摆锤原型、调参资产和测试房已有完整构建、碰撞标定与用户初步手感验收记录。
+- [x] 共享重冲击 C++、摆锤 ETA 预测和三组自动化测试源码已落盘，UHT/无链接编译通过。
+- [ ] 当前 Editor 仍加载旧 Demo DLL；完整链接、新模块加载、两份 PCA、两份 HeavyImpact DA、角色/摆锤装配、自动化和 PIE 均未完成。
+- [ ] 首版 Downed/恢复与正式整局语义、墙边/斜坡/角落、连续冲击和 Downed 二次碰撞仍需真实运行验收。

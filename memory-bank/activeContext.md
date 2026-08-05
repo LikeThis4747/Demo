@@ -4,25 +4,24 @@
 
 ## 当前迭代焦点
 
-完成共享重冲击物理受击的资产装配与实际效果验收：摆锤真实 Chaos 接触驱动玩家/追猎者击飞，Physics Control 只约束姿态，角色在真实倒地点进入 Downed。
+完成玩家/追猎者共享重冲击原型的可运行闭环：完整 DLL 链接、PCA/DA/Blueprint 装配、自动化、PIE 与用户画面验收；未通过前不扩展 PCG 投放。
 
 ## 当前决定
 
-- B 路线已落盘：预测 Prepare → 全身模拟 → 真实接触 → Flight/Settling → Downed；角色侧不制造第二份冲量。
-- 每套骨架独立 PCA，共享 C++ 状态机；玩家与追猎者同轮接入。
-- 旧追猎者局部受击完整保留为 dormant 回退路径，只暂停三处运行装配。
-- 低帧率 ETA 使用每次事务冻结的等待上限；摆锤预测体积按接收者 600 cm/s、0.5 秒窗口预算，默认提前距离 500 cm。
-- 起身动画不在首轮关键路径；角色保留真实落点，用户提供动画后再接恢复桥。
+- 保持 B 路线：预测 Prepare → 全身模拟 → 真实 Chaos 接触 → Flight/Settling → Downed；角色侧不制造第二份冲量。
+- 玩家与追猎者各用一份骨架专属 PCA，共享 C++ 状态组件；旧追猎者局部受击保留为 dormant 回退路径。
+- 首版不做起身动画；角色保留真实落点，Downed/恢复对正式一局的语义需在 PIE 中确认。
+- 摆锤机关房型与 PCG 投放在重冲击验收后讨论；当前只保留独立 Level0 原型。
 
 ## 当前证据
 
-- 实施前基线 `1c50616c8f19cfa5daa62d39fd626c1c11ff7310` 已推送内部工蜂并核验。
-- UHT 与所有新增/修改 Demo 源码、测试源码多轮 no-link 编译通过，最终 4 个动作成功。
-- 三路静态复核未发现剩余 P0/P1；`git diff --check` 通过；当前无 `Content/**` 或 `Config/**` 修改。
+- 当前 HEAD 前的白天实现提交为 29e900bd0e9ad3bd5eab0c02d8bb7a8914f915bd；工作区在夜报/记忆写入前干净。
+- UHT 与 Demo 模块无链接编译通过；没有完整链接、HeavyImpact 自动化或重冲击 PIE 证据。
+- 双 MCP 在线；Level0 打开、PIE 停止、相关资产非脏、蓝图 UpToDate。
+- 当前 Editor 加载的 UnrealEditor-Demo.dll 时间为 20:25，早于 21:51 后的重冲击源码；PCA/HeavyImpact DA 不存在，当前 CDO 仍是旧模块字段。
 
-## 当前阻塞与边界
+## 当前阻塞与下一步
 
-- PID 13728 Editor/Live Coding 锁住项目 DLL；需用户安全关闭后再完整链接。
-- 两份 PCA 必须由用户创建并最终点击 Compile/Save；其余资产装配优先用官方 MCP。
-- 自动化、Blueprint/PCA 编译、PIE、墙边/斜坡/角落、玩家/AI 画面及用户验收尚未执行。
-- 合同预算保证接收者不超过 600 cm/s、摆锤未被额外加速且帧率约不低于 5 FPS；超出范围属于后续实测边界。
+- PID 13728 的 Editor/Live Coding 锁住项目 DLL；用户需安全关闭 Editor，禁止杀进程、热更或触碰 D:\UE5_8 的 OIT 改动。
+- 完整链接后重启 Editor；用户创建并 Compile PCA_PlayerHeavyImpact、PCA_PursuerHeavyImpact，再装配 DA/CDO/Blueprint。
+- 依次运行 Demo.Physics.HeavyImpact.*、相关 GameFlow/Demo 回归和玩家/追猎者 PIE 边界矩阵。
