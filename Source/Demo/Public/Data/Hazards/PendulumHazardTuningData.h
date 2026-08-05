@@ -2,8 +2,8 @@
 
 /**
  * @file PendulumHazardTuningData.h
- * 职责：保存摆锤几何、刚体属性、约束角度与每次中线穿越的最大补能量。
- * 边界：不引用关卡或网格资产，不保存运行时相位，不定义玩家/追猎者受击规则。
+ * 职责：保存摆锤几何、刚体、约束、预测准备窗口与每次中线穿越的最大补能量。
+ * 边界：不引用关卡、网格或具体角色，不保存运行时相位，也不定义角色受击求解规则。
  * 状态 Owner：本 DataAsset 是摆锤可调参数的唯一来源；APendulumHazard 只读取并执行。
  */
 
@@ -95,6 +95,38 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|物理",
 		meta = (ClampMin = "0.0", ClampMax = "10.0", UIMin = "0.0", UIMax = "1.0"))
 	float AngularDamping = 0.02f;
+
+	/**
+	 * 独立 PreparationVolume 在 BobRadius 外增加的预测距离，单位 cm；初始 500，编辑范围 10~1000。
+	 * 调高可更早登记高速目标但增加 Overlap 候选，调低会缩短角色切物理的可靠时间。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
+		meta = (ClampMin = "10.0", ClampMax = "1000.0", UIMin = "100.0", UIMax = "750.0", Units = "cm"))
+	float PreparationLookAheadDistance = 500.0f;
+
+	/**
+	 * 发送重冲击准备请求的最低相对接近速度，单位 cm/s；初始 120，编辑范围 1~5000。
+	 * 低于该值只保留普通物理接触，不把慢速推挤升级为重冲击。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
+		meta = (ClampMin = "1.0", ClampMax = "5000.0", UIMin = "50.0", UIMax = "1000.0", Units = "cm/s"))
+	float MinimumHeavyImpactClosingSpeed = 120.0f;
+
+	/**
+	 * 预测体积尺寸要覆盖的接收者最大运动速度，单位 cm/s；初始 600。
+	 * 它不限制角色速度，只是为了让玩家/AI 迎面移动时仍能在低帧率准备窗口前被登记。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
+		meta = (ClampMin = "0.0", ClampMax = "2000.0", UIMin = "0.0", UIMax = "1000.0", Units = "cm/s"))
+	float MaximumExpectedReceiverSpeed = 600.0f;
+
+	/**
+	 * 正常帧率下机关允许发送的最大预计接触时间，单位 s；初始 0.16，编辑范围 0.08~0.5。
+	 * 严重低帧率时运行时会与接收端同步临时扩到最多 2.5 帧/0.5 秒；资产值仍应位于接收端正常窗口内。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
+		meta = (ClampMin = "0.08", ClampMax = "0.5", UIMin = "0.08", UIMax = "0.25", Units = "s"))
+	float MaximumPreparationLeadTime = 0.16f;
 
 	/**
 	 * APendulumHazard::AssistAtCenterCrossing 读取的单次最大补速，单位 cm/s；初始 0，编辑范围 0~200。

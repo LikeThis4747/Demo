@@ -2,18 +2,21 @@
 
 /**
  * @file PursuerCharacter.h
- * 职责：装配追猎者角色本体（移动、胶囊、AI、Physics Control 局部受击组件），持有行为参数并提供攻击表现接口。
- * 边界：不做 AI 决策，不拥有物理受击运行态、失衡或伤害结算，不硬编码资源路径和骨骼映射。
- * 状态 Owner：角色只拥有组件装配与攻击播放；AI 和局部物理受击状态分别由专用 Controller/Component 独占。
+ * 职责：装配追猎者移动、AI 与重冲击组件，持有行为参数并保留旧局部受击的可回退接线成员。
+ * 边界：不做 AI 决策，不直接拥有物理模拟状态、失衡或伤害结算，不硬编码资源路径和骨骼映射。
+ * 状态 Owner：角色只拥有组件装配与攻击播放；AI 和重冲击状态分别由专用 Controller/Component 独占。
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Interfaces/HeavyImpactReceiver.h"
 
 #include "PursuerCharacter.generated.h"
 
+class UHeavyImpactResponseComponent;
+class UHeavyImpactTuningData;
 class UPursuerConfig;
 class UPhysicsControlComponent;
 class UPhysicsControlHitResponseComponent;
@@ -24,13 +27,17 @@ enum class EPhysicsHitDirection : uint8;
 
 /** 单一追猎者角色：只负责组件装配、移动参数应用与攻击蒙太奇播放，决策交给 AI 控制器。 */
 UCLASS()
-class DEMO_API APursuerCharacter final : public ACharacter
+class DEMO_API APursuerCharacter final : public ACharacter, public IHeavyImpactReceiver
 {
 	GENERATED_BODY()
 
 public:
 	/** 创建无常驻 Tick 的追猎者，并默认绑定 APursuerAIController 与放置即占有策略。 */
 	APursuerCharacter();
+
+	/** 把机关的重冲击准备请求转发给唯一共享响应组件。 */
+	virtual EHeavyImpactPrepareResult PrepareForHeavyImpact_Implementation(
+		const FHeavyImpactPreparationRequest& Request) override;
 
 	/** 返回行为参数资产；可能为空，调用方需自行判空。 */
 	const UPursuerConfig* GetConfig() const { return Config; }
@@ -39,7 +46,7 @@ public:
 	void PlayAttackMontage();
 
 	/** 是否正在播放受击反应；AI 在受击期间应停止追击与攻击。 */
-	bool IsReacting() const { return bIsReacting; }
+	bool IsReacting() const;
 
 	/** 物理命中方向回调；按方向从 Config 选受击蒙太奇播放。 */
 	UFUNCTION()
@@ -53,11 +60,19 @@ protected:
 	virtual void PostInitializeComponents() override;
 
 private:
-	/** 官方 Physics Control 求解组件；只由 PhysicsControlHitResponse 驱动。 */
+	/** 官方 Physics Control 求解组件；当前只由重冲击响应组件创建和驱动运行时记录。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|物理受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPhysicsControlComponent> PhysicsControl;
 
-	/** 局部受击唯一状态 Owner；自身无 Tick，配置由角色显式注入。 */
+	/** 追猎者重冲击准备、真实接触、飞行和倒地状态的唯一运行时 Owner。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|重冲击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHeavyImpactResponseComponent> HeavyImpactResponse;
+
+	/** 追猎者独立的重冲击 PCA 与判稳参数；必须在 BP_Pursuer 类默认值中指定。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "追猎者|重冲击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHeavyImpactTuningData> HeavyImpactTuningData;
+
+	/** 保留用于旧局部受击回退；重冲击原型期间不创建、不配置也不解引用。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|物理受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPhysicsControlHitResponseComponent> PhysicsControlHitResponse;
 

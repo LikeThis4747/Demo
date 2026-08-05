@@ -2,9 +2,9 @@
 
 /**
  * @file ZeroEscapeCharacter.cpp
- * 职责：装配第三人称角色，并把集中式输入配置转化为移动、视角与磁力意图。
- * 边界：不加载具体输入/角色资源，不实现磁力物理规则，也不替代 PlayerController 的视口输入模式管理。
- * 状态 Owner：本类只拥有自己添加的 Mapping Context 生命周期；磁力持有状态属于磁力组件。
+ * 职责：装配第三人称角色，并把输入与重冲击接口转发给各自唯一状态 Owner。
+ * 边界：不加载具体资源，不实现磁力或重冲击物理规则，也不替代 PlayerController 的输入模式管理。
+ * 状态 Owner：本类只拥有 Mapping Context 生命周期；磁力与重冲击状态属于各自组件。
  */
 
 #include "Characters/ZeroEscapeCharacter.h"
@@ -13,6 +13,7 @@
 #include "Components/Attributes/HealthComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
+#include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Data/Input/ZeroEscapeInputConfig.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -22,6 +23,7 @@
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
+#include "PhysicsControlComponent.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeInput, Log, All);
@@ -56,6 +58,20 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	PhysicsHandle = CreateDefaultSubobject<UPhysicsHandleComponent>(TEXT("PhysicsHandle"));
 	ElectromagneticGrab = CreateDefaultSubobject<UElectromagneticGrabComponent>(TEXT("ElectromagneticGrab"));
 	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
+
+	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
+	PhysicsControl->SetupAttachment(GetRootComponent());
+	PhysicsControl->SetAutoActivate(false);
+	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
+}
+
+/** 把接口请求交给唯一重冲击状态 Owner；组件缺失时明确拒绝，不创建角色侧兜底。 */
+EHeavyImpactPrepareResult AZeroEscapeCharacter::PrepareForHeavyImpact_Implementation(
+	const FHeavyImpactPreparationRequest& Request)
+{
+	return IsValid(HeavyImpactResponse)
+		? HeavyImpactResponse->PrepareForImpact(Request)
+		: EHeavyImpactPrepareResult::Invalid;
 }
 
 /** 重新占有时以幂等方式应用输入 DataAsset 声明的上下文。 */
@@ -75,7 +91,7 @@ void AZeroEscapeCharacter::UnPossessed()
 	Super::UnPossessed();
 }
 
-/** 完成组件接线；磁力组件会自行校验 Physics Handle、相机和独立 Tuning DataAsset。 */
+/** 完成磁力与重冲击接线；两个状态 Owner 都自行校验注入引用和独立 Tuning DataAsset。 */
 void AZeroEscapeCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
@@ -83,6 +99,20 @@ void AZeroEscapeCharacter::PostInitializeComponents()
 	if (IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->Configure(PhysicsHandle, FollowCamera);
+	}
+
+	if (IsValid(HeavyImpactResponse))
+	{
+		HeavyImpactResponse->Configure(
+			this,
+			GetMesh(),
+			GetCapsuleComponent(),
+			GetCharacterMovement(),
+			PhysicsControl,
+			HeavyImpactTuningData);
+		HeavyImpactResponse->OnImpactCommitted.AddUObject(
+			this,
+			&AZeroEscapeCharacter::HandleHeavyImpactCommitted);
 	}
 }
 
@@ -112,13 +142,19 @@ void AZeroEscapeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	EnhancedInput->BindAction(InputConfig->MoveAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Move);
 	EnhancedInput->BindAction(InputConfig->LookAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Look);
 	EnhancedInput->BindAction(InputConfig->MouseLookAction, ETriggerEvent::Triggered, this, &AZeroEscapeCharacter::Look);
-	EnhancedInput->BindAction(InputConfig->JumpAction, ETriggerEvent::Started, this, &ACharacter::Jump);
+	EnhancedInput->BindAction(InputConfig->JumpAction, ETriggerEvent::Started, this, &AZeroEscapeCharacter::TryJump);
 	EnhancedInput->BindAction(InputConfig->JumpAction, ETriggerEvent::Completed, this, &ACharacter::StopJumping);
 	EnhancedInput->BindAction(InputConfig->JumpAction, ETriggerEvent::Canceled, this, &ACharacter::StopJumping);
 	EnhancedInput->BindAction(InputConfig->MagneticGrabAction, ETriggerEvent::Started, this, &AZeroEscapeCharacter::BeginMagneticGrab);
 	EnhancedInput->BindAction(InputConfig->MagneticGrabAction, ETriggerEvent::Completed, this, &AZeroEscapeCharacter::EndMagneticGrab);
 	EnhancedInput->BindAction(InputConfig->MagneticGrabAction, ETriggerEvent::Canceled, this, &AZeroEscapeCharacter::EndMagneticGrab);
 	EnhancedInput->BindAction(InputConfig->MagneticThrowAction, ETriggerEvent::Started, this, &AZeroEscapeCharacter::ThrowMagneticObject);
+}
+
+/** 重冲击从 Prepared 到倒地期间独占身体控制；未装配组件时不阻断原玩家输入。 */
+bool AZeroEscapeCharacter::CanAcceptBodyInput() const
+{
+	return !IsValid(HeavyImpactResponse) || !HeavyImpactResponse->IsBusy();
 }
 
 /** 查找本地玩家输入子系统；服务器、AI 控制或占有尚未完成时安全返回空。 */
@@ -182,6 +218,11 @@ void AZeroEscapeCharacter::RemoveInputMappingContexts()
 /** 依据控制器水平朝向计算前后与左右方向；相机俯仰不会令角色产生垂直移动。 */
 void AZeroEscapeCharacter::Move(const FInputActionValue& Value)
 {
+	if (!CanAcceptBodyInput())
+	{
+		return;
+	}
+
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 	if (!IsValid(Controller))
 	{
@@ -196,6 +237,15 @@ void AZeroEscapeCharacter::Move(const FInputActionValue& Value)
 	AddMovementInput(RightDirection, MovementVector.X);
 }
 
+/** 物理受击期间拒绝新的跳跃，Completed/Canceled 仍由 StopJumping 清理已有跳跃输入。 */
+void AZeroEscapeCharacter::TryJump()
+{
+	if (CanAcceptBodyInput())
+	{
+		Jump();
+	}
+}
+
 /** 把鼠标或手柄的二维视角值转发给控制器，不在角色中重复实现灵敏度。 */
 void AZeroEscapeCharacter::Look(const FInputActionValue& Value)
 {
@@ -207,7 +257,7 @@ void AZeroEscapeCharacter::Look(const FInputActionValue& Value)
 /** 请求磁力组件在当前准星附近执行一次候选选取。 */
 void AZeroEscapeCharacter::BeginMagneticGrab()
 {
-	if (IsValid(ElectromagneticGrab))
+	if (CanAcceptBodyInput() && IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->BeginGrabInput();
 	}
@@ -225,8 +275,18 @@ void AZeroEscapeCharacter::EndMagneticGrab()
 /** 请求磁力组件将当前持有物体朝准星方向投掷。 */
 void AZeroEscapeCharacter::ThrowMagneticObject()
 {
-	if (IsValid(ElectromagneticGrab))
+	if (CanAcceptBodyInput() && IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->ThrowHeldObject();
+	}
+}
+
+/** 只在真实接触提交后中断磁力；组件内部保证空手调用不锁住下一次抓取。 */
+void AZeroEscapeCharacter::HandleHeavyImpactCommitted(
+	const FHeavyImpactPreparationRequest& /*Request*/)
+{
+	if (IsValid(ElectromagneticGrab))
+	{
+		ElectromagneticGrab->InterruptAndRelease();
 	}
 }

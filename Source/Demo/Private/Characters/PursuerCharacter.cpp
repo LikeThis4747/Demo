@@ -2,8 +2,8 @@
 
 /**
  * @file PursuerCharacter.cpp
- * 职责：装配追猎者角色、官方 Physics Control 与局部受击状态组件，应用移动参数并播放攻击蒙太奇。
- * 边界：不做 AI 决策或物理受击状态管理；不加载除攻击蒙太奇外的资源；不替代专用状态 Owner。
+ * 职责：装配追猎者、官方 Physics Control 与共享重冲击组件，应用移动参数并播放攻击蒙太奇。
+ * 边界：不做 AI 决策或物理受击状态管理；旧局部受击只保留回退代码，不在本版本运行装配。
  */
 
 #include "Characters/PursuerCharacter.h"
@@ -12,6 +12,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/Physics/PhysicsControlHitResponseComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -26,8 +27,7 @@ APursuerCharacter::APursuerCharacter()
 
 	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
 	PhysicsControl->SetupAttachment(GetRootComponent());
-	PhysicsControlHitResponse = CreateDefaultSubobject<UPhysicsControlHitResponseComponent>(
-		TEXT("PhysicsControlHitResponse"));
+	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
 
 	AIControllerClass = APursuerAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -41,6 +41,22 @@ APursuerCharacter::APursuerCharacter()
 	MovementComponent->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
 }
 
+/** 把接口请求交给唯一重冲击状态 Owner；组件缺失时明确拒绝，不恢复旧局部受击兜底。 */
+EHeavyImpactPrepareResult APursuerCharacter::PrepareForHeavyImpact_Implementation(
+	const FHeavyImpactPreparationRequest& Request)
+{
+	return IsValid(HeavyImpactResponse)
+		? HeavyImpactResponse->PrepareForImpact(Request)
+		: EHeavyImpactPrepareResult::Invalid;
+}
+
+/** 旧蒙太奇反应与新重冲击任一忙碌时都暂停 AI，旧布尔状态保留用于无损回退。 */
+bool APursuerCharacter::IsReacting() const
+{
+	return bIsReacting
+		|| (IsValid(HeavyImpactResponse) && HeavyImpactResponse->IsBusy());
+}
+
 /** 按 Config 应用移动速度；Config 缺失或非法时保留引擎默认并记录错误，不阻断游戏。 */
 void APursuerCharacter::PostInitializeComponents()
 {
@@ -51,8 +67,17 @@ void APursuerCharacter::PostInitializeComponents()
 	// 敌人不触发玩家第三人称弹簧臂的相机回缩：对 Camera 通道 Ignore（保留相机对世界几何防穿墙，且与 PhysicsBody 受击独立）。
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	GetMesh()->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
-	PhysicsControlHitResponse->Configure(GetMesh(), PhysicsControl, PhysicsControlHitTuning);
-	PhysicsControlHitResponse->OnPhysicsHit.AddDynamic(this, &APursuerCharacter::HandleHitReact);
+
+	if (IsValid(HeavyImpactResponse))
+	{
+		HeavyImpactResponse->Configure(
+			this,
+			GetMesh(),
+			GetCapsuleComponent(),
+			GetCharacterMovement(),
+			PhysicsControl,
+			HeavyImpactTuningData);
+	}
 
 	FString ConfigurationError;
 	if (!IsValid(Config) || !Config->IsConfigured(ConfigurationError))

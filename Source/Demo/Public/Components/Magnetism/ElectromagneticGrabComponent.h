@@ -3,7 +3,7 @@
 /**
  * @file ElectromagneticGrabComponent.h
  * 职责：实现玩家电磁抓取的选取、曲线吸取、持有、放下、投掷与安全恢复状态机。
- * 边界：Chaos/Physics Handle 负责刚体求解；全局手感只从 UMagneticGrabTuningData 读取；输入由角色转发。
+ * 边界：Chaos/Physics Handle 负责刚体求解；重冲击只能请求中断，不读取或改写磁力内部状态。
  * 状态 Owner：本组件独占当前持有物、吸取/持有阶段、临时物理覆盖、输入锁与安全计时状态。
  */
 
@@ -42,6 +42,9 @@ public:
 
 	/** 释放当前刚体，并按照准星方向、全局基础速度和单物体倍率施加速度变化冲量。 */
 	void ThrowHeldObject();
+
+	/** 重冲击真实提交时中断吸取或持有；空手时保持完全无副作用。 */
+	void InterruptAndRelease();
 
 	/** 同时检查组件弱引用与 Physics Handle，确认双方是否指向同一个当前持有刚体。 */
 	bool IsHoldingObject() const;

@@ -3,8 +3,8 @@
 /**
  * @file PendulumHazard.h
  * 职责：创建世界约束的球形物理摆锤，按初始角度自由释放，并在中线穿越时仅补回缺失能量。
- * 边界：不按碰撞物类别改写冲量，不处理玩家/追猎者受击，不加载美术资产，不接入 PCG。
- * 状态 Owner：只拥有自身中线侧别、补能 Timer 与物理组件生命周期。
+ * 边界：不按碰撞物类别改写冲量，只经共享接口请求接收者提前准备，不加载美术资产，不接入 PCG。
+ * 状态 Owner：拥有自身中线侧别、半摆 ImpactId、预测候选、补能 Timer 与物理组件生命周期。
  */
 
 #pragma once
@@ -17,8 +17,10 @@
 
 class UPendulumHazardTuningData;
 class UPhysicsConstraintComponent;
+class UPrimitiveComponent;
 class USceneComponent;
 class USphereComponent;
+struct FHeavyImpactPreparationRequest;
 
 /** 真实 Chaos 刚体自由摆动、以有限中线补能抵消阻尼损耗的常驻摆锤机关。 */
 UCLASS()
@@ -27,7 +29,7 @@ class DEMO_API APendulumHazard final : public AActor
 	GENERATED_BODY()
 
 public:
-	/** 创建地面根、世界约束、物理锤头与三个纯美术挂点；Actor Tick 永久关闭。 */
+	/** 创建地面根、世界约束、物理锤头、独立预测球与三个纯美术挂点；Actor Tick 永久关闭。 */
 	APendulumHazard();
 
 	/** 根据 DataAsset 在编辑器里预览初始释放姿态；不建立约束或启动物理。 */
@@ -53,8 +55,37 @@ private:
 	/** 仅在 BeginPlay 初始化时绕世界约束 X 轴瞬移到目标摆幅，然后由重力自然释放。 */
 	void SetInitialReleasePose(const UPendulumHazardTuningData& Tuning);
 
-	/** 以低成本采样主轴角度；检测到跨越中线时至多请求一次补能。 */
+	/** 以低成本采样主轴角度和预测候选；跨中线时更新半摆 ID，并至多请求一次补能。 */
 	void EvaluateEnergyAssist();
+
+	/** 对仍在预测球内、且本半摆尚未接受的接口接收者，反复计算接近速度和预计接触时间。 */
+	void EvaluatePreparationCandidates();
+
+	/** 使用 Bob 与接收者碰撞表面的相对运动，生成只描述预期真实接触的接口请求。 */
+	bool BuildPreparationRequest(
+		const AActor& Receiver,
+		FHeavyImpactPreparationRequest& OutRequest);
+
+	/** 中线穿越后开始下一半摆：生成新 ID，并允许每个接收者重新接受一次通知。 */
+	void BeginNewSwingPass();
+
+	/** 预测球进入事件只登记实现共享接口的 Actor；实际请求统一在 60 Hz Timer 中完成。 */
+	UFUNCTION()
+	void HandlePreparationVolumeBeginOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		int32 OtherBodyIndex,
+		bool bFromSweep,
+		const FHitResult& SweepResult);
+
+	/** Actor 的最后一个组件离开预测球后移除候选；已通知记录保留到下一半摆。 */
+	UFUNCTION()
+	void HandlePreparationVolumeEndOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComponent,
+		int32 OtherBodyIndex);
 
 	/** 当前切向速度低于目标速度时，沿当前运动方向施加有限普通冲量；绝不刹车。 */
 	void AssistAtCenterCrossing();
@@ -85,6 +116,11 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> BobBody;
 
+	/** 随 BobBody 运动的独立 Query-only 球；只 Overlap Pawn，不阻挡、不施力且不影响导航。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USphereComponent> PreparationVolume;
+
 	/** 锤头纯美术挂点；保持在 BobBody 中心并随刚体运动，不猜测未知网格尺寸或自动缩放。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|摆锤",
 		meta = (AllowPrivateAccess = "true"))
@@ -102,6 +138,15 @@ private:
 
 	/** 最近一次确认位于中线哪一侧：-1 / +1；0 表示尚未取得稳定侧别。 */
 	int8 LastObservedSide = 0;
+
+	/** 当前半摆共用的请求 ID；玩家和 AI 以同一 ID 分别、独立地接受。 */
+	FGuid CurrentSwingImpactId;
+
+	/** 当前仍与预测球重叠、且实现 IHeavyImpactReceiver 的 Actor。 */
+	TSet<TWeakObjectPtr<AActor>> PreparationCandidates;
+
+	/** 本半摆已返回 Accepted/Duplicate 的接收者；Invalid/Busy 不写入，以允许稍后重试。 */
+	TSet<TWeakObjectPtr<AActor>> NotifiedReceiversThisSwing;
 
 	/** 60 Hz 中线穿越采样 Timer；不是物理子步，也不连续施力。 */
 	FTimerHandle EnergyAssistTimerHandle;

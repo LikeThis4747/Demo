@@ -1,0 +1,414 @@
+// Copyright Epic Games, Inc. All Rights Reserved.
+
+/**
+ * @file HeavyImpactResponseTests.cpp
+ * 职责：验证重冲击请求与调参资产在进入运行时状态机前拒绝非法输入。
+ * 边界：只构造瞬态 World、Actor、组件和 PCA 数据，不依赖项目资产或真实 Chaos 求解。
+ */
+
+#include "Physics/HeavyImpactTypes.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+#include "Animation/Skeleton.h"
+#include "Components/BoxComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Data/Hazards/PendulumHazardTuningData.h"
+#include "Data/Physics/HeavyImpactTuningData.h"
+#include "Engine/SkeletalMesh.h"
+#include "Engine/World.h"
+#include "GameFramework/Actor.h"
+#include "Misc/AutomationTest.h"
+#include "PhysicsControlAsset.h"
+#include "ReferenceSkeleton.h"
+
+#include <limits>
+
+namespace ZeroEscape::Physics::Tests
+{
+	namespace HeavyImpactTestsPrivate
+	{
+		/** 为请求契约提供可 Spawn Actor 的短生命周期世界，并在用例结束时完整销毁。 */
+		class FScopedTestWorld
+		{
+		public:
+			FScopedTestWorld()
+			{
+				World = UWorld::CreateWorld(EWorldType::Game, false);
+				if (IsValid(World))
+				{
+					World->AddToRoot();
+				}
+			}
+
+			~FScopedTestWorld()
+			{
+				if (IsValid(World))
+				{
+					World->DestroyWorld(false);
+					World->RemoveFromRoot();
+				}
+			}
+
+			UWorld* Get() const { return World; }
+
+		private:
+			TObjectPtr<UWorld> World = nullptr;
+		};
+
+		/** 创建归指定 Actor 所有的瞬态碰撞组件；请求校验只读取其真实 Owner。 */
+		UBoxComponent* CreateOwnedBox(AActor* Owner)
+		{
+			if (!IsValid(Owner))
+			{
+				return nullptr;
+			}
+
+			UBoxComponent* Box = NewObject<UBoxComponent>(Owner);
+			Owner->AddInstanceComponent(Box);
+			Box->RegisterComponent();
+			return Box;
+		}
+
+		/** 构造不依赖磁盘资产、但能通过 PCA/骨骼前置校验的调参夹具。 */
+		struct FTuningFixture
+		{
+			FTuningFixture()
+			{
+				Tuning = NewObject<UHeavyImpactTuningData>();
+				PhysicsControlAsset = NewObject<UPhysicsControlAsset>();
+				SkeletalMesh = NewObject<USkeletalMesh>();
+				Skeleton = NewObject<USkeleton>();
+				MeshComponent = NewObject<USkeletalMeshComponent>();
+
+				SkeletalMesh->SetSkeleton(Skeleton);
+				{
+					FReferenceSkeletonModifier SkeletonModifier(
+						SkeletalMesh->GetRefSkeleton(), Skeleton);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("pelvis"), TEXT("pelvis"), INDEX_NONE),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("spine_01"), TEXT("spine_01"), 0),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("head"), TEXT("head"), 1),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("upperarm_l"), TEXT("upperarm_l"), 1),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("upperarm_r"), TEXT("upperarm_r"), 1),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("thigh_l"), TEXT("thigh_l"), 0),
+						FTransform::Identity);
+					SkeletonModifier.Add(
+						FMeshBoneInfo(TEXT("thigh_r"), TEXT("thigh_r"), 0),
+						FTransform::Identity);
+				}
+				MeshComponent->SetSkeletalMeshAsset(SkeletalMesh);
+
+				const auto AddLimb = [this](
+					const FName LimbName,
+					const FName StartBone,
+					const bool bIncludeParentBone)
+				{
+					FPhysicsControlLimbSetupData Limb;
+					Limb.LimbName = LimbName;
+					Limb.StartBone = StartBone;
+					Limb.bIncludeParentBone = bIncludeParentBone;
+					Limb.bCreateWorldSpaceControls = false;
+					Limb.bCreateParentSpaceControls = true;
+					Limb.bCreateBodyModifiers = true;
+					PhysicsControlAsset->CharacterSetupData.LimbSetupData.Add(Limb);
+				};
+				AddLimb(TEXT("Head"), TEXT("head"), false);
+				AddLimb(TEXT("ArmLeft"), TEXT("upperarm_l"), false);
+				AddLimb(TEXT("ArmRight"), TEXT("upperarm_r"), false);
+				AddLimb(TEXT("LegLeft"), TEXT("thigh_l"), false);
+				AddLimb(TEXT("LegRight"), TEXT("thigh_r"), false);
+				AddLimb(TEXT("Spine"), TEXT("spine_01"), true);
+				PhysicsControlAsset->CharacterSetupData.DefaultParentSpaceControlData.bEnabled = false;
+				PhysicsControlAsset->CharacterSetupData.DefaultBodyModifierData.MovementType =
+					EPhysicsMovementType::Kinematic;
+				PhysicsControlAsset->CharacterSetupData.DefaultBodyModifierData.CollisionType =
+					ECollisionEnabled::QueryOnly;
+				PhysicsControlAsset->CharacterSetupData.DefaultBodyModifierData.GravityMultiplier = 1.0f;
+				PhysicsControlAsset->CharacterSetupData.DefaultBodyModifierData.PhysicsBlendWeight = 0.0f;
+				PhysicsControlAsset->CharacterSetupData.DefaultBodyModifierData.bEnableCCD = false;
+
+				const auto AddProfile = [this](
+					const FName ProfileName,
+					const bool bControlEnabled,
+					const EPhysicsMovementType MovementType,
+					const ECollisionEnabled::Type CollisionType,
+					const float GravityMultiplier,
+					const float BlendWeight,
+					const bool bEnableCCD)
+				{
+					FPhysicsControlSparseData ControlData;
+					ControlData.bEnabled = bControlEnabled;
+					ControlData.LinearStrength = 0.0f;
+					ControlData.LinearExtraDamping = 0.0f;
+					ControlData.AngularStrength = bControlEnabled ? 4.0f : 0.0f;
+					ControlData.MaxTorque = bControlEnabled ? 25000.0f : 0.0f;
+					ControlData.bUseSkeletalAnimation = true;
+
+					FPhysicsControlModifierSparseData ModifierData(
+						MovementType,
+						CollisionType,
+						GravityMultiplier,
+						BlendWeight,
+						EPhysicsControlKinematicTargetSpace::OffsetInBoneSpace,
+						true,
+						bEnableCCD);
+
+					FPhysicsControlControlAndModifierUpdates Profile;
+					Profile.ControlUpdates.Add(
+						FPhysicsControlNamedControlParameters(TEXT("ParentSpace"), ControlData));
+					Profile.ModifierUpdates.Add(
+						FPhysicsControlNamedModifierParameters(TEXT("All"), ModifierData));
+					PhysicsControlAsset->Profiles.Add(ProfileName, MoveTemp(Profile));
+				};
+
+				AddProfile(
+					Demo::HeavyImpact::ProfileInactive,
+					false,
+					EPhysicsMovementType::Kinematic,
+					ECollisionEnabled::QueryOnly,
+					1.0f,
+					0.0f,
+					false);
+				AddProfile(
+					Demo::HeavyImpact::ProfilePrepared,
+					true,
+					EPhysicsMovementType::Simulated,
+					ECollisionEnabled::QueryAndPhysics,
+					0.0f,
+					1.0f,
+					true);
+				AddProfile(
+					Demo::HeavyImpact::ProfileFlight,
+					true,
+					EPhysicsMovementType::Simulated,
+					ECollisionEnabled::QueryAndPhysics,
+					1.0f,
+					1.0f,
+					true);
+				AddProfile(
+					Demo::HeavyImpact::ProfileLandingRecovery,
+					true,
+					EPhysicsMovementType::Simulated,
+					ECollisionEnabled::QueryAndPhysics,
+					1.0f,
+					1.0f,
+					true);
+				AddProfile(
+					Demo::HeavyImpact::ProfileFreeFallback,
+					false,
+					EPhysicsMovementType::Simulated,
+					ECollisionEnabled::QueryAndPhysics,
+					1.0f,
+					1.0f,
+					true);
+
+				Tuning->PhysicsControlAsset = PhysicsControlAsset;
+			}
+
+			TObjectPtr<UHeavyImpactTuningData> Tuning = nullptr;
+			TObjectPtr<UPhysicsControlAsset> PhysicsControlAsset = nullptr;
+			TObjectPtr<USkeletalMesh> SkeletalMesh = nullptr;
+			TObjectPtr<USkeleton> Skeleton = nullptr;
+			TObjectPtr<USkeletalMeshComponent> MeshComponent = nullptr;
+		};
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FHeavyImpactRequestContractTest,
+		"Demo.Physics.HeavyImpact.RequestContract",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FHeavyImpactRequestContractTest::RunTest(const FString& Parameters)
+	{
+		using namespace HeavyImpactTestsPrivate;
+		(void)Parameters;
+
+		FScopedTestWorld TestWorld;
+		if (!TestNotNull(TEXT("请求契约夹具必须创建瞬态 World"), TestWorld.Get()))
+		{
+			return false;
+		}
+
+		AActor* Receiver = TestWorld.Get()->SpawnActor<AActor>();
+		AActor* SourceActor = TestWorld.Get()->SpawnActor<AActor>();
+		AActor* OtherActor = TestWorld.Get()->SpawnActor<AActor>();
+		UBoxComponent* SourceComponent = CreateOwnedBox(SourceActor);
+		UBoxComponent* ReceiverComponent = CreateOwnedBox(Receiver);
+		if (!TestNotNull(TEXT("请求契约夹具必须创建 Receiver"), Receiver)
+			|| !TestNotNull(TEXT("请求契约夹具必须创建 SourceActor"), SourceActor)
+			|| !TestNotNull(TEXT("请求契约夹具必须创建 OtherActor"), OtherActor)
+			|| !TestNotNull(TEXT("请求契约夹具必须创建 SourceComponent"), SourceComponent)
+			|| !TestNotNull(TEXT("请求契约夹具必须创建 ReceiverComponent"), ReceiverComponent))
+		{
+			return false;
+		}
+
+		FHeavyImpactPreparationRequest ValidRequest;
+		ValidRequest.ImpactId = FGuid::NewGuid();
+		ValidRequest.SourceActor = SourceActor;
+		ValidRequest.SourceComponent = SourceComponent;
+		ValidRequest.PredictedImpactPoint = FVector(100.0f, 20.0f, 50.0f);
+		ValidRequest.SourceLinearVelocity = FVector(800.0f, 0.0f, 0.0f);
+		ValidRequest.EstimatedTimeToContactSeconds = 0.05f;
+
+		auto ExpectInvalid = [this, Receiver](
+			const TCHAR* Description,
+			const FHeavyImpactPreparationRequest& Request)
+		{
+			FString Reason;
+			TestFalse(Description, Request.IsStructurallyValid(Receiver, Reason));
+			TestFalse(TEXT("非法请求必须返回可诊断原因"), Reason.IsEmpty());
+		};
+
+		FHeavyImpactPreparationRequest Request = ValidRequest;
+		Request.ImpactId.Invalidate();
+		ExpectInvalid(TEXT("无效 ImpactId 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.SourceActor = nullptr;
+		ExpectInvalid(TEXT("空 SourceActor 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.SourceComponent = nullptr;
+		ExpectInvalid(TEXT("空 SourceComponent 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.SourceActor = OtherActor;
+		ExpectInvalid(TEXT("SourceComponent Owner 不匹配必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.SourceActor = Receiver;
+		Request.SourceComponent = ReceiverComponent;
+		ExpectInvalid(TEXT("接收者使用自身组件撞自己必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.PredictedImpactPoint.X = std::numeric_limits<float>::quiet_NaN();
+		ExpectInvalid(TEXT("预测接触点包含 NaN 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.SourceLinearVelocity.Y = std::numeric_limits<float>::infinity();
+		ExpectInvalid(TEXT("源速度包含 Inf 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.EstimatedTimeToContactSeconds = std::numeric_limits<float>::quiet_NaN();
+		ExpectInvalid(TEXT("预计接触时间为 NaN 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.EstimatedTimeToContactSeconds = -0.01f;
+		ExpectInvalid(TEXT("预计接触时间为负数必须被拒绝"), Request);
+
+		FString ValidReason;
+		TestTrue(TEXT("对象关系与预测值都合法的请求必须通过"),
+			ValidRequest.IsStructurallyValid(Receiver, ValidReason));
+		TestTrue(TEXT("合法请求不得残留失败原因"), ValidReason.IsEmpty());
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FHeavyImpactTuningContractTest,
+		"Demo.Physics.HeavyImpact.TuningContract",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FHeavyImpactTuningContractTest::RunTest(const FString& Parameters)
+	{
+		using namespace HeavyImpactTestsPrivate;
+		(void)Parameters;
+
+		FTuningFixture Fixture;
+		FText Error;
+		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error)))
+		{
+			AddError(FString::Printf(TEXT("瞬态基线失败原因：%s"), *Error.ToString()));
+			return false;
+		}
+
+		FPhysicsControlControlAndModifierUpdates& FlightProfile =
+			Fixture.PhysicsControlAsset->Profiles.FindChecked(Demo::HeavyImpact::ProfileFlight);
+		FlightProfile.ControlUpdates[0].Data.LinearStrength = 1.0f;
+		TestFalse(TEXT("Flight Profile 不得用线性驱动钉住角色位移"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		FlightProfile.ControlUpdates[0].Data.LinearStrength = 0.0f;
+		FlightProfile.ControlUpdates.Add(
+			FPhysicsControlNamedControlParameters(TEXT("Spine"), FPhysicsControlSparseData()));
+		TestFalse(TEXT("Profile 不得在 ParentSpace 后追加单 Limb 覆盖"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		FlightProfile.ControlUpdates.RemoveAt(1);
+
+		FPhysicsControlControlAndModifierUpdates& FreeProfile =
+			Fixture.PhysicsControlAsset->Profiles.FindChecked(Demo::HeavyImpact::ProfileFreeFallback);
+		FreeProfile.ControlUpdates[0].Data.bEnabled = true;
+		TestFalse(TEXT("FreeFallback Profile 必须显式关闭姿态控制"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		FreeProfile.ControlUpdates[0].Data.bEnabled = false;
+
+		Fixture.PhysicsControlAsset->AdditionalSets.ControlSetUpdates.AddDefaulted();
+		TestFalse(TEXT("PCA 不得通过 Additional Set 引入校验外权威"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.PhysicsControlAsset->AdditionalSets.ControlSetUpdates.Reset();
+
+		Swap(
+			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[0],
+			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[1]);
+		TestFalse(TEXT("PCA Limb 必须保持叶到根的固定顺序"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Swap(
+			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[0],
+			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[1]);
+
+		Fixture.Tuning->ForceDownedAfterSeconds = Fixture.Tuning->FreeFallbackAfterSeconds;
+		TestFalse(TEXT("ForceDowned 等于 FreeFallback 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		Fixture.Tuning->ForceDownedAfterSeconds = Fixture.Tuning->FreeFallbackAfterSeconds - 0.1f;
+		TestFalse(TEXT("ForceDowned 小于 FreeFallback 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		Fixture.Tuning->ForceDownedAfterSeconds = 10.0f;
+		Fixture.Tuning->GroundProbeDistance = std::numeric_limits<float>::quiet_NaN();
+		TestFalse(TEXT("任一调参阈值为 NaN 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		Fixture.Tuning->GroundProbeDistance = 120.0f;
+		Fixture.Tuning->FreeFallbackAfterSeconds = std::numeric_limits<float>::infinity();
+		TestFalse(TEXT("任一调参阈值为 Inf 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FPendulumHeavyImpactPredictionContractTest,
+		"Demo.Physics.HeavyImpact.PendulumPredictionContract",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FPendulumHeavyImpactPredictionContractTest::RunTest(const FString& Parameters)
+	{
+		(void)Parameters;
+
+		UPendulumHazardTuningData* Tuning = NewObject<UPendulumHazardTuningData>();
+		FString Error;
+		if (!TestTrue(TEXT("摆锤默认预测参数必须覆盖移动接收者、0.5s 低帧率上限与 60Hz 采样余量"), Tuning->IsConfigured(Error)))
+		{
+			AddError(FString::Printf(TEXT("摆锤默认参数失败原因：%s"), *Error));
+			return false;
+		}
+
+		Tuning->PreparationLookAheadDistance = 300.0f;
+		TestFalse(TEXT("预测距离不足以覆盖移动接收者、0.5s 最大 ETA 和采样余量时必须拒绝"),
+			Tuning->IsConfigured(Error));
+		return true;
+	}
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

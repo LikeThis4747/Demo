@@ -1,9 +1,10 @@
 # Current Task
 
-- 当前任务：按已审阅的 B v1.1 方案正式实现玩家/追猎者共享的重冲击物理受击系统，并完成 C++ 构建、官方 MCP 资产装配和可自动执行的验证；用户明天进行画面验收。
-- 当前阶段：用户已明确授权实现；首次功能落盘前正在执行全工作区完整 baseline commit、内部工蜂 push 与远端哈希核验，门禁通过前不修改 Source/Content/Config。
-- 权威方案：`claude/docs/2026-08-05-重冲击物理受击B路线拟实现代码审阅稿.md` v1.1；正式范围见 `DOC/DailyPlan/2026-08-05-重冲击物理受击效果原型实施计划.md`。
-- 核心约束：机关先用独立预测体积请求 Prepared，锤体随后与已模拟的 Skeletal Mesh 发生真实 Chaos 接触；角色侧不补 AddImpulse；PCA 只提供有限角向姿态约束；最终停在真实倒地点。
-- 旧追猎者受击：源码、DataAsset、蒙太奇字段、回调和状态成员全部保留；首版仅成组暂停默认子对象构造、Configure 和 Hit Delegate 三处运行时装配，精确恢复文本在 B 稿第 13 节。
-- 工具状态：UE5.8 官方 MCP 与本地 MCP 均在线；资产读写优先使用官方 MCP。
-- 用户要求：实现问题与需人工处理事项必须记录；若需要用户操作，等待用户回来执行，不新增冗余绕过代码。
+- 当前任务：完成玩家/追猎者共享的重冲击物理受击原型，并在 Editor 可安全重启后完成 PCA/DA/Blueprint 装配、自动化、PIE 与用户画面验收。
+- 当前阶段：C++、摆锤预测接入和自动化测试源码已落盘；UHT 与 Demo 模块多轮 no-link 编译通过，最终一轮 4 个动作成功。完整 DLL 链接、资产作者化和运行验证尚未完成。
+- 实施前可回退基线：`1c50616c8f19cfa5daa62d39fd626c1c11ff7310`，已推送到内部工蜂并核验远端一致。
+- 当前阻塞：PID 13728 的 UnrealEditor 正在运行且 Live Coding 占用 `UnrealEditor-Demo.dll`；不得杀进程、热更或写临时 DLL。用户需先安全关闭 Editor。
+- Editor 重启前后的人工门槛：用户创建并最终 Compile/Save 两份 PCA（`PCA_PlayerHeavyImpact`、`PCA_PursuerHeavyImpact`）；双 MCP 无 PCA Factory/Compile 入口。其余 DA/CDO/Blueprint 与摆锤 Tuning 更新优先用官方 MCP。
+- 关键合同：预接管后由锤体与模拟 Mesh 的真实 Chaos 接触产生击飞；角色侧不补人工冲量；PCA 只提供有限 Parent-space 角向姿态约束；角色停在真实倒地点。
+- 旧追猎者局部受击源码/调参/回调完整保留，只暂停三处运行装配；新共享组件是重冲击 Physics Control 权威。
+- 详细人工步骤与未验证边界：`claude/docs/2026-08-05-重冲击物理受击实施记录与人工待办.md`。

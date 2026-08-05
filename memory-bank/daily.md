@@ -56,3 +56,12 @@
 - 主菜单、GameInstance、正式 GameMode/UI 于月底进入实现；8 月初已完成整局闭环。
 - 关键历史验证包括 DemoEditor 构建、PCG 19/19、288/288 Seed Sweep 与多次 PIE；均不能替代当前版本玩家实走和真实追猎者验收。
 - 第三方 SFCorridors 只做只读筛选；任何退场/删除仍需依赖闭包、精确清单与用户授权。
+
+<!-- written by shiqiqiwang at 2026-08-05 14:57 UTC -->
+
+## 2026-08-05 — 重冲击物理受击代码实现
+
+- 基线：实施前完整工作区提交 `1c50616c8f19cfa5daa62d39fd626c1c11ff7310` 已推送内部工蜂并核验。
+- 完成：共享重冲击状态组件、玩家/AI 接入、磁力中断、摆锤预测合同与测试源码；旧追猎者局部受击保留但暂停三处装配。
+- 验证：UHT 与 Demo 模块多轮 no-link 编译通过，最终 4 个动作成功；三路静态复核无 P0/P1；`git diff --check` 通过。
+- 遗留：运行中 Editor/Live Coding 锁住 DLL，完整链接未完成；PCA/DA/Blueprint、自动化、PIE 和画面验收均待后续，Content/Config 未改。

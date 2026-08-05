@@ -2,36 +2,44 @@
 
 /**
  * @file ZeroEscapeCharacter.h
- * 职责：装配第三人称相机、Physics Handle 与磁力组件，并把 Enhanced Input 意图转发给对应系统。
- * 边界：角色不保存磁力手感参数，不实现选取、持有或投掷算法，也不硬编码输入资源路径。
- * 状态 Owner：输入上下文生命周期由本类管理；磁力交互状态由 UElectromagneticGrabComponent 独占。
+ * 职责：装配第三人称相机、磁力与重冲击组件，并把 Enhanced Input 和机关接口转发给对应系统。
+ * 边界：角色不实现磁力或物理受击算法，不直接施加冲量，也不硬编码输入与物理资源路径。
+ * 状态 Owner：输入上下文由本类管理；磁力与重冲击状态分别由两个专用组件独占。
  */
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Interfaces/HeavyImpactReceiver.h"
 
 #include "ZeroEscapeCharacter.generated.h"
 
 class UCameraComponent;
 class UElectromagneticGrabComponent;
 class UEnhancedInputLocalPlayerSubsystem;
+class UHeavyImpactResponseComponent;
+class UHeavyImpactTuningData;
 class UHealthComponent;
 class UPhysicsHandleComponent;
+class UPhysicsControlComponent;
 class USpringArmComponent;
 class UZeroEscapeInputConfig;
 struct FInputActionValue;
 
 /** 第三人称玩家角色，只负责组件装配、移动、相机和玩家意图转发。 */
 UCLASS()
-class DEMO_API AZeroEscapeCharacter final : public ACharacter
+class DEMO_API AZeroEscapeCharacter final : public ACharacter, public IHeavyImpactReceiver
 {
 	GENERATED_BODY()
 
 public:
 	/** 创建第三人称过肩相机、Physics Handle 与电磁抓取能力组件。 */
 	AZeroEscapeCharacter();
+
+	/** 把机关的重冲击准备请求转发给唯一共享响应组件。 */
+	virtual EHeavyImpactPrepareResult PrepareForHeavyImpact_Implementation(
+		const FHeavyImpactPreparationRequest& Request) override;
 
 	/** 本地 Pawn 再次可玩时，按输入 DataAsset 幂等应用本角色拥有的映射。 */
 	virtual void PawnClientRestart() override;
@@ -47,6 +55,9 @@ protected:
 	virtual void SetupPlayerInputComponent(UInputComponent* PlayerInputComponent) override;
 
 private:
+	/** 仅在重冲击组件空闲时允许移动、跳跃、抓取与投掷等身体输入。 */
+	bool CanAcceptBodyInput() const;
+
 	/** 返回当前本地玩家的 Enhanced Input 子系统；非本地或未占有时返回空。 */
 	UEnhancedInputLocalPlayerSubsystem* FindInputSubsystem() const;
 
@@ -62,6 +73,9 @@ private:
 	/** 把 Axis2D 视角输入转发为控制器 Yaw 与 Pitch。 */
 	void Look(const FInputActionValue& Value);
 
+	/** 仅在身体输入可用时把跳跃意图转发给 ACharacter。 */
+	void TryJump();
+
 	/** 将右键按下意图转发给磁力状态 Owner。 */
 	void BeginMagneticGrab();
 
@@ -70,6 +84,9 @@ private:
 
 	/** 将左键投掷意图转发给磁力状态 Owner。 */
 	void ThrowMagneticObject();
+
+	/** 真实重物接触提交后中断正在进行的磁力吸取或持有；空手时不产生副作用。 */
+	void HandleHeavyImpactCommitted(const FHeavyImpactPreparationRequest& Request);
 
 	/**
 	 * 第三人称弹簧臂；负责相机距离与碰撞回缩。
@@ -93,6 +110,18 @@ private:
 	/** 玩家生命组件；监听 OnTakeAnyDamage 结算受伤，供地刺等通过 ApplyDamage 的伤害源作用。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "属性", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UHealthComponent> HealthComponent;
+
+	/** 官方 Physics Control 求解组件；只由重冲击响应组件创建和驱动运行时记录。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UPhysicsControlComponent> PhysicsControl;
+
+	/** 玩家重冲击准备、真实接触、飞行和倒地状态的唯一运行时 Owner。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHeavyImpactResponseComponent> HeavyImpactResponse;
+
+	/** 玩家独立的重冲击 PCA 与判稳参数；必须在 BP_ZeroEscapeCharacter 类默认值中指定。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHeavyImpactTuningData> HeavyImpactTuningData;
 
 	/**
 	 * 输入资源唯一来源；对应 UZeroEscapeInputConfig，由 PawnClientRestart 与 SetupPlayerInputComponent 读取。

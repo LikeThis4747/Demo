@@ -3,15 +3,18 @@
 /**
  * @file PendulumHazard.cpp
  * 职责：建立 World-to-Body 物理摆、从侧边自然释放，并以每半周期至多一次的有限冲量补回阻尼损耗。
- * 边界：Chaos 碰撞是外物影响摆锤的唯一来源；本文件不监听 OnHit、不识别撞击物、不追踪正弦目标。
+ * 边界：预测球只经共享接口发准备请求；真实受击动量仍只来自 Bob 与角色 Mesh 的 Chaos 接触。
  */
 
 #include "Actors/Hazards/PendulumHazard.h"
 
+#include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "Data/Hazards/PendulumHazardTuningData.h"
 #include "Engine/World.h"
+#include "Interfaces/HeavyImpactReceiver.h"
+#include "Physics/HeavyImpactTypes.h"
 #include "PhysicsEngine/ConstraintInstance.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "TimerManager.h"
@@ -31,6 +34,11 @@ namespace PendulumHazard
 
 	/** 小于该速度缺口不施加冲量，避免浮点噪声导致无意义微调。 */
 	constexpr float MinimumUsefulSpeedDeficit = 1.0f;
+
+	/** Low-FPS safety window shared semantically with the receiver; normal 30/60 FPS keeps authored timing. */
+	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
+	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
+
 }
 
 /** 装配物理组件和美术挂点，配置明确的碰撞矩阵，并关闭 Actor Tick。 */
@@ -65,6 +73,16 @@ APendulumHazard::APendulumHazard()
 	BobBody->SetGenerateOverlapEvents(true);
 	BobBody->SetSimulatePhysics(false);
 	BobBody->SetEnableGravity(true);
+
+	PreparationVolume = CreateDefaultSubobject<USphereComponent>(TEXT("PreparationVolume"));
+	PreparationVolume->SetMobility(EComponentMobility::Movable);
+	PreparationVolume->SetupAttachment(BobBody);
+	PreparationVolume->SetCanEverAffectNavigation(false);
+	PreparationVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	PreparationVolume->SetCollisionObjectType(ECC_WorldDynamic);
+	PreparationVolume->SetCollisionResponseToAllChannels(ECR_Ignore);
+	PreparationVolume->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	PreparationVolume->SetGenerateOverlapEvents(true);
 
 	BobVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("BobVisualRoot"));
 	BobVisualRoot->SetMobility(EComponentMobility::Movable);
@@ -143,6 +161,29 @@ void APendulumHazard::BeginPlay()
 
 	SetInitialReleasePose(*TuningData);
 	LastObservedSide = 0;
+	PreparationCandidates.Reset();
+	BeginNewSwingPass();
+
+	PreparationVolume->OnComponentBeginOverlap.AddUniqueDynamic(
+		this,
+		&APendulumHazard::HandlePreparationVolumeBeginOverlap);
+	PreparationVolume->OnComponentEndOverlap.AddUniqueDynamic(
+		this,
+		&APendulumHazard::HandlePreparationVolumeEndOverlap);
+
+	// 组件可能在 BeginPlay 绑定 Delegate 前已经产生初始重叠，因此显式补齐当前候选。
+	TArray<AActor*> InitiallyOverlappingActors;
+	PreparationVolume->GetOverlappingActors(InitiallyOverlappingActors);
+	for (AActor* OverlappingActor : InitiallyOverlappingActors)
+	{
+		if (IsValid(OverlappingActor)
+			&& OverlappingActor != this
+			&& OverlappingActor->GetClass()->ImplementsInterface(
+				UHeavyImpactReceiver::StaticClass()))
+		{
+			PreparationCandidates.Add(OverlappingActor);
+		}
+	}
 
 	GetWorldTimerManager().SetTimer(
 		EnergyAssistTimerHandle,
@@ -156,6 +197,20 @@ void APendulumHazard::BeginPlay()
 void APendulumHazard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(EnergyAssistTimerHandle);
+
+	if (IsValid(PreparationVolume))
+	{
+		PreparationVolume->OnComponentBeginOverlap.RemoveDynamic(
+			this,
+			&APendulumHazard::HandlePreparationVolumeBeginOverlap);
+		PreparationVolume->OnComponentEndOverlap.RemoveDynamic(
+			this,
+			&APendulumHazard::HandlePreparationVolumeEndOverlap);
+	}
+
+	PreparationCandidates.Reset();
+	NotifiedReceiversThisSwing.Reset();
+	CurrentSwingImpactId = FGuid();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -178,6 +233,10 @@ void APendulumHazard::ApplyGeometry(
 	BobBody->SetRelativeLocationAndRotation(
 		PivotLocation + PreviewRotation.RotateVector(RestRadius),
 		PreviewRotation);
+	PreparationVolume->SetSphereRadius(
+		Tuning.BobRadius + Tuning.PreparationLookAheadDistance,
+		false);
+	PreparationVolume->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
 
 	BobVisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
 	RodVisualRoot->SetRelativeLocationAndRotation(
@@ -256,7 +315,7 @@ void APendulumHazard::SetInitialReleasePose(const UPendulumHazardTuningData& Tun
 	BobBody->WakeAllRigidBodies();
 }
 
-/** 用带 1° 死区的侧别变化识别一次完整中线穿越，每半周期最多调用一次补能。 */
+/** 用带 1° 死区的侧别变化识别中线穿越，同时复用同一 60 Hz Timer 评估预测候选。 */
 void APendulumHazard::EvaluateEnergyAssist()
 {
 	if (!IsValid(TuningData) || !BobBody->IsSimulatingPhysics())
@@ -265,33 +324,241 @@ void APendulumHazard::EvaluateEnergyAssist()
 	}
 
 	const float TwistDegrees = PhysicsConstraint->GetCurrentTwist();
-	if (!FMath::IsFinite(TwistDegrees))
+	if (FMath::IsFinite(TwistDegrees))
+	{
+		const int8 CurrentSide = TwistDegrees > PendulumHazard::CenterCrossingDeadZoneDegrees
+			? 1
+			: (TwistDegrees < -PendulumHazard::CenterCrossingDeadZoneDegrees ? -1 : 0);
+
+		if (CurrentSide != 0)
+		{
+			if (LastObservedSide == 0)
+			{
+				LastObservedSide = CurrentSide;
+			}
+			else if (CurrentSide != LastObservedSide)
+			{
+				LastObservedSide = CurrentSide;
+				BeginNewSwingPass();
+				AssistAtCenterCrossing();
+			}
+		}
+	}
+
+	// 即使当前处于 1° 中线死区也必须继续预测，因为这里正是最可能发生真实命中的区域。
+	EvaluatePreparationCandidates();
+}
+
+/** 快照候选后调用接口，避免接收者切换碰撞状态时同步触发 EndOverlap 破坏当前迭代器。 */
+void APendulumHazard::EvaluatePreparationCandidates()
+{
+	if (!IsValid(PreparationVolume) || !CurrentSwingImpactId.IsValid())
 	{
 		return;
 	}
 
-	const int8 CurrentSide = TwistDegrees > PendulumHazard::CenterCrossingDeadZoneDegrees
-		? 1
-		: (TwistDegrees < -PendulumHazard::CenterCrossingDeadZoneDegrees ? -1 : 0);
-
-	if (CurrentSide == 0)
+	TArray<TWeakObjectPtr<AActor>> CandidateSnapshot;
+	CandidateSnapshot.Reserve(PreparationCandidates.Num());
+	for (const TWeakObjectPtr<AActor>& Candidate : PreparationCandidates)
 	{
-		return;
+		CandidateSnapshot.Add(Candidate);
 	}
 
-	if (LastObservedSide == 0)
+	for (const TWeakObjectPtr<AActor>& Candidate : CandidateSnapshot)
 	{
-		LastObservedSide = CurrentSide;
-		return;
+		AActor* Receiver = Candidate.Get();
+		if (!IsValid(Receiver))
+		{
+			PreparationCandidates.Remove(Candidate);
+			continue;
+		}
+
+		if (!PreparationVolume->IsOverlappingActor(Receiver))
+		{
+			PreparationCandidates.Remove(Candidate);
+			continue;
+		}
+
+		if (NotifiedReceiversThisSwing.Contains(Candidate))
+		{
+			continue;
+		}
+
+		FHeavyImpactPreparationRequest Request;
+		if (!BuildPreparationRequest(*Receiver, Request))
+		{
+			continue;
+		}
+
+		const EHeavyImpactPrepareResult Result =
+			IHeavyImpactReceiver::Execute_PrepareForHeavyImpact(Receiver, Request);
+		if (Result == EHeavyImpactPrepareResult::Accepted
+			|| Result == EHeavyImpactPrepareResult::Duplicate)
+		{
+			// 接收结果按 Actor 独立记录，因此同一 ImpactId 可同时通知玩家和多个 AI。
+			NotifiedReceiversThisSwing.Add(Candidate);
+		}
+	}
+}
+
+/** 用接收者最近的简单碰撞表面估算径向间隙；预测只决定准备时机，不写入任何物理速度。 */
+bool APendulumHazard::BuildPreparationRequest(
+	const AActor& Receiver,
+	FHeavyImpactPreparationRequest& OutRequest)
+{
+	if (!IsValid(BobBody) || !CurrentSwingImpactId.IsValid())
+	{
+		return false;
 	}
 
-	if (CurrentSide == LastObservedSide)
+	const FVector BobCenter = BobBody->GetComponentLocation();
+	const FVector BobVelocity = BobBody->GetPhysicsLinearVelocity();
+	const FVector ReceiverVelocity = Receiver.GetVelocity();
+	if (BobCenter.ContainsNaN()
+		|| BobVelocity.ContainsNaN()
+		|| ReceiverVelocity.ContainsNaN())
 	{
-		return;
+		return false;
 	}
 
-	LastObservedSide = CurrentSide;
-	AssistAtCenterCrossing();
+	float ClosestSurfaceDistance = BIG_NUMBER;
+	FVector ClosestSurfacePoint = FVector::ZeroVector;
+	TInlineComponentArray<UPrimitiveComponent*> ReceiverPrimitives(&Receiver);
+	for (const UPrimitiveComponent* Primitive : ReceiverPrimitives)
+	{
+		if (!IsValid(Primitive)
+			|| Primitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
+		{
+			continue;
+		}
+
+		FVector SurfacePoint = FVector::ZeroVector;
+		const float SurfaceDistance =
+			Primitive->GetClosestPointOnCollision(BobCenter, SurfacePoint);
+		if (FMath::IsFinite(SurfaceDistance)
+			&& SurfaceDistance > 0.0f
+			&& SurfaceDistance < ClosestSurfaceDistance
+			&& !SurfacePoint.ContainsNaN())
+		{
+			ClosestSurfaceDistance = SurfaceDistance;
+			ClosestSurfacePoint = SurfacePoint;
+		}
+	}
+
+	// 没有可查询的简单碰撞时，以碰撞组件包围盒作保守回退；不依赖任何具体角色类型。
+	if (ClosestSurfaceDistance == BIG_NUMBER)
+	{
+		FVector BoundsOrigin = Receiver.GetActorLocation();
+		FVector BoundsExtent = FVector::ZeroVector;
+		Receiver.GetActorBounds(true, BoundsOrigin, BoundsExtent);
+
+		const FVector ToBoundsCenter = BoundsOrigin - BobCenter;
+		const float CenterDistance = ToBoundsCenter.Size();
+		const FVector BoundsDirection = ToBoundsCenter.GetSafeNormal();
+		if (!FMath::IsFinite(CenterDistance) || BoundsDirection.IsNearlyZero())
+		{
+			return false;
+		}
+
+		const FVector AbsoluteDirection = BoundsDirection.GetAbs();
+		const float ProjectedExtent = FVector::DotProduct(BoundsExtent, AbsoluteDirection);
+		ClosestSurfaceDistance = FMath::Max(0.0f, CenterDistance - ProjectedExtent);
+		ClosestSurfacePoint = BobCenter + BoundsDirection * ClosestSurfaceDistance;
+	}
+
+	FVector ApproachDirection = (ClosestSurfacePoint - BobCenter).GetSafeNormal();
+	if (ApproachDirection.IsNearlyZero())
+	{
+		ApproachDirection = (Receiver.GetActorLocation() - BobCenter).GetSafeNormal();
+	}
+	if (ApproachDirection.IsNearlyZero())
+	{
+		return false;
+	}
+
+	const FVector RelativeVelocity = BobVelocity - ReceiverVelocity;
+	const float ClosingSpeed = FVector::DotProduct(RelativeVelocity, ApproachDirection);
+	if (!FMath::IsFinite(ClosingSpeed)
+		|| ClosingSpeed < TuningData->MinimumHeavyImpactClosingSpeed)
+	{
+		return false;
+	}
+
+	const float BobRadius = BobBody->GetScaledSphereRadius();
+	const float SurfaceGap = FMath::Max(0.0f, ClosestSurfaceDistance - BobRadius);
+	const float EstimatedTimeToContact = SurfaceGap / ClosingSpeed;
+	const UWorld* World = GetWorld();
+	const float DeltaSeconds = IsValid(World) ? World->GetDeltaSeconds() : 0.0f;
+	const float FrameAwareMaximumSeconds = FMath::Min(
+		PendulumHazard::AbsoluteMaximumPreparationSeconds,
+		DeltaSeconds * PendulumHazard::MaximumPreparationFrameMultiplier);
+	const float AllowedMaximumSeconds = FMath::Max(
+		TuningData->MaximumPreparationLeadTime,
+		FrameAwareMaximumSeconds);
+	if (!FMath::IsFinite(EstimatedTimeToContact)
+		|| EstimatedTimeToContact > AllowedMaximumSeconds)
+	{
+		return false;
+	}
+
+	const FVector PredictedBobCenter = BobCenter + BobVelocity * EstimatedTimeToContact;
+	const FVector PredictedReceiverSurface =
+		ClosestSurfacePoint + ReceiverVelocity * EstimatedTimeToContact;
+	FVector PredictedContactDirection =
+		(PredictedReceiverSurface - PredictedBobCenter).GetSafeNormal();
+	if (PredictedContactDirection.IsNearlyZero())
+	{
+		PredictedContactDirection = ApproachDirection;
+	}
+
+	OutRequest = FHeavyImpactPreparationRequest();
+	OutRequest.ImpactId = CurrentSwingImpactId;
+	OutRequest.SourceActor = this;
+	OutRequest.SourceComponent = BobBody;
+	OutRequest.PredictedImpactPoint =
+		PredictedBobCenter + PredictedContactDirection * BobRadius;
+	OutRequest.SourceLinearVelocity = BobVelocity;
+	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
+	return !OutRequest.PredictedImpactPoint.ContainsNaN();
+}
+
+/** 每次确认穿过中线后更新一次 ID；候选本身保留，以便仍在体积内的接收者参与下一半摆。 */
+void APendulumHazard::BeginNewSwingPass()
+{
+	CurrentSwingImpactId = FGuid::NewGuid();
+	NotifiedReceiversThisSwing.Reset();
+}
+
+/** 只登记共享接口接收者；不在 Overlap 回调中提前做一次性预测。 */
+void APendulumHazard::HandlePreparationVolumeBeginOverlap(
+	UPrimitiveComponent* /*OverlappedComponent*/,
+	AActor* OtherActor,
+	UPrimitiveComponent* /*OtherComponent*/,
+	int32 /*OtherBodyIndex*/,
+	bool /*bFromSweep*/,
+	const FHitResult& /*SweepResult*/)
+{
+	if (IsValid(OtherActor)
+		&& OtherActor != this
+		&& OtherActor->GetClass()->ImplementsInterface(UHeavyImpactReceiver::StaticClass()))
+	{
+		PreparationCandidates.Add(OtherActor);
+	}
+}
+
+/** 多组件 Actor 仅在最后一个组件离开预测球后才移除，避免 Capsule/Mesh 交替造成漏通知。 */
+void APendulumHazard::HandlePreparationVolumeEndOverlap(
+	UPrimitiveComponent* /*OverlappedComponent*/,
+	AActor* OtherActor,
+	UPrimitiveComponent* /*OtherComponent*/,
+	int32 /*OtherBodyIndex*/)
+{
+	if (IsValid(OtherActor)
+		&& IsValid(PreparationVolume)
+		&& !PreparationVolume->IsOverlappingActor(OtherActor))
+	{
+		PreparationCandidates.Remove(OtherActor);
+	}
 }
 
 /** 记录每次有效中线样本；仅在启用补能且速度低于目标时填补有限缺口。 */
@@ -392,5 +659,12 @@ void APendulumHazard::DisableHazard(const FString& Reason)
 	}
 
 	BobBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	if (IsValid(PreparationVolume))
+	{
+		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	PreparationCandidates.Reset();
+	NotifiedReceiversThisSwing.Reset();
+	CurrentSwingImpactId = FGuid();
 	UE_LOG(LogPendulumHazard, Error, TEXT("%s 已停用：%s"), *GetName(), *Reason);
 }

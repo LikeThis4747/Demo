@@ -3,7 +3,7 @@
 /**
  * @file ElectromagneticGrabComponent.cpp
  * 职责：执行有界屏幕选取、确定性曲线吸取与 UE Physics Handle 持有，并在所有退出路径恢复临时设置。
- * 边界：Chaos 负责碰撞、旋转和积分；曲线只移动隐形锚点，所有手感参数来自独立 Tuning DataAsset。
+ * 边界：Chaos 负责碰撞、旋转和积分；外部重冲击只能调用受控中断入口，不能改写内部状态。
  * 状态 Owner：本组件独占当前持有引用、吸取阶段、临时覆盖、释放锁和安全计时；不存在组件内参数兜底。
  */
 
@@ -174,6 +174,21 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 			}
 		}
 	}
+}
+
+/** 真实重冲击只中断正在吸取或持有的事务；空手调用不得改变输入释放锁。 */
+void UElectromagneticGrabComponent::InterruptAndRelease()
+{
+	const bool bHasActiveGrabPhase =
+		GrabPhase == EGrabPhase::Pulling || GrabPhase == EGrabPhase::Holding;
+	const bool bHandleHasObject =
+		IsValid(PhysicsHandle) && IsValid(PhysicsHandle->GetGrabbedComponent());
+	if (!bHasActiveGrabPhase && !bHandleHasObject)
+	{
+		return;
+	}
+
+	ReleaseHeldObject(true);
 }
 
 /** 同时检查本地弱引用与 UE Physics Handle，避免只凭一侧状态误判仍在持有。 */
