@@ -132,3 +132,12 @@
 - [x] Level0 复用 `PCG_Test/Room900`，放置正面墙与拐角墙两个测试实例并核对出生净空和完整发射走廊。
 - [x] 正常关闭 Editor 后仅构建 Demo 模块；`-Module=Demo -NoEngineChanges` 成功，未编译引擎。
 - [ ] 用户次日 PIE 验收玩家/追猎者触发、命中率、首碰失导、多次反弹与手感；当前不接 PCG，不抽 HeavyImpact 预测公共层。
+
+<!-- written by shiqiqiwang at 2026-08-06 15:04 UTC -->
+
+## 2026-08-06 — 壁挂式物理制导机关现场布局修正
+
+- 已将两个一次性物理制导机关从远端 Room900 迁到摆锤房右侧的新建低顶 L 形走廊。
+- 房间由 45 个既有 HydroLab 资产实例组成，未修改第三方资产；新文件夹连同两个 Launcher 共 47 个 Actor。
+- 静态回读确认结构范围、两个 Launcher 变换、转角 TriggerAnchor 1100 cm，以及两条中心线/两个发射口前 200 cm 净空。
+- Level0 保存成功；编辑器正常关闭后 Demo 模块构建 `Succeeded`、0 个动作。未运行 PIE，运行态验收保留。

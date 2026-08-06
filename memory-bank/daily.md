@@ -104,3 +104,12 @@
 - Review 采纳结构校验和轴约定；按用户决定不先抽 HeavyImpact 公共层，待三个机关稳定后再评估。
 - Blueprint 静态编译/回读、Muzzle 净空/发射走廊检查和 Demo 模块构建通过；Editor 已正常关闭，只使用 `-Module=Demo -NoEngineChanges`，没有编译引擎。
 - 按用户要求未运行 PIE，次日由用户验收玩家/追猎者触发、命中与连续反弹手感。
+
+<!-- written by shiqiqiwang at 2026-08-06 15:04 UTC -->
+
+## 2026-08-06 — 壁挂式物理制导机关现场布局修正
+
+- 完成：否决远端 Room900 摆位，在摆锤房画面右侧搭建 300 cm 低顶 L 形走廊，并迁入正面/转角两个既有 Launcher。
+- 验证：新文件夹 47 个 Actor；旧文件夹不存在；中心线与 Muzzle 前 200 cm 静态净空；Level0 保存成功。
+- 构建：正常关闭 UE 后仅构建 Demo 模块，结果 `Succeeded`、目标最新、0 个动作，没有编译引擎。
+- 遗留：未运行 PIE；运行时触发、命中、首碰失导与 Chaos 多次反弹仍待用户验收。

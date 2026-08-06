@@ -19,3 +19,13 @@
 - UE 编辑器已正常关闭；最终仅以 `-Module=Demo -NoEngineChanges` 构建 Demo 模块，结果成功且 0 个动作，没有编译引擎。
 - 未运行 PIE；玩家/追猎者触发、首碰失导、多次反弹与手感由用户次日验收。
 - 当前提交完成并释放工作区后，通知 HeavyImpact 任务先阅读其拟实现代码 Review，再开始实现与 Demo 模块构建。
+
+<!-- written by shiqiqiwang at 2026-08-06 15:04 UTC -->
+
+## 并行交付修正：壁挂式物理制导机关现场布局
+
+- 用户现场 Review 否决了远端 `PCG_Test/Room900` 摆位；两个既有 Launcher 已全部迁出。
+- 新测试区位于 `PendulumTestRoom` 画面右侧，是 300 cm 高的 L 形低顶走廊；与左侧冲锤房、中间摆锤房形成并排对照。
+- 新文件夹回读 47 个 Actor（45 个房间构件 + 2 个 Launcher）；旧机关测试文件夹已不存在，两条中心线和两个发射口前 200 cm 均静态净空。
+- Level0 已保存，UE 编辑器已正常关闭；仅构建 Demo 模块并成功、0 个动作，未运行 PIE。
+- 本轮完整提交/推送并恢复干净工作区后，通知 HeavyImpact/起身任务先读其拟实现代码 Review，再开始实现起身代码。
