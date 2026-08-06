@@ -121,3 +121,14 @@
 - `BP_ZeroEscapeCharacter.CameraBoom` 已启用位置延迟：Speed 12、MaxDistance 60 cm、ClampToMaxPhysicsDeltaTime；保留旋转延迟关闭和 ECC_Camera 墙体碰撞。
 - `DemoEditor Win64 Development` 正式链接成功；Blueprint 编译、保存及编辑器重启后官方 MCP 回读通过。
 - Level0 普通移动、中央/贴墙受击及 40/60/100 cm 手感对照由用户接手，当前不标记体验验收完成。
+
+<!-- written by shiqiqiwang at 2026-08-06 14:39 UTC -->
+
+
+## 2026-08-06 壁挂式物理制导一次性机关
+
+- [x] 新增独立 Launcher/Projectile/DataAsset 六个 C++ 文件，以真实 Physics Thruster 施力完成短时小角度制导；首个有效碰撞永久停止制导，推进计时结束后完全交给 Chaos。
+- [x] 新建 Launcher/Projectile Blueprint、默认调参 DataAsset、物理材质与简易机身材质；Blueprint EventGraph 为空，静态编译/回读通过。
+- [x] Level0 复用 `PCG_Test/Room900`，放置正面墙与拐角墙两个测试实例并核对出生净空和完整发射走廊。
+- [x] 正常关闭 Editor 后仅构建 Demo 模块；`-Module=Demo -NoEngineChanges` 成功，未编译引擎。
+- [ ] 用户次日 PIE 验收玩家/追猎者触发、命中率、首碰失导、多次反弹与手感；当前不接 PCG，不抽 HeavyImpact 预测公共层。

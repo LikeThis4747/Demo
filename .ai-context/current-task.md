@@ -10,3 +10,12 @@
 - 用户已关闭 Editor，并要求先提交/推送当前完整改动，再正式构建。
 - 起身现状：Downed 保留真实倒地点；Recovering 只有枚举、尚无实现。玩家/AI AnimBP 均有 DefaultSlot，但项目内没有地面起身动画，且两者骨骼不同。
 - 下一步：提交并推送 -> 正式链接 -> 重启 Editor -> 官方 MCP 回读新倍率 -> 自动化回归 -> PIE A/B；随后提交详细起身实现方案与资产/代码分工。
+
+<!-- written by shiqiqiwang at 2026-08-06 14:39 UTC -->
+
+## 并行交付记录：壁挂式物理制导一次性机关
+
+- 独立 V1 的 C++、Blueprint/DataAsset/材质与 Level0 双实例已落盘；Review 公共层建议按用户决定延后到功能稳定后再评估。
+- UE 编辑器已正常关闭；最终仅以 `-Module=Demo -NoEngineChanges` 构建 Demo 模块，结果成功且 0 个动作，没有编译引擎。
+- 未运行 PIE；玩家/追猎者触发、首碰失导、多次反弹与手感由用户次日验收。
+- 当前提交完成并释放工作区后，通知 HeavyImpact 任务先阅读其拟实现代码 Review，再开始实现与 Demo 模块构建。

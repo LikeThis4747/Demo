@@ -93,3 +93,14 @@
 - 完成强制基线 `1592d13dd71913646aad64612c922bedebd7d5a7` 的内部工蜂推送和远端核验。
 - 落盘 1 行更新依赖与 4 项玩家 SpringArm 配置；无链接编译、正式 DLL 链接、Blueprint 保存和重启回读均通过。
 - 审计已处理并归档；用户明确自行完成 PIE 体验验证。已知边界仍是原生 SpringArm 墙体命中位置不会被 Camera Lag 平滑。
+
+<!-- written by shiqiqiwang at 2026-08-06 14:39 UTC -->
+
+
+## 2026-08-06 — 壁挂式物理制导一次性机关
+
+- 完成独立一次性机关 C++、两个装配 Blueprint、默认 DataAsset、物理材质/机身材质与 Level0 正面墙/拐角墙两个测试实例。
+- 运动合同为真实 Thruster 短时推进和小角度制导，首个有效碰撞永久失导但推进计时继续，随后纯 Chaos；角色侧不补冲量。
+- Review 采纳结构校验和轴约定；按用户决定不先抽 HeavyImpact 公共层，待三个机关稳定后再评估。
+- Blueprint 静态编译/回读、Muzzle 净空/发射走廊检查和 Demo 模块构建通过；Editor 已正常关闭，只使用 `-Module=Demo -NoEngineChanges`，没有编译引擎。
+- 按用户要求未运行 PIE，次日由用户验收玩家/追猎者触发、命中与连续反弹手感。
