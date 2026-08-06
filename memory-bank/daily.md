@@ -74,3 +74,14 @@
 - 完成：共享重冲击状态组件、玩家/AI 接入、磁力中断、摆锤预测合同与测试源码；旧追猎者局部受击保留但暂停三处装配。
 - 验证：UHT 与 Demo 模块多轮 no-link 编译通过，最终 4 个动作成功；三路静态复核无 P0/P1；`git diff --check` 通过。
 - 遗留：运行中 Editor/Live Coding 锁住 DLL，完整链接未完成；PCA/DA/Blueprint、自动化、PIE 和画面验收均待后续，Content/Config 未改。
+
+<!-- written by shiqiqiwang at 2026-08-06 10:06 UTC -->
+
+
+## 2026-08-06 — Level0 自动周期冲锤
+
+- 完成四个冲锤 C++ 文件、默认 DataAsset、装配 Blueprint 与摆锤房旁三段低天花测试走廊；DemoEditor 正式链接及 Blueprint 警告即错误编译通过。
+- PIE 确认 0→450→0cm 周期；普通物理箱发生真实位移，Prepared 玩家/追猎者均出现非零 Chaos solver impulse；HeavyImpact 自动化 4/4 通过。
+- 审计要求的 RamBody CCD、严重掉帧帧感知准备窗口、装配方向与冲程净空约定均已落实，审计报告已归档。
+- 用户指出房外大 Cube 穿帮后已移除该占位；保留杆件并改成细圆柱推杆 + 小型墙面导向座，允许穿墙后空间，不增加大机箱遮挡。
+- 当前待用户在 Level0 验收预警/周期、追猎者实际通行与压力手感；不把参数写成最终策划结论。

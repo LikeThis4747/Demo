@@ -101,3 +101,14 @@
 - [x] 共享重冲击 C++、摆锤 ETA 预测和三组自动化测试源码已落盘，UHT/无链接编译通过。
 - [ ] 当前 Editor 仍加载旧 Demo DLL；完整链接、新模块加载、两份 PCA、两份 HeavyImpact DA、角色/摆锤装配、自动化和 PIE 均未完成。
 - [ ] 首版 Downed/恢复与正式整局语义、墙边/斜坡/角落、连续冲击和 Downed 二次碰撞仍需真实运行验收。
+
+<!-- written by shiqiqiwang at 2026-08-06 10:06 UTC -->
+
+
+## 2026-08-06 Level0 自动周期冲锤
+
+- [x] 新增自动周期冲锤 Actor 与调参 DataAsset；等待/预警用 Timer，伸出/回收只在 TG_PrePhysics 开 Tick，RamBody 开 CCD 并保留真实 Chaos 运动学接触。
+- [x] 新建默认 DA、无玩法图的装配 BP，并在摆锤房旁复用三段低天花模块搭建约 600×1800×300cm 独立走廊。
+- [x] 普通刚体获得真实位移；Prepared 玩家和追猎者均记录到非零 solver impulse；HeavyImpact 自动化 4/4 通过。
+- [x] 清理房外巨型 Cube 占位；按用户要求保留细圆柱推杆，并用小型墙面导向座解释其机械关系，允许杆件穿入墙后空间。
+- [ ] 用户在 Level0 验收预警/周期手感、追猎者实际追逐通行和安全窗口；首版不接 PCG、不做压板或角色分支。
