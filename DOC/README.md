@@ -8,7 +8,7 @@
 | `DailyPlan/` | 用户确认后的当日实施方案；根目录只放正在推进的，完成后移入 `DailyPlan/archive/` |
 | `DailyReport/` | 按日期保存的阶段或日报 |
 | `Bugs/` | 尚未解决、暂停调查或等待验收的 Bug 记录与索引 |
-| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/` |
+| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/`，动画重定向等制作工作流放在 `Outputs/Animation/` |
 
 新增文档必须放入用途匹配的子目录；没有合适分类时创建名称明确的新目录，并在此表增加一行。`DOC/` 根目录只保留本目录文件。
 

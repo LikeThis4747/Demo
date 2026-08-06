@@ -138,5 +138,5 @@ private:
 	TAtomic<bool> bIsStopping;
 
 	/** Maximum concurrent clients */
-	static constexpr int32 MaxClients = 8;
+	static constexpr int32 MaxClients = 16;
 };

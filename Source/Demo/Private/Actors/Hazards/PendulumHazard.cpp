@@ -8,6 +8,7 @@
 
 #include "Actors/Hazards/PendulumHazard.h"
 
+#include "Components/BoxComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
@@ -39,6 +40,40 @@ namespace PendulumHazard
 	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 
+	/** 返回从盒体中心沿指定世界方向射线抵达当前朝向盒体表面的距离。 */
+	float CalculateBoxSurfaceDistance(
+		const UBoxComponent& Box,
+		const FVector& WorldDirection)
+	{
+		const FVector NormalizedDirection = WorldDirection.GetSafeNormal();
+		if (NormalizedDirection.IsNearlyZero())
+		{
+			return 0.0f;
+		}
+
+		const FVector LocalDirection =
+			Box.GetComponentQuat().UnrotateVector(NormalizedDirection).GetAbs();
+		const FVector ScaledExtent = Box.GetScaledBoxExtent();
+		float SurfaceDistance = BIG_NUMBER;
+
+		if (LocalDirection.X > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.X / LocalDirection.X);
+		}
+		if (LocalDirection.Y > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.Y / LocalDirection.Y);
+		}
+		if (LocalDirection.Z > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.Z / LocalDirection.Z);
+		}
+
+		return FMath::IsFinite(SurfaceDistance) && SurfaceDistance < BIG_NUMBER
+			? SurfaceDistance
+			: 0.0f;
+	}
+
 }
 
 /** 装配物理组件和美术挂点，配置明确的碰撞矩阵，并关闭 Actor Tick。 */
@@ -58,7 +93,7 @@ APendulumHazard::APendulumHazard()
 	PhysicsConstraint->SetMobility(EComponentMobility::Movable);
 	PhysicsConstraint->SetupAttachment(SceneRoot);
 
-	BobBody = CreateDefaultSubobject<USphereComponent>(TEXT("BobBody"));
+	BobBody = CreateDefaultSubobject<UBoxComponent>(TEXT("BobBody"));
 	BobBody->SetMobility(EComponentMobility::Movable);
 	BobBody->SetupAttachment(SceneRoot);
 	BobBody->SetCanEverAffectNavigation(false);
@@ -214,7 +249,7 @@ void APendulumHazard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-/** 设置支点、碰撞半径和美术挂点位置；未知网格的尺寸与轴向由 Blueprint 装配直接同步。 */
+/** 设置支点、盒形碰撞尺寸和美术挂点位置；未知网格的尺寸与轴向由 Blueprint 装配直接同步。 */
 void APendulumHazard::ApplyGeometry(
 	const UPendulumHazardTuningData& Tuning,
 	const bool bPreviewReleasePose)
@@ -229,12 +264,12 @@ void APendulumHazard::ApplyGeometry(
 	PhysicsConstraint->SetRelativeLocationAndRotation(PivotLocation, FRotator::ZeroRotator);
 	AnchorVisualRoot->SetRelativeLocationAndRotation(PivotLocation, FRotator::ZeroRotator);
 
-	BobBody->SetSphereRadius(Tuning.BobRadius, false);
+	BobBody->SetBoxExtent(Tuning.BobHalfExtents, false);
 	BobBody->SetRelativeLocationAndRotation(
 		PivotLocation + PreviewRotation.RotateVector(RestRadius),
 		PreviewRotation);
 	PreparationVolume->SetSphereRadius(
-		Tuning.BobRadius + Tuning.PreparationLookAheadDistance,
+		Tuning.BobHalfExtents.Size() + Tuning.PreparationLookAheadDistance,
 		false);
 	PreparationVolume->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator::ZeroRotator);
 
@@ -486,8 +521,14 @@ bool APendulumHazard::BuildPreparationRequest(
 		return false;
 	}
 
-	const float BobRadius = BobBody->GetScaledSphereRadius();
-	const float SurfaceGap = FMath::Max(0.0f, ClosestSurfaceDistance - BobRadius);
+	const float BobSurfaceDistance =
+		PendulumHazard::CalculateBoxSurfaceDistance(*BobBody, ApproachDirection);
+	if (BobSurfaceDistance <= 0.0f)
+	{
+		return false;
+	}
+
+	const float SurfaceGap = FMath::Max(0.0f, ClosestSurfaceDistance - BobSurfaceDistance);
 	const float EstimatedTimeToContact = SurfaceGap / ClosingSpeed;
 	const UWorld* World = GetWorld();
 	const float DeltaSeconds = IsValid(World) ? World->GetDeltaSeconds() : 0.0f;
@@ -512,13 +553,19 @@ bool APendulumHazard::BuildPreparationRequest(
 	{
 		PredictedContactDirection = ApproachDirection;
 	}
+	const float PredictedBobSurfaceDistance =
+		PendulumHazard::CalculateBoxSurfaceDistance(*BobBody, PredictedContactDirection);
+	if (PredictedBobSurfaceDistance <= 0.0f)
+	{
+		return false;
+	}
 
 	OutRequest = FHeavyImpactPreparationRequest();
 	OutRequest.ImpactId = CurrentSwingImpactId;
 	OutRequest.SourceActor = this;
 	OutRequest.SourceComponent = BobBody;
 	OutRequest.PredictedImpactPoint =
-		PredictedBobCenter + PredictedContactDirection * BobRadius;
+		PredictedBobCenter + PredictedContactDirection * PredictedBobSurfaceDistance;
 	OutRequest.SourceLinearVelocity = BobVelocity;
 	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN();
@@ -627,7 +674,7 @@ void APendulumHazard::AssistAtCenterCrossing()
 		AddedSpeed);
 }
 
-/** 由势能换算中线速度，并近似计入实心球锤头绕自身中心的转动惯量。 */
+/** 由势能换算中线速度，并计入盒形锤头绕本地 X 主摆轴的中心转动惯量。 */
 float APendulumHazard::CalculateTargetCenterSpeed() const
 {
 	if (!IsValid(TuningData) || !IsValid(GetWorld()))
@@ -637,8 +684,11 @@ float APendulumHazard::CalculateTargetCenterSpeed() const
 
 	const float GravityMagnitude = FMath::Abs(GetWorld()->GetGravityZ());
 	const float TargetAngleRadians = FMath::DegreesToRadians(TuningData->TargetAmplitudeDegrees);
-	const float RadiusToLength = TuningData->BobRadius / TuningData->PendulumLength;
-	const float RotationalFactor = 1.0f + 0.4f * FMath::Square(RadiusToLength);
+	const float CenterInertiaPerMass =
+		(FMath::Square(TuningData->BobHalfExtents.Y)
+			+ FMath::Square(TuningData->BobHalfExtents.Z)) / 3.0f;
+	const float RotationalFactor =
+		1.0f + CenterInertiaPerMass / FMath::Square(TuningData->PendulumLength);
 	const float AvailableEnergyPerMass =
 		2.0f
 		* GravityMagnitude

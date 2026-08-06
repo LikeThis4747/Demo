@@ -26,7 +26,7 @@ public:
 
 	/**
 	 * APendulumHazard::ApplyGeometry 读取的地面根到支点高度，单位 cm；初始 650，编辑范围 100~2000。
-	 * 调高会整体抬高支点和锤头，调低会压缩离地净空；必须继续满足 PivotHeight > PendulumLength + BobRadius。
+	 * 调高会整体抬高支点和锤头，调低会压缩离地净空；必须继续满足 PivotHeight > PendulumLength + BobHalfExtents.Z。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|几何",
 		meta = (ClampMin = "100.0", ClampMax = "2000.0", UIMin = "300.0", UIMax = "1000.0", Units = "cm"))
@@ -41,12 +41,13 @@ public:
 	float PendulumLength = 520.0f;
 
 	/**
-	 * APendulumHazard::ApplyGeometry / CalculateTargetCenterSpeed 读取的球形碰撞半径，单位 cm；初始 70，编辑范围 10~250。
-	 * 调高会扩大命中范围并减少地面/墙面净距，调低则相反；改动后必须同步蓝图锤头网格。
+	 * APendulumHazard::ApplyGeometry / CalculateTargetCenterSpeed 读取的盒形碰撞半尺寸，单位 cm；
+	 * X 是跨走廊宽度、Y 是最低点运动方向厚度、Z 是高度。默认 110/40/75，即完整尺寸 220x80x150。
+	 * 增大 X/Z 会扩大正面命中范围，增大 Y 会让锤头更早接触；改动后必须同步蓝图锤头网格。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|几何",
 		meta = (ClampMin = "10.0", ClampMax = "250.0", UIMin = "20.0", UIMax = "150.0", Units = "cm"))
-	float BobRadius = 70.0f;
+	FVector BobHalfExtents = FVector(110.0f, 40.0f, 75.0f);
 
 	/**
 	 * APendulumHazard::ApplyPhysicsProperties 读取的锤头刚体质量，单位 kg；初始 1000，编辑范围 1~5000。
@@ -97,7 +98,7 @@ public:
 	float AngularDamping = 0.02f;
 
 	/**
-	 * 独立 PreparationVolume 在 BobRadius 外增加的预测距离，单位 cm；初始 500，编辑范围 10~1000。
+	 * 独立 PreparationVolume 在锤头包围球外增加的预测距离，单位 cm；初始 500，编辑范围 10~1000。
 	 * 调高可更早登记高速目标但增加 Overlap 候选，调低会缩短角色切物理的可靠时间。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",

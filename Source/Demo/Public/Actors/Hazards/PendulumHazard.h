@@ -2,7 +2,7 @@
 
 /**
  * @file PendulumHazard.h
- * 职责：创建世界约束的球形物理摆锤，按初始角度自由释放，并在中线穿越时仅补回缺失能量。
+ * 职责：创建世界约束的宽面物理摆锤，按初始角度自由释放，并在中线穿越时仅补回缺失能量。
  * 边界：不按碰撞物类别改写冲量，只经共享接口请求接收者提前准备，不加载美术资产，不接入 PCG。
  * 状态 Owner：拥有自身中线侧别、半摆 ImpactId、预测候选、补能 Timer 与物理组件生命周期。
  */
@@ -16,6 +16,7 @@
 #include "PendulumHazard.generated.h"
 
 class UPendulumHazardTuningData;
+class UBoxComponent;
 class UPhysicsConstraintComponent;
 class UPrimitiveComponent;
 class USceneComponent;
@@ -29,7 +30,7 @@ class DEMO_API APendulumHazard final : public AActor
 	GENERATED_BODY()
 
 public:
-	/** 创建地面根、世界约束、物理锤头、独立预测球与三个纯美术挂点；Actor Tick 永久关闭。 */
+	/** 创建地面根、世界约束、宽面物理锤头、独立预测球与三个纯美术挂点；Actor Tick 永久关闭。 */
 	APendulumHazard();
 
 	/** 根据 DataAsset 在编辑器里预览初始释放姿态；不建立约束或启动物理。 */
@@ -43,7 +44,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 设置支点、锤头中心、球半径和美术挂点；bPreviewReleasePose 只用于编辑器预览。 */
+	/** 设置支点、锤头中心、盒体尺寸和美术挂点；bPreviewReleasePose 只用于编辑器预览。 */
 	void ApplyGeometry(const UPendulumHazardTuningData& Tuning, bool bPreviewReleasePose);
 
 	/** 在物理状态创建后写入质量、阻尼和 CCD。 */
@@ -90,7 +91,7 @@ private:
 	/** 当前切向速度低于目标速度时，沿当前运动方向施加有限普通冲量；绝不刹车。 */
 	void AssistAtCenterCrossing();
 
-	/** 用世界重力、摆长、目标摆幅和球体转动惯量近似计算最低点目标切向速度。 */
+	/** 用世界重力、摆长、目标摆幅和盒体转动惯量近似计算最低点目标切向速度。 */
 	float CalculateTargetCenterSpeed() const;
 
 	/** 配置非法或运行前提不成立时明确报错，并关闭锤头碰撞和模拟。 */
@@ -111,10 +112,10 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPhysicsConstraintComponent> PhysicsConstraint;
 
-	/** 唯一真实模拟和碰撞的球形锤头；承载质量、阻尼、CCD 与补能冲量。 */
+	/** 唯一真实模拟和碰撞的宽面盒形锤头；承载质量、阻尼、CCD 与补能冲量。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|摆锤",
 		meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<USphereComponent> BobBody;
+	TObjectPtr<UBoxComponent> BobBody;
 
 	/** 随 BobBody 运动的独立 Query-only 球；只 Overlap Pawn，不阻挡、不施力且不影响导航。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击",

@@ -46,7 +46,9 @@ bool UPendulumHazardTuningData::IsConfigured(FString& OutError) const
 
 	if (!ValidateFloat(TEXT("PivotHeight"), PivotHeight, 100.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("PendulumLength"), PendulumLength, 100.0f, 1500.0f)
-		|| !ValidateFloat(TEXT("BobRadius"), BobRadius, 10.0f, 250.0f)
+		|| !ValidateFloat(TEXT("BobHalfExtents.X"), BobHalfExtents.X, 10.0f, 250.0f)
+		|| !ValidateFloat(TEXT("BobHalfExtents.Y"), BobHalfExtents.Y, 10.0f, 250.0f)
+		|| !ValidateFloat(TEXT("BobHalfExtents.Z"), BobHalfExtents.Z, 10.0f, 250.0f)
 		|| !ValidateFloat(TEXT("BobMassKilograms"), BobMassKilograms, 1.0f, 5000.0f)
 		|| !ValidateFloat(TEXT("TargetAmplitudeDegrees"), TargetAmplitudeDegrees, 1.0f, 80.0f)
 		|| !ValidateFloat(TEXT("MainAxisLimitDegrees"), MainAxisLimitDegrees, 2.0f, 85.0f)
@@ -82,15 +84,15 @@ bool UPendulumHazardTuningData::IsConfigured(FString& OutError) const
 		return false;
 	}
 
-	if (BobRadius >= PendulumLength)
+	if (BobHalfExtents.Z >= PendulumLength)
 	{
-		OutError = TEXT("摆锤 Tuning DataAsset 的 BobRadius 必须小于 PendulumLength。");
+		OutError = TEXT("摆锤 Tuning DataAsset 的 BobHalfExtents.Z 必须小于 PendulumLength。");
 		return false;
 	}
 
-	if (PivotHeight <= PendulumLength + BobRadius)
+	if (PivotHeight <= PendulumLength + BobHalfExtents.Z)
 	{
-		OutError = TEXT("摆锤 Tuning DataAsset 的 PivotHeight 必须大于 PendulumLength + BobRadius，避免最低点触地。");
+		OutError = TEXT("摆锤 Tuning DataAsset 的 PivotHeight 必须大于 PendulumLength + BobHalfExtents.Z，避免最低点触地。");
 		return false;
 	}
 
