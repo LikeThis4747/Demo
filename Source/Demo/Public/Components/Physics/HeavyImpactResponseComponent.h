@@ -26,6 +26,7 @@ class UPhysicsControlComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 class USkeletalMeshComponent;
+struct FHeavyImpactControlStageTuning;
 
 /** 通知角色适配层物理状态发生变化。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(
@@ -191,6 +192,11 @@ private:
 	/** 调用必须存在的项目 PCA Profile，并明确记录失败。 */
 	bool InvokeRequiredProfile(FName ProfileName);
 
+	/** 调用阶段 Profile 后应用 DataAsset 倍率；A/B 纯布娃娃模式则在相同 BodyModifier 条件下关闭全部 Controls。 */
+	bool ApplyPhysicalStage(
+		FName ProfileName,
+		const FHeavyImpactControlStageTuning& StageTuning);
+
 	/** 在坏物理超时或 Profile 失败时关闭姿态控制，保持自由物理。 */
 	void EnterFreeFallback(const TCHAR* Reason);
 
@@ -272,4 +278,5 @@ private:
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
 	bool bHardTimeoutReported = false;
+	bool bPureRagdollComparisonActive = false;
 };

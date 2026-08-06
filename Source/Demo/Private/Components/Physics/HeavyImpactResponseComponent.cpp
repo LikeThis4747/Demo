@@ -15,6 +15,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "HAL/IConsoleManager.h"
 #include "PhysicsControlAsset.h"
 #include "PhysicsControlComponent.h"
 #include "PhysicsControlData.h"
@@ -29,6 +30,13 @@ namespace HeavyImpactRuntime
 	/** At low frame rates, keep the valid ETA window wider than one frame without changing normal 30/60 FPS tuning. */
 	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
+
+	/** 开发期严格 A/B：1 时保留同一状态机和 BodyModifier，只关闭全部 Physics Control 驱动。 */
+	TAutoConsoleVariable<int32> CVarPureRagdollComparison(
+		TEXT("demo.HeavyImpact.PureRagdoll"),
+		0,
+		TEXT("0: staged Physics Control (default). 1: pure ragdoll comparison for the next accepted HeavyImpact."),
+		ECVF_Cheat);
 }
 
 /** 创建默认关闭、仅在事务期间启用的 PostPhysics Tick。 */
@@ -274,6 +282,55 @@ bool UHeavyImpactResponseComponent::InvokeRequiredProfile(FName ProfileName)
 	}
 
 	return true;
+}
+
+/** 保留同一 Profile 的移动、碰撞、重力和 CCD；A/B 只改变关节驱动是否存在。 */
+bool UHeavyImpactResponseComponent::ApplyPhysicalStage(
+	const FName ProfileName,
+	const FHeavyImpactControlStageTuning& StageTuning)
+{
+	if (!InvokeRequiredProfile(ProfileName))
+	{
+		return false;
+	}
+
+	if (bPureRagdollComparisonActive)
+	{
+		const bool bDisabled = PhysicsControl->SetControlsEnabled(
+			OwnedControlNames,
+			false,
+			true,
+			false);
+		if (!bDisabled)
+		{
+			UE_LOG(
+				LogHeavyImpact,
+				Error,
+				TEXT("HeavyImpact pure-ragdoll comparison failed to disable controls for profile %s on %s."),
+				*ProfileName.ToString(),
+				*GetNameSafe(GetOwner()));
+		}
+		return bDisabled;
+	}
+
+	FPhysicsControlMultiplier Multipliers;
+	Multipliers.AngularStrengthMultiplier = StageTuning.AngularStrengthMultiplier;
+	Multipliers.AngularDampingRatioMultiplier = StageTuning.AngularDampingRatioMultiplier;
+	Multipliers.MaxTorqueMultiplier = StageTuning.MaxTorqueMultiplier;
+	const bool bApplied = PhysicsControl->SetControlMultipliersInSet(
+		TEXT("ParentSpace"),
+		Multipliers,
+		true);
+	if (!bApplied)
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Error,
+			TEXT("HeavyImpact failed to apply stage multipliers for profile %s on %s."),
+			*ProfileName.ToString(),
+			*GetNameSafe(GetOwner()));
+	}
+	return bApplied;
 }
 
 /** 拒绝无法形成真实刚体接触、太早或太迟到达的预测请求。 */
@@ -525,8 +582,18 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
 	Mesh->SetAllBodiesNotifyRigidBodyCollision(true);
 
+	bPureRagdollComparisonActive =
+		HeavyImpactRuntime::CVarPureRagdollComparison.GetValueOnGameThread() == 1;
+	if (bPureRagdollComparisonActive)
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Display,
+			TEXT("HeavyImpact pure-ragdoll A/B armed for the accepted impact on %s."),
+			*GetNameSafe(GetOwner()));
+	}
 	PhysicsControl->SetComponentTickEnabled(true);
-	if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfilePrepared))
+	if (!ApplyPhysicalStage(Demo::HeavyImpact::ProfilePrepared, Tuning->PreparedControl))
 	{
 		OutReason = TEXT("Prepared PCA profile failed.");
 		return false;
@@ -613,7 +680,7 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 	{
 		EnterFreeFallback(TEXT("Real contact arrived before Prepared crossed a full frame boundary."));
 	}
-	else if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfileFlight))
+	else if (!ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
 	{
 		EnterFreeFallback(TEXT("Flight profile failed after real contact."));
 	}
@@ -649,7 +716,7 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	SetComponentTickEnabled(true);
 	Mesh->WakeAllRigidBodies();
 
-	if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfileFlight))
+	if (!ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
 	{
 		EnterFreeFallback(TEXT("Flight profile failed after Downed was hit again."));
 	}
@@ -768,7 +835,9 @@ void UHeavyImpactResponseComponent::UpdateStability(float DeltaTime)
 		&& bSlowEnough
 		&& bSupported)
 	{
-		if (InvokeRequiredProfile(Demo::HeavyImpact::ProfileLandingRecovery))
+		if (ApplyPhysicalStage(
+			Demo::HeavyImpact::ProfileLandingRecovery,
+			Tuning->LandingControl))
 		{
 			SetState(EHeavyImpactState::Settling);
 		}
@@ -792,7 +861,7 @@ void UHeavyImpactResponseComponent::UpdateStability(float DeltaTime)
 		StableElapsedSeconds = 0.0f;
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Settling)
 		{
-			if (InvokeRequiredProfile(Demo::HeavyImpact::ProfileFlight))
+			if (ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
 			{
 				SetState(EHeavyImpactState::Simulating);
 			}
@@ -1011,6 +1080,7 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 		ExpectedSourceComponent = nullptr;
 		ActivePreparationTimeoutSeconds = 0.0f;
 		PreparedEntryFrame = 0;
+		bPureRagdollComparisonActive = false;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
 		return;
@@ -1060,6 +1130,7 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 	ActivePreparationTimeoutSeconds = 0.0f;
 	Snapshot.Reset();
 	PreparedEntryFrame = 0;
+	bPureRagdollComparisonActive = false;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
 }

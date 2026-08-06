@@ -1,7 +1,7 @@
 # Latest Error
 
-- 当前未解决阻塞：完整 `DemoEditor Win64 Development` 链接尚未完成。PID 13728 的 `UnrealEditor.exe` 保持 Live Coding Session，并占用 `D:\UE5projects\Demo\Binaries\Win64\UnrealEditor-Demo.dll`。
-- `D:\UE5_8` 还存在用户的 OIT 源码改动，普通全目标构建会尝试重链同样被 Editor 占用的 `UnrealEditor-NetCore.dll`；本任务没有修改、清理或编译用户的引擎改动。
-- 这不是当前游戏源码编译错误：UE5.8 官方 `-Module=Demo -NoLink -NoEngineChanges -NoHotReloadFromIDE` 多轮编译成功，最终一轮 4 个动作通过。
-- 需要用户操作：安全关闭 Editor 后再做完整链接；禁止杀进程、禁用 Live Coding 或用临时 DLL 绕过。
-- 新 DLL 尚未链接/加载，因此自动化、PCA/Blueprint 编译、资产回读和 PIE 不能宣称通过。
+- 当前没有 C++、UHT 或无链接编译错误；最新 HeavyImpact 阶段倍率与纯 ragdoll A/B 代码已通过 `-NoLink` 编译。
+- 上一轮“摆锤不动/没有碰撞”的根因已经确认并修复：35° 振幅要求至少 548.974 cm 的预测范围，旧值 500 cm 触发 DataAsset 安全校验并主动停用机关；现已设为 600 cm，运行态摆动与物理碰撞均已确认。
+- 当前不是错误，而是有意的链接门槛：用户已关闭 Editor；必须先提交并推送当前完整改动，再执行正式 DLL 链接。
+- 新阶段倍率和 `demo.HeavyImpact.PureRagdoll` 尚未进入正式 DLL，因此尚无运行时/视觉验收结论。
+- 起身恢复尚未实现；项目缺少仰面/俯面地面起身动画，禁止用瞬间立正、倒放死亡动画或回到受击前 Transform 伪造恢复。

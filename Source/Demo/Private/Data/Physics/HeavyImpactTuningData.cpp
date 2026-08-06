@@ -12,6 +12,22 @@
 #include "Physics/HeavyImpactTypes.h"
 #include "PhysicsControlAsset.h"
 
+/** 为写实人形提供能一眼看出的阶段差异；倍率只作用于 ParentSpace 角向控制。 */
+UHeavyImpactTuningData::UHeavyImpactTuningData()
+{
+	PreparedControl.AngularStrengthMultiplier = 2.0f;
+	PreparedControl.AngularDampingRatioMultiplier = 1.25f;
+	PreparedControl.MaxTorqueMultiplier = 3.0f;
+
+	FlightControl.AngularStrengthMultiplier = 1.75f;
+	FlightControl.AngularDampingRatioMultiplier = 1.0f;
+	FlightControl.MaxTorqueMultiplier = 3.0f;
+
+	LandingControl.AngularStrengthMultiplier = 2.25f;
+	LandingControl.AngularDampingRatioMultiplier = 1.35f;
+	LandingControl.MaxTorqueMultiplier = 3.5f;
+}
+
 /** 验证调参资产足以安全初始化唯一的重冲击 Physics Control 权威。 */
 bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText& OutError) const
 {
@@ -20,6 +36,38 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		OutError = FText::FromString(Message);
 		return false;
 	};
+
+	const auto ValidateControlStage = [&OutError](
+		const TCHAR* StageName,
+		const FHeavyImpactControlStageTuning& Stage) -> bool
+	{
+		const bool bFinite =
+			FMath::IsFinite(Stage.AngularStrengthMultiplier)
+			&& FMath::IsFinite(Stage.AngularDampingRatioMultiplier)
+			&& FMath::IsFinite(Stage.MaxTorqueMultiplier);
+		const bool bInRange =
+			Stage.AngularStrengthMultiplier >= 0.1f
+			&& Stage.AngularStrengthMultiplier <= 10.0f
+			&& Stage.AngularDampingRatioMultiplier >= 0.1f
+			&& Stage.AngularDampingRatioMultiplier <= 10.0f
+			&& Stage.MaxTorqueMultiplier >= 0.1f
+			&& Stage.MaxTorqueMultiplier <= 20.0f;
+		if (!bFinite || !bInRange)
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "InvalidControlStage", "HeavyImpact control stage {0} has invalid multipliers."),
+				FText::FromString(StageName));
+			return false;
+		}
+		return true;
+	};
+
+	if (!ValidateControlStage(TEXT("Prepared"), PreparedControl)
+		|| !ValidateControlStage(TEXT("Flight"), FlightControl)
+		|| !ValidateControlStage(TEXT("Landing"), LandingControl))
+	{
+		return false;
+	}
 
 	const bool bThresholdsFinite =
 		FMath::IsFinite(MaximumPreparationSeconds)

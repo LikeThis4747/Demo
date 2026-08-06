@@ -14,6 +14,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/Physics/PhysicsControlHitResponseComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "PhysicsControlComponent.h"
@@ -39,6 +40,12 @@ APursuerCharacter::APursuerCharacter()
 	UCharacterMovementComponent* MovementComponent = GetCharacterMovement();
 	MovementComponent->bOrientRotationToMovement = true;
 	MovementComponent->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
+}
+
+/** 机关按准备后仍会参与真实刚体接触的 Mesh 计算距离，不能使用稍后被降为 QueryOnly 的 Capsule。 */
+UPrimitiveComponent* APursuerCharacter::GetHeavyImpactPredictionPrimitive_Implementation() const
+{
+	return GetMesh();
 }
 
 /** 把接口请求交给唯一重冲击状态 Owner；组件缺失时明确拒绝，不恢复旧局部受击兜底。 */

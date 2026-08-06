@@ -401,7 +401,7 @@ void APendulumHazard::EvaluatePreparationCandidates()
 	}
 }
 
-/** 用接收者最近的简单碰撞表面估算径向间隙；预测只决定准备时机，不写入任何物理速度。 */
+/** 用接收者声明的真实受击组件估算径向间隙；预测只决定准备时机，不写入任何物理速度。 */
 bool APendulumHazard::BuildPreparationRequest(
 	const AActor& Receiver,
 	FHeavyImpactPreparationRequest& OutRequest)
@@ -421,36 +421,38 @@ bool APendulumHazard::BuildPreparationRequest(
 		return false;
 	}
 
-	float ClosestSurfaceDistance = BIG_NUMBER;
-	FVector ClosestSurfacePoint = FVector::ZeroVector;
-	TInlineComponentArray<UPrimitiveComponent*> ReceiverPrimitives(&Receiver);
-	for (const UPrimitiveComponent* Primitive : ReceiverPrimitives)
+	UPrimitiveComponent* PredictionPrimitive =
+		IHeavyImpactReceiver::Execute_GetHeavyImpactPredictionPrimitive(&Receiver);
+	if (!IsValid(PredictionPrimitive)
+		|| PredictionPrimitive->GetOwner() != &Receiver
+		|| PredictionPrimitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
 	{
-		if (!IsValid(Primitive)
-			|| Primitive->GetCollisionEnabled() == ECollisionEnabled::NoCollision)
-		{
-			continue;
-		}
-
-		FVector SurfacePoint = FVector::ZeroVector;
-		const float SurfaceDistance =
-			Primitive->GetClosestPointOnCollision(BobCenter, SurfacePoint);
-		if (FMath::IsFinite(SurfaceDistance)
-			&& SurfaceDistance > 0.0f
-			&& SurfaceDistance < ClosestSurfaceDistance
-			&& !SurfacePoint.ContainsNaN())
-		{
-			ClosestSurfaceDistance = SurfaceDistance;
-			ClosestSurfacePoint = SurfacePoint;
-		}
+		return false;
 	}
 
-	// 没有可查询的简单碰撞时，以碰撞组件包围盒作保守回退；不依赖任何具体角色类型。
+	FVector ClosestSurfacePoint = FVector::ZeroVector;
+	float ClosestSurfaceDistance = BIG_NUMBER;
+	float ClosestSurfaceDistanceSquared = BIG_NUMBER;
+	if (PredictionPrimitive->GetSquaredDistanceToCollision(
+			BobCenter,
+			ClosestSurfaceDistanceSquared,
+			ClosestSurfacePoint)
+		&& FMath::IsFinite(ClosestSurfaceDistanceSquared)
+		&& ClosestSurfaceDistanceSquared >= 0.0f
+		&& !ClosestSurfacePoint.ContainsNaN())
+	{
+		ClosestSurfaceDistance = FMath::Sqrt(ClosestSurfaceDistanceSquared);
+	}
+	else
+	{
+		ClosestSurfacePoint = FVector::ZeroVector;
+	}
+
+	// 复杂 Physics Asset 查询无法返回最近点时，只回退到同一个权威组件的包围盒，禁止改用外层 Capsule。
 	if (ClosestSurfaceDistance == BIG_NUMBER)
 	{
-		FVector BoundsOrigin = Receiver.GetActorLocation();
-		FVector BoundsExtent = FVector::ZeroVector;
-		Receiver.GetActorBounds(true, BoundsOrigin, BoundsExtent);
+		const FVector BoundsOrigin = PredictionPrimitive->Bounds.Origin;
+		const FVector BoundsExtent = PredictionPrimitive->Bounds.BoxExtent;
 
 		const FVector ToBoundsCenter = BoundsOrigin - BobCenter;
 		const float CenterDistance = ToBoundsCenter.Size();

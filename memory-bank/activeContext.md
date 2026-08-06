@@ -1,27 +1,25 @@
 # Active Context — Demo
 
-> 当前任务详情以 .ai-context/current-task.md 为唯一来源；此处只保留迭代焦点、决定与证据。
+> 当前任务详情以 .ai-context/current-task.md 为唯一来源。
 
-## 当前迭代焦点
+## 当前焦点
 
-完成玩家/追猎者共享重冲击原型的可运行闭环：完整 DLL 链接、PCA/DA/Blueprint 装配、自动化、PIE 与用户画面验收；未通过前不扩展 PCG 投放。
+先把 HeavyImpact、摆锤修复、分阶段控制倍率和普通 ragdoll A/B 形成完整内部 Git 检查点，再正式链接并做运行验收；并行收敛真实倒地点起身方案。
 
-## 当前决定
+## 已确认
 
-- 保持 B 路线：预测 Prepare → 全身模拟 → 真实 Chaos 接触 → Flight/Settling → Downed；角色侧不制造第二份冲量。
-- 玩家与追猎者各用一份骨架专属 PCA，共享 C++ 状态组件；旧追猎者局部受击保留为 dormant 回退路径。
-- 首版不做起身动画；角色保留真实落点，Downed/恢复对正式一局的语义需在 PIE 中确认。
-- 摆锤机关房型与 PCG 投放在重冲击验收后讨论；当前只保留独立 Level0 原型。
+- 玩家/追猎者共享 HeavyImpact 状态机、PCA、DA 与 Blueprint 装配已存在；旧追猎者局部受击保留但运行时 dormant。
+- 真实 Chaos 接触决定击飞位移；角色侧不调用 AddImpulse/LaunchCharacter。
+- 摆锤沿走廊纵向摆动；35° 振幅、40° 限位、600 cm 预测范围已消除机关主动停用问题。
+- HeavyImpact 预测组件由玩家/追猎者接口返回 Skeletal Mesh；距离查询遍历 Physics Asset bodies。
+- 分阶段倍率和严格 A/B CVar 已通过无链接编译；PCA 无需重新 Compile。
+- A/B 的 Pure 模式只关闭 Controls，保留同一 Profile 的 Simulated/Collision/Gravity/Blend/CCD 与状态机。
+- Downed 的 Actor/Capsule 已跟随到真实骨盆落点；只有未提交 Prepared 误判才允许恢复受击前 Transform。
+- 玩家 ABP_Unarmed 与 AI ABP_Pursuer_Locomotion 都有 DefaultSlot；项目没有地面起身动画，两个角色骨骼不同。
 
-## 当前证据
+## 当前门槛
 
-- 当前 HEAD 前的白天实现提交为 29e900bd0e9ad3bd5eab0c02d8bb7a8914f915bd；工作区在夜报/记忆写入前干净。
-- UHT 与 Demo 模块无链接编译通过；没有完整链接、HeavyImpact 自动化或重冲击 PIE 证据。
-- 双 MCP 在线；Level0 打开、PIE 停止、相关资产非脏、蓝图 UpToDate。
-- 当前 Editor 加载的 UnrealEditor-Demo.dll 时间为 20:25，早于 21:51 后的重冲击源码；PCA/HeavyImpact DA 不存在，当前 CDO 仍是旧模块字段。
-
-## 当前阻塞与下一步
-
-- PID 13728 的 Editor/Live Coding 锁住项目 DLL；用户需安全关闭 Editor，禁止杀进程、热更或触碰 D:\UE5_8 的 OIT 改动。
-- 完整链接后重启 Editor；用户创建并 Compile PCA_PlayerHeavyImpact、PCA_PursuerHeavyImpact，再装配 DA/CDO/Blueprint。
-- 依次运行 Demo.Physics.HeavyImpact.*、相关 GameFlow/Demo 回归和玩家/追猎者 PIE 边界矩阵。
+- 用户已关闭 Editor。
+- 先提交并推送当前完整工作区，再执行正式 DemoEditor 链接。
+- 链接后重启 Editor，用官方 MCP 回读新倍率，跑自动化与 PIE A/B。
+- 起身视觉必须等待兼容的仰面/俯面 in-place 动画；本轮先给出骨骼路线、代码范围与用户分工，不写假恢复。

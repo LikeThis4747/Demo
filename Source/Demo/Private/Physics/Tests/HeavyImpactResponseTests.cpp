@@ -11,6 +11,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Animation/Skeleton.h"
+#include "Characters/PursuerCharacter.h"
+#include "Characters/ZeroEscapeCharacter.h"
 #include "Components/BoxComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/Hazards/PendulumHazardTuningData.h"
@@ -18,6 +20,7 @@
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
+#include "Interfaces/HeavyImpactReceiver.h"
 #include "Misc/AutomationTest.h"
 #include "PhysicsControlAsset.h"
 #include "ReferenceSkeleton.h"
@@ -316,6 +319,41 @@ namespace ZeroEscape::Physics::Tests
 	}
 
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FHeavyImpactReceiverPrimitiveContractTest,
+		"Demo.Physics.HeavyImpact.ReceiverPrimitiveContract",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FHeavyImpactReceiverPrimitiveContractTest::RunTest(const FString& Parameters)
+	{
+		(void)Parameters;
+
+		AZeroEscapeCharacter* Player = GetMutableDefault<AZeroEscapeCharacter>();
+		APursuerCharacter* Pursuer = GetMutableDefault<APursuerCharacter>();
+		if (!TestNotNull(TEXT("必须取得玩家 Receiver CDO"), Player)
+			|| !TestNotNull(TEXT("必须取得追猎者 Receiver CDO"), Pursuer))
+		{
+			return false;
+		}
+
+		const auto VerifyMeshAuthority = [this](ACharacter* Receiver, const TCHAR* Label)
+		{
+			UPrimitiveComponent* PredictionPrimitive =
+				IHeavyImpactReceiver::Execute_GetHeavyImpactPredictionPrimitive(Receiver);
+			TestNotNull(FString::Printf(TEXT("%s 必须提供预测组件"), Label), PredictionPrimitive);
+			TestTrue(
+				FString::Printf(TEXT("%s 必须用 Skeletal Mesh 预测真实接触"), Label),
+				PredictionPrimitive == Receiver->GetMesh());
+			TestTrue(
+				FString::Printf(TEXT("%s 预测组件必须归自身所有"), Label),
+				IsValid(PredictionPrimitive) && PredictionPrimitive->GetOwner() == Receiver);
+		};
+
+		VerifyMeshAuthority(Player, TEXT("玩家"));
+		VerifyMeshAuthority(Pursuer, TEXT("追猎者"));
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FHeavyImpactTuningContractTest,
 		"Demo.Physics.HeavyImpact.TuningContract",
 		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -327,6 +365,24 @@ namespace ZeroEscape::Physics::Tests
 
 		FTuningFixture Fixture;
 		FText Error;
+		TestEqual(TEXT("Prepared Strength 默认倍率必须稳定"),
+			Fixture.Tuning->PreparedControl.AngularStrengthMultiplier, 2.0f);
+		TestEqual(TEXT("Prepared Damping 默认倍率必须稳定"),
+			Fixture.Tuning->PreparedControl.AngularDampingRatioMultiplier, 1.25f);
+		TestEqual(TEXT("Prepared Torque 默认倍率必须稳定"),
+			Fixture.Tuning->PreparedControl.MaxTorqueMultiplier, 3.0f);
+		TestEqual(TEXT("Flight Strength 默认倍率必须稳定"),
+			Fixture.Tuning->FlightControl.AngularStrengthMultiplier, 1.75f);
+		TestEqual(TEXT("Flight Damping 默认倍率必须稳定"),
+			Fixture.Tuning->FlightControl.AngularDampingRatioMultiplier, 1.0f);
+		TestEqual(TEXT("Flight Torque 默认倍率必须稳定"),
+			Fixture.Tuning->FlightControl.MaxTorqueMultiplier, 3.0f);
+		TestEqual(TEXT("Landing Strength 默认倍率必须稳定"),
+			Fixture.Tuning->LandingControl.AngularStrengthMultiplier, 2.25f);
+		TestEqual(TEXT("Landing Damping 默认倍率必须稳定"),
+			Fixture.Tuning->LandingControl.AngularDampingRatioMultiplier, 1.35f);
+		TestEqual(TEXT("Landing Torque 默认倍率必须稳定"),
+			Fixture.Tuning->LandingControl.MaxTorqueMultiplier, 3.5f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error)))
 		{
@@ -383,6 +439,17 @@ namespace ZeroEscape::Physics::Tests
 		Fixture.Tuning->GroundProbeDistance = 120.0f;
 		Fixture.Tuning->FreeFallbackAfterSeconds = std::numeric_limits<float>::infinity();
 		TestFalse(TEXT("任一调参阈值为 Inf 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		Fixture.Tuning->FreeFallbackAfterSeconds = 5.0f;
+		Fixture.Tuning->FlightControl.MaxTorqueMultiplier =
+			std::numeric_limits<float>::quiet_NaN();
+		TestFalse(TEXT("任一阶段控制倍率为 NaN 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		Fixture.Tuning->FlightControl.MaxTorqueMultiplier = 3.0f;
+		Fixture.Tuning->LandingControl.AngularStrengthMultiplier = 0.0f;
+		TestFalse(TEXT("阶段控制倍率为零必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 		return true;
 	}

@@ -2,8 +2,8 @@
 
 /**
  * @file HeavyImpactTuningData.h
- * 职责：集中保存单套角色重冲击状态机的 PCA 引用、骨骼名和时序阈值。
- * 边界：姿态控制强度只由 Physics Control Asset Profile 管理，本资产不重复覆盖。
+ * 职责：集中保存单套角色重冲击状态机的 PCA 引用、分阶段控制倍率、骨骼名和时序阈值。
+ * 边界：Physics Control Asset 定义控制拓扑和基础 Profile；本资产只缩放既有 ParentSpace 控制，不创建世界空间位移权威。
  */
 
 #pragma once
@@ -16,6 +16,28 @@
 class UPhysicsControlAsset;
 class USkeletalMeshComponent;
 
+/** 项目内的重冲击阶段倍率；只改变关节姿态驱动力，不约束骨盆的世界空间位移。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FHeavyImpactControlStageTuning
+{
+	GENERATED_BODY()
+
+	/** 乘到 PCA Profile 基础 AngularStrength 上。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Heavy Impact|Physics Control",
+		meta = (ClampMin = "0.1", ClampMax = "10.0"))
+	float AngularStrengthMultiplier = 1.0f;
+
+	/** 乘到 PCA Profile 基础 AngularDampingRatio 上。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Heavy Impact|Physics Control",
+		meta = (ClampMin = "0.1", ClampMax = "10.0"))
+	float AngularDampingRatioMultiplier = 1.0f;
+
+	/** 乘到 PCA Profile 基础 MaxTorque 上；不产生额外线性冲量。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Heavy Impact|Physics Control",
+		meta = (ClampMin = "0.1", ClampMax = "20.0"))
+	float MaxTorqueMultiplier = 1.0f;
+};
+
 /** 玩家或 AI 的重冲击物理响应配置；缺失或非法时功能明确停用。 */
 UCLASS(BlueprintType)
 class DEMO_API UHeavyImpactTuningData final : public UDataAsset
@@ -23,9 +45,23 @@ class DEMO_API UHeavyImpactTuningData final : public UDataAsset
 	GENERATED_BODY()
 
 public:
+	UHeavyImpactTuningData();
+
 	/** 已编译的 Physics Control Asset；硬引用保证命中前已加载。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Physics Control")
 	TObjectPtr<UPhysicsControlAsset> PhysicsControlAsset = nullptr;
+
+	/** 命中前短暂准备：强控制、零重力，避免身体先于锤头接触而软倒。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Physics Control")
+	FHeavyImpactControlStageTuning PreparedControl;
+
+	/** 飞行阶段：保留完整重力与自由骨盆，只给内部关节中等肌肉张力。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Physics Control")
+	FHeavyImpactControlStageTuning FlightControl;
+
+	/** 落地判稳阶段：提高关节强度和阻尼，减少尸体式松散与持续抖动。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Physics Control")
+	FHeavyImpactControlStageTuning LandingControl;
 
 	/** 用于身体跟随、速度判稳和地面探测的骨盆骨骼。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Skeleton")

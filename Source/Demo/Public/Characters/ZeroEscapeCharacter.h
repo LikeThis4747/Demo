@@ -37,6 +37,9 @@ public:
 	/** 创建第三人称过肩相机、Physics Handle 与电磁抓取能力组件。 */
 	AZeroEscapeCharacter();
 
+	/** 重冲击预测与真实接触统一使用角色 Skeletal Mesh，而不是外层移动 Capsule。 */
+	virtual UPrimitiveComponent* GetHeavyImpactPredictionPrimitive_Implementation() const override;
+
 	/** 把机关的重冲击准备请求转发给唯一共享响应组件。 */
 	virtual EHeavyImpactPrepareResult PrepareForHeavyImpact_Implementation(
 		const FHeavyImpactPreparationRequest& Request) override;

@@ -14,6 +14,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Data/Input/ZeroEscapeInputConfig.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -63,6 +64,12 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	PhysicsControl->SetAutoActivate(false);
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
+}
+
+/** 机关按准备后仍会参与真实刚体接触的 Mesh 计算距离，不能使用稍后被降为 QueryOnly 的 Capsule。 */
+UPrimitiveComponent* AZeroEscapeCharacter::GetHeavyImpactPredictionPrimitive_Implementation() const
+{
+	return GetMesh();
 }
 
 /** 把接口请求交给唯一重冲击状态 Owner；组件缺失时明确拒绝，不创建角色侧兜底。 */

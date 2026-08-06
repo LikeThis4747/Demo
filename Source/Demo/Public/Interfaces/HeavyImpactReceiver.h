@@ -14,6 +14,8 @@
 
 #include "HeavyImpactReceiver.generated.h"
 
+class UPrimitiveComponent;
+
 /** 标记能够在真实重物接触前准备物理身体的对象。 */
 UINTERFACE(BlueprintType)
 class DEMO_API UHeavyImpactReceiver : public UInterface
@@ -27,6 +29,10 @@ class DEMO_API IHeavyImpactReceiver
 	GENERATED_BODY()
 
 public:
+	/** 返回进入 Prepared 后真正承受 Chaos 接触的组件，供机关按同一碰撞表面计算 ETA。 */
+	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Heavy Impact")
+	UPrimitiveComponent* GetHeavyImpactPredictionPrimitive() const;
+
 	/** 请求接收者为指定真实刚体的即将接触做好准备。 */
 	UFUNCTION(BlueprintNativeEvent, BlueprintCallable, Category = "Heavy Impact")
 	EHeavyImpactPrepareResult PrepareForHeavyImpact(const FHeavyImpactPreparationRequest& Request);
