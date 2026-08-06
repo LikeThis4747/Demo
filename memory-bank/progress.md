@@ -112,3 +112,12 @@
 - [x] 普通刚体获得真实位移；Prepared 玩家和追猎者均记录到非零 solver impulse；HeavyImpact 自动化 4/4 通过。
 - [x] 清理房外巨型 Cube 占位；按用户要求保留细圆柱推杆，并用小型墙面导向座解释其机械关系，允许杆件穿入墙后空间。
 - [ ] 用户在 Level0 验收预警/周期手感、追猎者实际追逐通行和安全窗口；首版不接 PCG、不做压板或角色分支。
+
+<!-- written by shiqiqiwang at 2026-08-06 13:55 UTC -->
+
+
+## 2026-08-06 — 物理机关相机抖动第一版
+- 已在 `AZeroEscapeCharacter` 装配层为 `CameraBoom` 增加对 `HeavyImpactResponse` 的 UE 原生 Tick 依赖，保证同一 PostPhysics 帧先更新受击根节点再更新相机。
+- `BP_ZeroEscapeCharacter.CameraBoom` 已启用位置延迟：Speed 12、MaxDistance 60 cm、ClampToMaxPhysicsDeltaTime；保留旋转延迟关闭和 ECC_Camera 墙体碰撞。
+- `DemoEditor Win64 Development` 正式链接成功；Blueprint 编译、保存及编辑器重启后官方 MCP 回读通过。
+- Level0 普通移动、中央/贴墙受击及 40/60/100 cm 手感对照由用户接手，当前不标记体验验收完成。

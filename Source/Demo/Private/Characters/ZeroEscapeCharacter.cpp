@@ -64,6 +64,9 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	PhysicsControl->SetAutoActivate(false);
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
+
+	// HeavyImpact 先在 PostPhysics 更新角色根节点，弹簧臂再读取同帧的最终位置。
+	CameraBoom->AddTickPrerequisiteComponent(HeavyImpactResponse);
 }
 
 /** 机关按准备后仍会参与真实刚体接触的 Mesh 计算距离，不能使用稍后被降为 QueryOnly 的 Capsule。 */
