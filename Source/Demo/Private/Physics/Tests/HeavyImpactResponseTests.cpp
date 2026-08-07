@@ -11,6 +11,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Animation/Skeleton.h"
+#include "Animation/AnimSequence.h"
 #include "Characters/PursuerCharacter.h"
 #include "Characters/ZeroEscapeCharacter.h"
 #include "Components/BoxComponent.h"
@@ -83,8 +84,12 @@ namespace ZeroEscape::Physics::Tests
 				SkeletalMesh = NewObject<USkeletalMesh>();
 				Skeleton = NewObject<USkeleton>();
 				MeshComponent = NewObject<USkeletalMeshComponent>();
+				FaceUpAnimation = NewObject<UAnimSequence>();
+				FaceDownAnimation = NewObject<UAnimSequence>();
 
 				SkeletalMesh->SetSkeleton(Skeleton);
+				FaceUpAnimation->SetSkeleton(Skeleton);
+				FaceDownAnimation->SetSkeleton(Skeleton);
 				{
 					FReferenceSkeletonModifier SkeletonModifier(
 						SkeletalMesh->GetRefSkeleton(), Skeleton);
@@ -217,6 +222,8 @@ namespace ZeroEscape::Physics::Tests
 					true);
 
 				Tuning->PhysicsControlAsset = PhysicsControlAsset;
+				Tuning->GetUpFaceUpAnimation = FaceUpAnimation;
+				Tuning->GetUpFaceDownAnimation = FaceDownAnimation;
 			}
 
 			TObjectPtr<UHeavyImpactTuningData> Tuning = nullptr;
@@ -224,6 +231,8 @@ namespace ZeroEscape::Physics::Tests
 			TObjectPtr<USkeletalMesh> SkeletalMesh = nullptr;
 			TObjectPtr<USkeleton> Skeleton = nullptr;
 			TObjectPtr<USkeletalMeshComponent> MeshComponent = nullptr;
+			TObjectPtr<UAnimSequence> FaceUpAnimation = nullptr;
+			TObjectPtr<UAnimSequence> FaceDownAnimation = nullptr;
 		};
 	}
 
@@ -450,6 +459,56 @@ namespace ZeroEscape::Physics::Tests
 		Fixture.Tuning->FlightControl.MaxTorqueMultiplier = 3.0f;
 		Fixture.Tuning->LandingControl.AngularStrengthMultiplier = 0.0f;
 		TestFalse(TEXT("阶段控制倍率为零必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FHeavyImpactRecoveryTuningContractTest,
+		"Demo.Physics.HeavyImpact.RecoveryTuningContract",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FHeavyImpactRecoveryTuningContractTest::RunTest(const FString& Parameters)
+	{
+		using namespace HeavyImpactTestsPrivate;
+		(void)Parameters;
+
+		FTuningFixture Fixture;
+		FText Error;
+		TestTrue(TEXT("Recovery tuning fixture must begin valid"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+
+		UAnimSequenceBase* SavedFaceUpAnimation =
+			Fixture.Tuning->GetUpFaceUpAnimation.Get();
+		Fixture.Tuning->GetUpFaceUpAnimation = nullptr;
+		TestFalse(TEXT("FaceUp recovery animation must be assigned"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->GetUpFaceUpAnimation = SavedFaceUpAnimation;
+
+		USkeleton* OtherSkeleton = NewObject<USkeleton>();
+		Fixture.FaceUpAnimation->SetSkeleton(OtherSkeleton);
+		TestFalse(TEXT("Recovery animation Skeleton must match the runtime Mesh Skeleton"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.FaceUpAnimation->SetSkeleton(Fixture.Skeleton);
+
+		Fixture.FaceUpAnimation->bEnableRootMotion = true;
+		TestFalse(TEXT("Recovery animation Root Motion must remain disabled"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.FaceUpAnimation->bEnableRootMotion = false;
+
+		Fixture.Tuning->MaxRecoveryHorizontalAdjustmentCm = 60.1f;
+		TestFalse(TEXT("Recovery placement may never exceed the 60 cm hard bound"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->MaxRecoveryHorizontalAdjustmentCm = 60.0f;
+
+		Fixture.Tuning->RecoverySearchStepCm = 61.0f;
+		TestFalse(TEXT("Recovery search step must stay inside the hard placement bound"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->RecoverySearchStepCm = 20.0f;
+
+		Fixture.Tuning->RecoveryRetrySeconds =
+			std::numeric_limits<float>::quiet_NaN();
+		TestFalse(TEXT("Recovery timing must reject NaN"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 		return true;
 	}

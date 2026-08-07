@@ -8,10 +8,18 @@
 
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 
+#include "Animation/HeavyImpactAnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Animation/AnimSequenceBase.h"
+#include "Animation/PoseSnapshot.h"
+#include "CollisionQueryParams.h"
+#include "CollisionShape.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/Physics/HeavyImpactTuningData.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -22,6 +30,7 @@
 #include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/PhysicsAsset.h"
 #include "PhysicsEngine/SkeletalBodySetup.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogHeavyImpact, Log, All);
 
@@ -30,6 +39,11 @@ namespace HeavyImpactRuntime
 	/** At low frame rates, keep the valid ETA window wider than one frame without changing normal 30/60 FPS tuning. */
 	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
+	constexpr float AbsoluteMaximumRecoveryAdjustmentCm = 60.0f;
+	constexpr float RecoveryBlockedWarningSeconds = 5.0f;
+	constexpr float RecoveryWatchdogPaddingSeconds = 1.0f;
+	constexpr float RecoveryAsyncFrameDelaySeconds = 0.001f;
+	const FName RecoverySlotName(TEXT("DefaultSlot"));
 
 	/** 开发期严格 A/B：1 时保留同一状态机和 BodyModifier，只关闭全部 Physics Control 驱动。 */
 	TAutoConsoleVariable<int32> CVarPureRagdollComparison(
@@ -111,14 +125,38 @@ void UHeavyImpactResponseComponent::BeginPlay()
 		return;
 	}
 
+	const FVector AcrossShoulders =
+		Mesh->GetBoneLocation(Tuning->RightShoulderBone)
+		- Mesh->GetBoneLocation(Tuning->LeftShoulderBone);
+	const FVector TowardHead =
+		Mesh->GetBoneLocation(Tuning->HeadBone)
+		- Mesh->GetBoneLocation(Tuning->PelvisBone);
+	const FVector UncalibratedBodyFront =
+		FVector::CrossProduct(AcrossShoulders, TowardHead).GetSafeNormal();
+	const FVector ActorForward =
+		FVector::VectorPlaneProject(Character->GetActorForwardVector(), FVector::UpVector).GetSafeNormal();
+	bBodyFrontCalibrationValid =
+		!UncalibratedBodyFront.IsNearlyZero() && !ActorForward.IsNearlyZero();
+	if (bBodyFrontCalibrationValid)
+	{
+		BodyFrontCalibrationSign =
+			FVector::DotProduct(UncalibratedBodyFront, ActorForward) >= 0.0f ? 1.0f : -1.0f;
+	}
+
 	Mesh->OnComponentHit.AddUniqueDynamic(this, &UHeavyImpactResponseComponent::HandleMeshHit);
+	Mesh->OnAnimInitialized.AddUniqueDynamic(
+		this,
+		&UHeavyImpactResponseComponent::HandleAnimInitialized);
 	bInitialized = true;
 }
 
 /** 恢复未提交快照，解绑 Delegate，并精确销毁本组件创建的 PCA 记录。 */
 void UHeavyImpactResponseComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (State == EHeavyImpactState::Prepared && Snapshot.bValid)
+	CancelRecoveryAsync(true);
+	if (State == EHeavyImpactState::Prepared
+		&& FalsePositiveRollback.bValid
+		&& RecoveryBaseline.bValid)
 	{
 		RestoreSnapshotAfterFalsePositive();
 	}
@@ -126,6 +164,9 @@ void UHeavyImpactResponseComponent::EndPlay(const EEndPlayReason::Type EndPlayRe
 	if (IsValid(Mesh))
 	{
 		Mesh->OnComponentHit.RemoveDynamic(this, &UHeavyImpactResponseComponent::HandleMeshHit);
+		Mesh->OnAnimInitialized.RemoveDynamic(
+			this,
+			&UHeavyImpactResponseComponent::HandleAnimInitialized);
 	}
 
 	DestroyOwnedPhysicsControlRecords();
@@ -426,7 +467,7 @@ EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 		return EHeavyImpactPrepareResult::Invalid;
 	}
 
-	if (!CapturePreContactSnapshot(FailureReason)
+	if (!CapturePreContactState(FailureReason)
 		|| !EnterPrepared(Request, AllowedMaximumSeconds, FailureReason))
 	{
 		UE_LOG(
@@ -482,34 +523,41 @@ bool UHeavyImpactResponseComponent::ShouldLogRejectedImpact(const FGuid& Id)
 }
 
 /** 保存角色外壳、动画、碰撞和每个 Physics Asset Body 的可恢复属性。 */
-bool UHeavyImpactResponseComponent::CapturePreContactSnapshot(FString& OutReason)
+bool UHeavyImpactResponseComponent::CapturePreContactState(FString& OutReason)
 {
-	Snapshot.Reset();
+	FalsePositiveRollback.Reset();
+	RecoveryBaseline.Reset();
+	FHeavyImpactFalsePositiveRollback NewRollback;
+	FHeavyImpactRecoveryBaseline NewBaseline;
 
 	const UPhysicsAsset* PhysicsAsset = Mesh->GetPhysicsAsset();
-	if (!IsValid(PhysicsAsset) || !IsValid(Mesh->GetAttachParent()))
+	if (!IsValid(PhysicsAsset)
+		|| !IsValid(Mesh->GetAttachParent())
+		|| Mesh->IsUsingAbsoluteLocation()
+		|| Mesh->IsUsingAbsoluteRotation()
+		|| Mesh->IsUsingAbsoluteScale())
 	{
-		OutReason = TEXT("Mesh has no PhysicsAsset or attach parent.");
+		OutReason = TEXT("Mesh has no PhysicsAsset/attach parent or uses absolute transform flags.");
 		return false;
 	}
 
-	Snapshot.ActorTransform = Character->GetActorTransform();
-	Snapshot.CharacterVelocity = Movement->Velocity;
-	Snapshot.MovementMode = Movement->MovementMode;
-	Snapshot.CustomMovementMode = Movement->CustomMovementMode;
-	Snapshot.MeshAttachParent = Mesh->GetAttachParent();
-	Snapshot.MeshAttachSocket = Mesh->GetAttachSocketName();
-	Snapshot.MeshRelativeTransform = Mesh->GetRelativeTransform();
-	Snapshot.bMeshPauseAnims = Mesh->bPauseAnims;
-	Snapshot.MeshCollisionEnabled = Mesh->GetCollisionEnabled();
-	Snapshot.MeshObjectType = Mesh->GetCollisionObjectType();
-	Snapshot.MeshResponses = Mesh->GetCollisionResponseToChannels();
-	Snapshot.bMeshBodyInstanceNotify = Mesh->BodyInstance.bNotifyRigidBodyCollision;
-	Snapshot.bMeshBodyInstanceCCD = Mesh->BodyInstance.bUseCCD;
-	Snapshot.CapsuleCollisionEnabled = Capsule->GetCollisionEnabled();
-	Snapshot.CapsuleResponses = Capsule->GetCollisionResponseToChannels();
+	NewRollback.ActorTransform = Character->GetActorTransform();
+	NewRollback.CharacterVelocity = Movement->Velocity;
+	NewRollback.MovementMode = Movement->MovementMode;
+	NewRollback.CustomMovementMode = Movement->CustomMovementMode;
+	NewBaseline.MeshAttachParent = Mesh->GetAttachParent();
+	NewBaseline.MeshAttachSocket = Mesh->GetAttachSocketName();
+	NewBaseline.MeshRelativeTransform = Mesh->GetRelativeTransform();
+	NewBaseline.bMeshPauseAnims = Mesh->bPauseAnims;
+	NewBaseline.MeshCollisionEnabled = Mesh->GetCollisionEnabled();
+	NewBaseline.MeshObjectType = Mesh->GetCollisionObjectType();
+	NewBaseline.MeshResponses = Mesh->GetCollisionResponseToChannels();
+	NewBaseline.bMeshBodyInstanceNotify = Mesh->BodyInstance.bNotifyRigidBodyCollision;
+	NewBaseline.bMeshBodyInstanceCCD = Mesh->BodyInstance.bUseCCD;
+	NewBaseline.CapsuleCollisionEnabled = Capsule->GetCollisionEnabled();
+	NewBaseline.CapsuleResponses = Capsule->GetCollisionResponseToChannels();
 
-	Snapshot.Bodies.Reserve(PhysicsAsset->SkeletalBodySetups.Num());
+	NewBaseline.Bodies.Reserve(PhysicsAsset->SkeletalBodySetups.Num());
 	for (const USkeletalBodySetup* BodySetup : PhysicsAsset->SkeletalBodySetups)
 	{
 		if (!IsValid(BodySetup))
@@ -523,11 +571,10 @@ bool UHeavyImpactResponseComponent::CapturePreContactSnapshot(FString& OutReason
 			OutReason = FString::Printf(
 				TEXT("Missing runtime body for bone %s."),
 				*BodySetup->BoneName.ToString());
-			Snapshot.Reset();
 			return false;
 		}
 
-		FHeavyImpactBodySnapshot& BodySnapshot = Snapshot.Bodies.AddDefaulted_GetRef();
+		FHeavyImpactBodySnapshot& BodySnapshot = NewBaseline.Bodies.AddDefaulted_GetRef();
 		BodySnapshot.BoneName = BodySetup->BoneName;
 		// 保存公开配置位；UE5.8 的 IsInstanceSimulatingPhysics 内联依赖未从 Engine 模块导出。
 		BodySnapshot.bWasSimulating = Body->bSimulatePhysics;
@@ -536,7 +583,6 @@ bool UHeavyImpactResponseComponent::CapturePreContactSnapshot(FString& OutReason
 			OutReason = FString::Printf(
 				TEXT("Body %s was already simulating before HeavyImpact preparation."),
 				*BodySetup->BoneName.ToString());
-			Snapshot.Reset();
 			return false;
 		}
 		BodySnapshot.bNotifyRigidBodyCollision = Body->bNotifyRigidBodyCollision;
@@ -545,7 +591,10 @@ bool UHeavyImpactResponseComponent::CapturePreContactSnapshot(FString& OutReason
 		BodySnapshot.CollisionEnabled = Body->GetCollisionEnabled(false);
 	}
 
-	Snapshot.bValid = true;
+	NewRollback.bValid = true;
+	NewBaseline.bValid = true;
+	FalsePositiveRollback = MoveTemp(NewRollback);
+	RecoveryBaseline = MoveTemp(NewBaseline);
 	return true;
 }
 
@@ -659,10 +708,27 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 }
 
 /** 接受 Chaos 已产生的速度，切到 Flight Profile 并广播一次提交事件。 */
+void UHeavyImpactResponseComponent::HandleAnimInitialized()
+{
+	if (State != EHeavyImpactState::Recovering)
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogHeavyImpact,
+		Error,
+		TEXT("HeavyImpact AnimInstance was initialized during recovery on %s; completing safely."),
+		*GetNameSafe(GetOwner()));
+	CompleteRecovery(TEXT("AnimInstance was initialized during recovery."), true);
+}
+
 void UHeavyImpactResponseComponent::CommitRealImpact(
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
 {
+	// Once real Chaos contact commits, no later path may access the pre-impact Actor transform.
+	FalsePositiveRollback.Reset();
 	const bool bPreparedCrossedFrameBoundary = GFrameCounter > PreparedEntryFrame;
 	if (!bPreparedCrossedFrameBoundary)
 	{
@@ -697,7 +763,6 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 	OnImpactCommitted.Broadcast(ActiveRequest);
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	ActivePreparationTimeoutSeconds = 0.0f;
-	Snapshot.Reset();
 	PreparedEntryFrame = 0;
 }
 
@@ -706,6 +771,7 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
 {
+	CancelRecoveryAsync(false);
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
 	bFreeFallbackInvoked = false;
@@ -1020,6 +1086,9 @@ void UHeavyImpactResponseComponent::FinishPendingDownedSleep()
 	bPendingDownedSleep = false;
 	Mesh->PutAllRigidBodiesToSleep();
 	PhysicsControl->SetComponentTickEnabled(false);
+	RecoveryBlockedElapsedSeconds = 0.0f;
+	bRecoveryBlockedWarningLogged = false;
+	ScheduleRecoveryAttempt(Tuning->RecoveryDelaySeconds);
 	SetComponentTickEnabled(false);
 
 	UE_LOG(
@@ -1030,6 +1099,787 @@ void UHeavyImpactResponseComponent::FinishPendingDownedSleep()
 }
 
 /** Prepared 超时的唯一回滚入口。 */
+void UHeavyImpactResponseComponent::ScheduleRecoveryAttempt(const float DelaySeconds)
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World) || State != EHeavyImpactState::Downed)
+	{
+		return;
+	}
+
+	World->GetTimerManager().ClearTimer(RecoveryRetryTimer);
+	RecoveryPhase = EHeavyImpactRecoveryPhase::WaitingForSpace;
+	const uint32 TransactionSerial = ++RecoveryTransactionSerial;
+	const FTimerDelegate AttemptDelegate = FTimerDelegate::CreateUObject(
+		this,
+		&UHeavyImpactResponseComponent::TryBeginRecovery,
+		TransactionSerial);
+	if (DelaySeconds <= 0.0f)
+	{
+		World->GetTimerManager().SetTimer(
+			RecoveryRetryTimer,
+			AttemptDelegate,
+			HeavyImpactRuntime::RecoveryAsyncFrameDelaySeconds,
+			false);
+	}
+	else
+	{
+		World->GetTimerManager().SetTimer(
+			RecoveryRetryTimer,
+			AttemptDelegate,
+			DelaySeconds,
+			false);
+	}
+}
+
+void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransactionSerial)
+{
+	if (State != EHeavyImpactState::Downed
+		|| RecoveryPhase != EHeavyImpactRecoveryPhase::WaitingForSpace
+		|| RecoveryTransactionSerial != ExpectedTransactionSerial)
+	{
+		return;
+	}
+
+	FHeavyImpactRecoveryPlan Plan;
+	FString FailureReason;
+	if (BuildRecoveryPlan(Plan, FailureReason)
+		&& BeginPhysicalToAnimationHandoff(Plan, FailureReason))
+	{
+		return;
+	}
+
+	RecoveryBlockedElapsedSeconds += Tuning->RecoveryRetrySeconds;
+	if (!bRecoveryBlockedWarningLogged
+		&& RecoveryBlockedElapsedSeconds >= HeavyImpactRuntime::RecoveryBlockedWarningSeconds)
+	{
+		bRecoveryBlockedWarningLogged = true;
+		UE_LOG(
+			LogHeavyImpact,
+			Warning,
+			TEXT("HeavyImpact recovery remains blocked on %s: %s"),
+			*GetNameSafe(GetOwner()),
+			*FailureReason);
+	}
+
+	ScheduleRecoveryAttempt(Tuning->RecoveryRetrySeconds);
+}
+
+bool UHeavyImpactResponseComponent::BuildRecoveryPlan(
+	FHeavyImpactRecoveryPlan& OutPlan,
+	FString& OutReason)
+{
+	if (!RecoveryBaseline.bValid)
+	{
+		OutReason = TEXT("Committed recovery baseline is missing.");
+		return false;
+	}
+
+	if (!DetermineRecoveryOrientation(OutPlan.bFaceUp, OutPlan.CapsuleRotation, OutReason))
+	{
+		return false;
+	}
+
+	OutPlan.Animation = OutPlan.bFaceUp
+		? Tuning->GetUpFaceUpAnimation
+		: Tuning->GetUpFaceDownAnimation;
+	const USkeletalMesh* RuntimeSkeletalMesh = Mesh->GetSkeletalMeshAsset();
+	if (!IsValid(RuntimeSkeletalMesh)
+		|| !IsValid(OutPlan.Animation)
+		|| OutPlan.Animation->GetSkeleton() != RuntimeSkeletalMesh->GetSkeleton()
+		|| OutPlan.Animation->HasRootMotion()
+		|| !FMath::IsFinite(OutPlan.Animation->RateScale)
+		|| OutPlan.Animation->RateScale <= 0.0f)
+	{
+		OutReason = TEXT("Selected recovery sequence is not valid for the runtime Mesh Skeleton.");
+		return false;
+	}
+
+	return TryFindRecoveryCapsuleLocation(
+		OutPlan.CapsuleRotation,
+		OutPlan.CapsuleLocation,
+		OutReason);
+}
+
+bool UHeavyImpactResponseComponent::DetermineRecoveryOrientation(
+	bool& bOutFaceUp,
+	FRotator& OutRotation,
+	FString& OutReason)
+{
+	const FVector Pelvis = Mesh->GetBoneLocation(Tuning->PelvisBone);
+	const FVector TowardHead = Mesh->GetBoneLocation(Tuning->HeadBone) - Pelvis;
+	const FVector AcrossShoulders =
+		Mesh->GetBoneLocation(Tuning->RightShoulderBone)
+		- Mesh->GetBoneLocation(Tuning->LeftShoulderBone);
+	const FVector BodyFront =
+		FVector::CrossProduct(AcrossShoulders, TowardHead).GetSafeNormal()
+		* BodyFrontCalibrationSign;
+
+	FVector HorizontalForward;
+	if (bBodyFrontCalibrationValid && !BodyFront.IsNearlyZero())
+	{
+		bOutFaceUp = FVector::DotProduct(BodyFront, FVector::UpVector) >= 0.0f;
+		const FVector HorizontalHeadDirection =
+			FVector::VectorPlaneProject(TowardHead, FVector::UpVector).GetSafeNormal();
+		HorizontalForward = bOutFaceUp ? -HorizontalHeadDirection : HorizontalHeadDirection;
+	}
+	else
+	{
+		bOutFaceUp = true;
+	}
+
+	if (HorizontalForward.IsNearlyZero())
+	{
+		HorizontalForward =
+			FVector::VectorPlaneProject(Character->GetActorForwardVector(), FVector::UpVector).GetSafeNormal();
+		if (!bRecoveryOrientationWarningLogged)
+		{
+			bRecoveryOrientationWarningLogged = true;
+			UE_LOG(
+				LogHeavyImpact,
+				Warning,
+				TEXT("HeavyImpact recovery orientation on %s used the current Actor yaw because the physical bone vectors were degenerate."),
+				*GetNameSafe(GetOwner()));
+		}
+	}
+
+	if (HorizontalForward.IsNearlyZero())
+	{
+		OutReason = TEXT("Could not derive a finite horizontal get-up direction.");
+		return false;
+	}
+
+	const float YawOffset = bOutFaceUp
+		? Tuning->FaceUpYawOffsetDegrees
+		: Tuning->FaceDownYawOffsetDegrees;
+	OutRotation = FRotator(0.0f, HorizontalForward.Rotation().Yaw + YawOffset, 0.0f);
+	OutReason.Reset();
+	return true;
+}
+
+bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
+	const FRotator& UprightRotation,
+	FVector& OutLocation,
+	FString& OutReason) const
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World) || !IsValid(Character) || !IsValid(Movement) || !IsValid(Capsule))
+	{
+		OutReason = TEXT("Recovery placement dependencies are unavailable.");
+		return false;
+	}
+
+	const FVector PelvisAnchor = Mesh->GetBoneLocation(Tuning->PelvisBone);
+	const float MaximumAdjustment = FMath::Min(
+		Tuning->MaxRecoveryHorizontalAdjustmentCm,
+		HeavyImpactRuntime::AbsoluteMaximumRecoveryAdjustmentCm);
+
+	const float Radius = Capsule->GetScaledCapsuleRadius();
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FCollisionShape StandingCapsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(HeavyImpactRecoveryPath), false, Character);
+	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
+
+	// Establish a geometry-free sweep start without requiring it to have a floor. This lets the
+	// ring search reach a nearby ledge/floor while still refusing to sweep out of penetration.
+	FVector ResolvedPathStart = Character->GetActorLocation();
+	FRotator ResolvedPathRotation = UprightRotation;
+	if (!World->FindTeleportSpot(Character, ResolvedPathStart, ResolvedPathRotation)
+		|| FVector::VectorPlaneProject(ResolvedPathStart - PelvisAnchor, FVector::UpVector).Size()
+			> MaximumAdjustment + UE_KINDA_SMALL_NUMBER
+		|| World->OverlapBlockingTestByChannel(
+			ResolvedPathStart,
+			UprightRotation.Quaternion(),
+			Capsule->GetCollisionObjectType(),
+			StandingCapsule,
+			QueryParams,
+			ResponseParams))
+	{
+		OutReason = TEXT("The final physical pelvis has no trustworthy free capsule sweep start.");
+		return false;
+	}
+
+	const FVector2D Directions[] = {
+		FVector2D(1.0f, 0.0f),
+		FVector2D(-1.0f, 0.0f),
+		FVector2D(0.0f, 1.0f),
+		FVector2D(0.0f, -1.0f),
+		FVector2D(1.0f, 1.0f).GetSafeNormal(),
+		FVector2D(1.0f, -1.0f).GetSafeNormal(),
+		FVector2D(-1.0f, 1.0f).GetSafeNormal(),
+		FVector2D(-1.0f, -1.0f).GetSafeNormal()
+	};
+
+	TArray<float, TInlineAllocator<4>> SearchRadii;
+	SearchRadii.Add(0.0f);
+	for (float SearchRadius = Tuning->RecoverySearchStepCm;
+		SearchRadius < MaximumAdjustment - UE_KINDA_SMALL_NUMBER;
+		SearchRadius += Tuning->RecoverySearchStepCm)
+	{
+		SearchRadii.Add(SearchRadius);
+	}
+	if (MaximumAdjustment > 0.0f)
+	{
+		SearchRadii.AddUnique(MaximumAdjustment);
+	}
+
+	for (const float SearchRadius : SearchRadii)
+	{
+		const int32 DirectionCount = FMath::IsNearlyZero(SearchRadius)
+			? 1
+			: UE_ARRAY_COUNT(Directions);
+		for (int32 DirectionIndex = 0; DirectionIndex < DirectionCount; ++DirectionIndex)
+		{
+			const FVector2D Offset = FMath::IsNearlyZero(SearchRadius)
+				? FVector2D::ZeroVector
+				: Directions[DirectionIndex] * SearchRadius;
+			FVector Candidate;
+			if (!TryResolveRecoveryCandidate(
+					PelvisAnchor,
+					Offset,
+					UprightRotation,
+					MaximumAdjustment,
+					Candidate))
+			{
+				continue;
+			}
+
+			if (!Candidate.Equals(ResolvedPathStart, 0.1f))
+			{
+				FHitResult PathHit;
+				const bool bPathBlocked = World->SweepSingleByChannel(
+					PathHit,
+					ResolvedPathStart,
+					Candidate,
+					UprightRotation.Quaternion(),
+					Capsule->GetCollisionObjectType(),
+					StandingCapsule,
+					QueryParams,
+					ResponseParams);
+				if (bPathBlocked || PathHit.bStartPenetrating)
+				{
+					continue;
+				}
+			}
+
+			OutLocation = Candidate;
+			OutReason.Reset();
+			return true;
+		}
+	}
+
+	OutReason = TEXT("No walkable, non-overlapping capsule location was reachable within 60 cm.");
+	return false;
+}
+
+bool UHeavyImpactResponseComponent::TryResolveRecoveryCandidate(
+	const FVector& PelvisAnchor,
+	const FVector2D& HorizontalOffset,
+	const FRotator& UprightRotation,
+	const float MaximumAdjustment,
+	FVector& OutLocation) const
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World))
+	{
+		return false;
+	}
+
+	const float Radius = Capsule->GetScaledCapsuleRadius();
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FCollisionShape StandingCapsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	FVector ProbeLocation(
+		PelvisAnchor.X + HorizontalOffset.X,
+		PelvisAnchor.Y + HorizontalOffset.Y,
+		PelvisAnchor.Z + HalfHeight);
+
+	FFindFloorResult FloorResult;
+	Movement->ComputeFloorDist(
+		ProbeLocation,
+		Tuning->GroundProbeDistance,
+		Tuning->GroundProbeDistance,
+		FloorResult,
+		Radius);
+	if (!FloorResult.IsWalkableFloor())
+	{
+		return false;
+	}
+
+	const float TargetFloorGap =
+		(UCharacterMovementComponent::MIN_FLOOR_DIST
+			+ UCharacterMovementComponent::MAX_FLOOR_DIST) * 0.5f;
+	const float InitialFloorDistance = FloorResult.bLineTrace
+		? FloorResult.LineDist
+		: FloorResult.FloorDist;
+	FVector Candidate = ProbeLocation
+		- FVector::UpVector * (InitialFloorDistance - TargetFloorGap);
+	FRotator CandidateRotation = UprightRotation;
+	if (!World->FindTeleportSpot(Character, Candidate, CandidateRotation))
+	{
+		return false;
+	}
+
+	const FVector HorizontalDelta =
+		FVector::VectorPlaneProject(Candidate - PelvisAnchor, FVector::UpVector);
+	if (HorizontalDelta.Size() > MaximumAdjustment + UE_KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	FFindFloorResult AdjustedFloor;
+	Movement->ComputeFloorDist(
+		Candidate,
+		Tuning->GroundProbeDistance,
+		Tuning->GroundProbeDistance,
+		AdjustedFloor,
+		Radius);
+	if (!AdjustedFloor.IsWalkableFloor())
+	{
+		return false;
+	}
+	const float AdjustedFloorDistance = AdjustedFloor.bLineTrace
+		? AdjustedFloor.LineDist
+		: AdjustedFloor.FloorDist;
+	Candidate -= FVector::UpVector * (AdjustedFloorDistance - TargetFloorGap);
+
+	const FCollisionQueryParams QueryParams(
+		SCENE_QUERY_STAT(HeavyImpactRecoveryCandidate),
+		false,
+		Character);
+	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
+	if (World->OverlapBlockingTestByChannel(
+		Candidate,
+		UprightRotation.Quaternion(),
+		Capsule->GetCollisionObjectType(),
+		StandingCapsule,
+		QueryParams,
+		ResponseParams))
+	{
+		return false;
+	}
+
+	OutLocation = Candidate;
+	return true;
+}
+
+bool UHeavyImpactResponseComponent::CaptureRelocatedRecoveryPose(
+	const FHeavyImpactRecoveryPlan& Plan,
+	FPoseSnapshot& OutPose,
+	FString& OutReason) const
+{
+	if (!Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f))
+	{
+		OutReason = TEXT("Capsule moved after recovery placement validation.");
+		return false;
+	}
+
+	Mesh->SnapshotPose(OutPose);
+	if (!OutPose.bIsValid || OutPose.LocalTransforms.IsEmpty())
+	{
+		OutReason = TEXT("Skeletal Mesh did not provide a valid physical pose snapshot.");
+		return false;
+	}
+
+	USceneComponent* AttachParent = RecoveryBaseline.MeshAttachParent.Get();
+	if (!IsValid(AttachParent))
+	{
+		OutReason = TEXT("Original Mesh attach parent no longer exists.");
+		return false;
+	}
+
+	const FTransform PhysicalRootWorld =
+		OutPose.LocalTransforms[0] * Mesh->GetComponentTransform();
+	const FTransform DesiredMeshWorld =
+		RecoveryBaseline.MeshRelativeTransform
+		* AttachParent->GetSocketTransform(RecoveryBaseline.MeshAttachSocket, RTS_World);
+	OutPose.LocalTransforms[0] = PhysicalRootWorld.GetRelativeTransform(DesiredMeshWorld);
+	OutReason.Reset();
+	return true;
+}
+
+bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
+	const FHeavyImpactRecoveryPlan& Plan,
+	FString& OutReason)
+{
+	USceneComponent* RecoveryAttachParent = RecoveryBaseline.MeshAttachParent.Get();
+	if (State != EHeavyImpactState::Downed
+		|| !RecoveryBaseline.bValid
+		|| !IsValid(RecoveryAttachParent)
+		|| !RecoveryAttachParent->CanAttachAsChild(Mesh, RecoveryBaseline.MeshAttachSocket)
+		|| !IsValid(Plan.Animation))
+	{
+		OutReason = TEXT("Recovery handoff prerequisites are no longer valid.");
+		return false;
+	}
+
+	HeavyImpactAnimInstance = Cast<UHeavyImpactAnimInstance>(Mesh->GetAnimInstance());
+	if (!IsValid(HeavyImpactAnimInstance))
+	{
+		OutReason = TEXT("Runtime AnimInstance is not UHeavyImpactAnimInstance.");
+		return false;
+	}
+	const FTransform DownedActorTransform = Character->GetActorTransform();
+	FHitResult PlacementHit;
+	const bool bPlaced = Character->SetActorLocationAndRotation(
+		Plan.CapsuleLocation,
+		Plan.CapsuleRotation,
+		true,
+		&PlacementHit,
+		ETeleportType::TeleportPhysics);
+	if (!bPlaced
+		|| !Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f))
+	{
+		Character->SetActorTransform(
+			DownedActorTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		OutReason = TEXT("Validated standing Capsule placement failed during the handoff transaction.");
+		return false;
+	}
+
+	FPoseSnapshot PhysicalPose;
+	if (!CaptureRelocatedRecoveryPose(Plan, PhysicalPose, OutReason))
+	{
+		Character->SetActorTransform(
+			DownedActorTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		return false;
+	}
+	if (!HeavyImpactAnimInstance->StoreHeavyImpactDownedPose(MoveTemp(PhysicalPose)))
+	{
+		Character->SetActorTransform(
+			DownedActorTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		HeavyImpactAnimInstance->ClearHeavyImpactDownedPose();
+		OutReason = TEXT("AnimInstance rejected the relocated physical pose snapshot.");
+		return false;
+	}
+
+	PhysicsControl->SetComponentTickEnabled(true);
+	if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfileInactive))
+	{
+		HeavyImpactAnimInstance->ClearHeavyImpactDownedPose();
+		Character->SetActorTransform(
+			DownedActorTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		PhysicsControl->SetComponentTickEnabled(false);
+		OutReason = TEXT("Inactive Physics Control profile failed before handoff commit.");
+		return false;
+	}
+
+	Mesh->SetAllBodiesSimulatePhysics(false);
+	RestoreBodyBaseline(RecoveryBaseline);
+	if (!RestoreCharacterShell(RecoveryBaseline))
+	{
+		HeavyImpactAnimInstance->ClearHeavyImpactDownedPose();
+		Mesh->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+		Character->SetActorTransform(
+			DownedActorTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		Capsule->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		Mesh->bPauseAnims = true;
+		Mesh->SetCollisionObjectType(ECC_PhysicsBody);
+		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Mesh->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+		Mesh->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+		Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+		Mesh->SetAllBodiesNotifyRigidBodyCollision(true);
+		InvokeRequiredProfile(Demo::HeavyImpact::ProfileFreeFallback);
+		Mesh->SetAllBodiesSimulatePhysics(true);
+		Mesh->SetAllBodiesPhysicsBlendWeight(1.0f, false);
+		Mesh->PutAllRigidBodiesToSleep();
+		PhysicsControl->SetComponentTickEnabled(false);
+		OutReason = TEXT("Mesh reattachment failed; physical Downed state was restored.");
+		return false;
+	}
+	PhysicsControl->SetComponentTickEnabled(false);
+	SetState(EHeavyImpactState::Recovering);
+	RecoveryPhase = EHeavyImpactRecoveryPhase::PlayingMontage;
+	ActiveRecoverySequence = Plan.Animation;
+
+	// Evaluate the stored-pose branch immediately so attachment cannot expose a reference-pose frame.
+	Mesh->TickAnimation(0.0f, false);
+	Mesh->RefreshBoneTransforms();
+
+	const uint32 TransactionSerial = RecoveryTransactionSerial;
+	GetWorld()->GetTimerManager().SetTimer(
+		RecoveryMontageStartTimer,
+		FTimerDelegate::CreateUObject(
+			this,
+			&UHeavyImpactResponseComponent::StartRecoveryMontage,
+			TransactionSerial),
+		HeavyImpactRuntime::RecoveryAsyncFrameDelaySeconds,
+		false);
+	SetComponentTickEnabled(false);
+	OutReason.Reset();
+	return true;
+}
+
+void UHeavyImpactResponseComponent::StartRecoveryMontage(
+	const uint32 ExpectedTransactionSerial)
+{
+	if (!IsCurrentRecoveryTransaction(ExpectedTransactionSerial)
+		|| Mesh->GetAnimInstance() != HeavyImpactAnimInstance
+		|| !IsValid(ActiveRecoverySequence))
+	{
+		if (State == EHeavyImpactState::Recovering)
+		{
+			UE_LOG(
+				LogHeavyImpact,
+				Error,
+				TEXT("HeavyImpact recovery Montage could not start on %s because the AnimInstance or sequence changed."),
+				*GetNameSafe(GetOwner()));
+			CompleteRecovery(TEXT("AnimInstance or recovery sequence changed before Montage start."));
+		}
+		return;
+	}
+
+	ActiveRecoveryMontage = HeavyImpactAnimInstance->PlaySlotAnimationAsDynamicMontage(
+		ActiveRecoverySequence,
+		HeavyImpactRuntime::RecoverySlotName,
+		Tuning->RecoveryMontageBlendInSeconds,
+		Tuning->RecoveryMontageBlendOutSeconds,
+		Tuning->RecoveryPlayRate,
+		1,
+		-1.0f,
+		0.0f);
+	if (!IsValid(ActiveRecoveryMontage))
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Error,
+			TEXT("HeavyImpact failed to create a dynamic get-up Montage on %s from sequence %s."),
+			*GetNameSafe(GetOwner()),
+			*GetNameSafe(ActiveRecoverySequence));
+		CompleteRecovery(TEXT("Dynamic get-up Montage failed after physical handoff."));
+		return;
+	}
+
+	FOnMontageEnded MontageEndedDelegate;
+	MontageEndedDelegate.BindUObject(
+		this,
+		&UHeavyImpactResponseComponent::HandleRecoveryMontageEnded);
+	HeavyImpactAnimInstance->Montage_SetEndDelegate(
+		MontageEndedDelegate,
+		ActiveRecoveryMontage);
+
+	GetWorld()->GetTimerManager().SetTimer(
+		RecoveryPoseReleaseTimer,
+		FTimerDelegate::CreateUObject(
+			this,
+			&UHeavyImpactResponseComponent::ReleaseRecoveryPoseSnapshot,
+			ExpectedTransactionSerial),
+		HeavyImpactRuntime::RecoveryAsyncFrameDelaySeconds,
+		false);
+
+	const float EffectiveRate = FMath::Max(
+		FMath::Abs(ActiveRecoverySequence->RateScale * Tuning->RecoveryPlayRate),
+		UE_KINDA_SMALL_NUMBER);
+	const float WatchdogSeconds =
+		ActiveRecoverySequence->GetPlayLength() / EffectiveRate
+		+ Tuning->RecoveryMontageBlendInSeconds
+		+ Tuning->RecoveryMontageBlendOutSeconds
+		+ HeavyImpactRuntime::RecoveryWatchdogPaddingSeconds;
+	GetWorld()->GetTimerManager().SetTimer(
+		RecoveryMontageWatchdogTimer,
+		FTimerDelegate::CreateUObject(
+			this,
+			&UHeavyImpactResponseComponent::HandleRecoveryMontageWatchdog,
+			ExpectedTransactionSerial),
+		FMath::Max(WatchdogSeconds, 1.0f),
+		false);
+}
+
+void UHeavyImpactResponseComponent::ReleaseRecoveryPoseSnapshot(
+	const uint32 ExpectedTransactionSerial)
+{
+	if (IsCurrentRecoveryTransaction(ExpectedTransactionSerial)
+		&& IsValid(HeavyImpactAnimInstance)
+		&& Mesh->GetAnimInstance() == HeavyImpactAnimInstance)
+	{
+		HeavyImpactAnimInstance->ReleaseHeavyImpactDownedPose();
+		GetWorld()->GetTimerManager().SetTimer(
+			RecoverySlotValidationTimer,
+			FTimerDelegate::CreateUObject(
+				this,
+				&UHeavyImpactResponseComponent::ValidateRecoverySlotEvaluation,
+				ExpectedTransactionSerial),
+			HeavyImpactRuntime::RecoveryAsyncFrameDelaySeconds,
+			false);
+	}
+}
+
+void UHeavyImpactResponseComponent::ValidateRecoverySlotEvaluation(
+	const uint32 ExpectedTransactionSerial)
+{
+	if (!IsCurrentRecoveryTransaction(ExpectedTransactionSerial)
+		|| !IsValid(HeavyImpactAnimInstance)
+		|| !IsValid(ActiveRecoveryMontage))
+	{
+		return;
+	}
+
+	const float SlotNodeWeight = HeavyImpactAnimInstance->GetSlotNodeGlobalWeight(
+		HeavyImpactRuntime::RecoverySlotName);
+	const float MontageWeight = HeavyImpactAnimInstance->GetSlotMontageGlobalWeight(
+		HeavyImpactRuntime::RecoverySlotName);
+	if (SlotNodeWeight <= UE_KINDA_SMALL_NUMBER
+		|| MontageWeight <= UE_KINDA_SMALL_NUMBER)
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Error,
+			TEXT("HeavyImpact DefaultSlot was not evaluated by the AnimGraph on %s; completing without a silent fake success."),
+			*GetNameSafe(GetOwner()));
+		CompleteRecovery(TEXT("Recovery Slot was absent or not evaluated."), true);
+	}
+}
+
+void UHeavyImpactResponseComponent::HandleRecoveryMontageWatchdog(
+	const uint32 ExpectedTransactionSerial)
+{
+	if (!IsCurrentRecoveryTransaction(ExpectedTransactionSerial))
+	{
+		return;
+	}
+
+	UE_LOG(
+		LogHeavyImpact,
+		Error,
+		TEXT("HeavyImpact recovery Montage watchdog expired on %s; completing at the validated ground position."),
+		*GetNameSafe(GetOwner()));
+	CompleteRecovery(TEXT("Recovery Montage end callback was not received."), true);
+}
+
+void UHeavyImpactResponseComponent::HandleRecoveryMontageEnded(
+	UAnimMontage* Montage,
+	const bool bInterrupted)
+{
+	if (State != EHeavyImpactState::Recovering
+		|| Montage != ActiveRecoveryMontage)
+	{
+		return;
+	}
+
+	CompleteRecovery(
+		bInterrupted
+			? TEXT("Recovery Montage was interrupted; completed safely.")
+			: TEXT("Recovery Montage completed."));
+}
+
+void UHeavyImpactResponseComponent::CompleteRecovery(
+	const TCHAR* Reason,
+	const bool bStopActiveMontage)
+{
+	if (State != EHeavyImpactState::Recovering)
+	{
+		return;
+	}
+
+	if (RecoveryBaseline.bValid)
+	{
+		Mesh->SetAllBodiesSimulatePhysics(false);
+		RestoreBodyBaseline(RecoveryBaseline);
+		RestoreCharacterShell(RecoveryBaseline);
+	}
+
+	CancelRecoveryAsync(bStopActiveMontage);
+	Movement->StopMovementImmediately();
+	Movement->Velocity = FVector::ZeroVector;
+	FFindFloorResult FloorResult;
+	Movement->FindFloor(Character->GetActorLocation(), FloorResult, false);
+	if (FloorResult.IsWalkableFloor())
+	{
+		Movement->SetDefaultMovementMode();
+	}
+	else
+	{
+		Movement->SetMovementMode(MOVE_Falling);
+	}
+
+	ActiveRequest = FHeavyImpactPreparationRequest();
+	ExpectedSourceActor = nullptr;
+	ExpectedSourceComponent = nullptr;
+	FalsePositiveRollback.Reset();
+	RecoveryBaseline.Reset();
+	bPureRagdollComparisonActive = false;
+	PhysicsControl->SetComponentTickEnabled(false);
+	SetComponentTickEnabled(false);
+	SetState(EHeavyImpactState::Inactive);
+
+	UE_LOG(
+		LogHeavyImpact,
+		Verbose,
+		TEXT("HeavyImpact recovery completed on %s: %s"),
+		*GetNameSafe(GetOwner()),
+		Reason);
+}
+
+void UHeavyImpactResponseComponent::CancelRecoveryAsync(const bool bStopActiveMontage)
+{
+	++RecoveryTransactionSerial;
+	if (UWorld* World = GetWorld())
+	{
+		FTimerManager& TimerManager = World->GetTimerManager();
+		TimerManager.ClearTimer(RecoveryRetryTimer);
+		TimerManager.ClearTimer(RecoveryMontageStartTimer);
+		TimerManager.ClearTimer(RecoveryPoseReleaseTimer);
+		TimerManager.ClearTimer(RecoverySlotValidationTimer);
+		TimerManager.ClearTimer(RecoveryMontageWatchdogTimer);
+	}
+	ClearRecoveryAnimationState(bStopActiveMontage);
+	RecoveryPhase = EHeavyImpactRecoveryPhase::None;
+}
+
+void UHeavyImpactResponseComponent::ClearRecoveryAnimationState(
+	const bool bStopActiveMontage)
+{
+	if (IsValid(HeavyImpactAnimInstance) && IsValid(ActiveRecoveryMontage))
+	{
+		FOnMontageEnded EmptyDelegate;
+		HeavyImpactAnimInstance->Montage_SetEndDelegate(EmptyDelegate, ActiveRecoveryMontage);
+		if (bStopActiveMontage
+			&& HeavyImpactAnimInstance->Montage_IsPlaying(ActiveRecoveryMontage))
+		{
+			HeavyImpactAnimInstance->Montage_Stop(
+				Tuning ? Tuning->RecoveryMontageBlendOutSeconds : 0.0f,
+				ActiveRecoveryMontage);
+		}
+	}
+
+	if (IsValid(HeavyImpactAnimInstance))
+	{
+		HeavyImpactAnimInstance->ClearHeavyImpactDownedPose();
+	}
+	if (UHeavyImpactAnimInstance* CurrentAnimInstance =
+		Cast<UHeavyImpactAnimInstance>(IsValid(Mesh) ? Mesh->GetAnimInstance() : nullptr);
+		IsValid(CurrentAnimInstance) && CurrentAnimInstance != HeavyImpactAnimInstance)
+	{
+		CurrentAnimInstance->ClearHeavyImpactDownedPose();
+	}
+
+	ActiveRecoveryMontage = nullptr;
+	ActiveRecoverySequence = nullptr;
+	HeavyImpactAnimInstance = nullptr;
+}
+
+bool UHeavyImpactResponseComponent::IsCurrentRecoveryTransaction(
+	const uint32 ExpectedTransactionSerial) const
+{
+	return State == EHeavyImpactState::Recovering
+		&& RecoveryPhase == EHeavyImpactRecoveryPhase::PlayingMontage
+		&& RecoveryTransactionSerial == ExpectedTransactionSerial;
+}
+
 void UHeavyImpactResponseComponent::CancelUncommittedPreparation(const TCHAR* Reason)
 {
 	check(State == EHeavyImpactState::Prepared);
@@ -1043,12 +1893,13 @@ void UHeavyImpactResponseComponent::CancelUncommittedPreparation(const TCHAR* Re
 }
 
 /** 恢复每个刚体的碰撞、CCD、Hit 通知、Blend 和模拟状态。 */
-void UHeavyImpactResponseComponent::RestoreBodySnapshot()
+void UHeavyImpactResponseComponent::RestoreBodyBaseline(
+	const FHeavyImpactRecoveryBaseline& Baseline)
 {
-	Mesh->BodyInstance.SetInstanceNotifyRBCollision(Snapshot.bMeshBodyInstanceNotify);
-	Mesh->BodyInstance.SetUseCCD(Snapshot.bMeshBodyInstanceCCD);
+	Mesh->BodyInstance.SetInstanceNotifyRBCollision(Baseline.bMeshBodyInstanceNotify);
+	Mesh->BodyInstance.SetUseCCD(Baseline.bMeshBodyInstanceCCD);
 
-	for (const FHeavyImpactBodySnapshot& BodySnapshot : Snapshot.Bodies)
+	for (const FHeavyImpactBodySnapshot& BodySnapshot : Baseline.Bodies)
 	{
 		FBodyInstance* Body = Mesh->GetBodyInstance(BodySnapshot.BoneName);
 		if (!Body)
@@ -1065,16 +1916,64 @@ void UHeavyImpactResponseComponent::RestoreBodySnapshot()
 		Body->SetCollisionEnabled(BodySnapshot.CollisionEnabled, true);
 		Body->SetUseCCD(BodySnapshot.bUseCCD);
 		Body->SetInstanceNotifyRBCollision(BodySnapshot.bNotifyRigidBodyCollision);
+		Body->SetInstanceSimulatePhysics(BodySnapshot.bWasSimulating, true, true);
 		Body->PhysicsBlendWeight = BodySnapshot.PhysicsBlendWeight;
-		Body->SetInstanceSimulatePhysics(BodySnapshot.bWasSimulating, false, false);
 	}
 }
 
 /** 完整撤销未提交的物理准备，并恢复受击前 Actor Transform。 */
+bool UHeavyImpactResponseComponent::RestoreCharacterShell(
+	const FHeavyImpactRecoveryBaseline& Baseline)
+{
+	USceneComponent* AttachParent = Baseline.MeshAttachParent.Get();
+	bool bAttached = false;
+	if (IsValid(AttachParent))
+	{
+		bAttached = Mesh->AttachToComponent(
+			AttachParent,
+			FAttachmentTransformRules::KeepWorldTransform,
+			Baseline.MeshAttachSocket);
+		if (bAttached)
+		{
+			Mesh->SetRelativeTransform(
+				Baseline.MeshRelativeTransform,
+				false,
+				nullptr,
+				ETeleportType::TeleportPhysics);
+		}
+		else
+		{
+			UE_LOG(
+				LogHeavyImpact,
+				Error,
+				TEXT("HeavyImpact failed to reattach Mesh on %s."),
+				*GetNameSafe(GetOwner()));
+		}
+	}
+	else
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Error,
+			TEXT("HeavyImpact could not restore missing Mesh attach parent on %s."),
+			*GetNameSafe(GetOwner()));
+	}
+
+	Mesh->SetCollisionObjectType(Baseline.MeshObjectType);
+	Mesh->SetCollisionEnabled(Baseline.MeshCollisionEnabled);
+	Mesh->SetCollisionResponseToChannels(Baseline.MeshResponses);
+	Mesh->bPauseAnims = Baseline.bMeshPauseAnims;
+	Capsule->SetCollisionEnabled(Baseline.CapsuleCollisionEnabled);
+	Capsule->SetCollisionResponseToChannels(Baseline.CapsuleResponses);
+	return bAttached;
+}
+
 void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 {
-	if (!Snapshot.bValid)
+	if (!FalsePositiveRollback.bValid || !RecoveryBaseline.bValid)
 	{
+		FalsePositiveRollback.Reset();
+		RecoveryBaseline.Reset();
 		ActiveRequest = FHeavyImpactPreparationRequest();
 		ExpectedSourceActor = nullptr;
 		ExpectedSourceComponent = nullptr;
@@ -1088,47 +1987,26 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 
 	InvokeRequiredProfile(Demo::HeavyImpact::ProfileInactive);
 	Mesh->SetAllBodiesSimulatePhysics(false);
-	RestoreBodySnapshot();
-
-	USceneComponent* AttachParent = Snapshot.MeshAttachParent.Get();
-	if (IsValid(AttachParent))
-	{
-		Mesh->AttachToComponent(
-			AttachParent,
-			FAttachmentTransformRules::KeepWorldTransform,
-			Snapshot.MeshAttachSocket);
-		Mesh->SetRelativeTransform(Snapshot.MeshRelativeTransform);
-	}
-	else
-	{
-		UE_LOG(
-			LogHeavyImpact,
-			Error,
-			TEXT("HeavyImpact could not restore missing Mesh attach parent on %s."),
-			*GetNameSafe(GetOwner()));
-	}
-
-	Mesh->SetCollisionObjectType(Snapshot.MeshObjectType);
-	Mesh->SetCollisionEnabled(Snapshot.MeshCollisionEnabled);
-	Mesh->SetCollisionResponseToChannels(Snapshot.MeshResponses);
-	Mesh->bPauseAnims = Snapshot.bMeshPauseAnims;
-	Capsule->SetCollisionEnabled(Snapshot.CapsuleCollisionEnabled);
-	Capsule->SetCollisionResponseToChannels(Snapshot.CapsuleResponses);
+	RestoreBodyBaseline(RecoveryBaseline);
+	RestoreCharacterShell(RecoveryBaseline);
 
 	Character->SetActorTransform(
-		Snapshot.ActorTransform,
+		FalsePositiveRollback.ActorTransform,
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
-	Movement->SetMovementMode(Snapshot.MovementMode, Snapshot.CustomMovementMode);
-	Movement->Velocity = Snapshot.CharacterVelocity;
+	Movement->SetMovementMode(
+		FalsePositiveRollback.MovementMode,
+		FalsePositiveRollback.CustomMovementMode);
+	Movement->Velocity = FalsePositiveRollback.CharacterVelocity;
 
 	PhysicsControl->SetComponentTickEnabled(false);
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
 	ActivePreparationTimeoutSeconds = 0.0f;
-	Snapshot.Reset();
+	FalsePositiveRollback.Reset();
+	RecoveryBaseline.Reset();
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
 	SetComponentTickEnabled(false);

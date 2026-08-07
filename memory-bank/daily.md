@@ -125,3 +125,15 @@
 - 官方 UE5.8 MCP 未暴露，本地 UE Editor MCP `pong=false`，因此蓝图审计未执行，没有猜测资产、关卡、DataAsset 或引用状态。
 - 明日 P0：统一完成制导机关/冲锤玩家与追猎者运行验收、HeavyImpact A/B、相机对照和墙边/连续碰撞；随后验证动画兼容并实现真实倒地点起身。
 - 可玩方向：把相邻三间机关房收束为一段物理压力走廊，先串联现有状态，不继续增加孤立机关原型。
+
+<!-- written by shiqiqiwang at 2026-08-07 04:45 UTC -->
+
+
+## 2026-08-07 — HeavyImpact 起身恢复桥实现与最终非破坏验证
+
+- 完成 HeavyImpact 起身恢复桥 C++ 与恢复调参，并以官方 UE5.8 MCP 装配玩家项目 AnimBP、玩家 AnimClass、追猎者 AnimBP 和两份 DataAsset；没有修改 Level0 或机关资产。
+- Demo 模块完整链接构建成功；`Demo.Physics.HeavyImpact.*` 5/5 全部成功，无 warning/error。
+- PIE 实际对象回读确认玩家/追猎者 AnimInstance 为各自项目 AnimBP 类，父类均为 `HeavyImpactAnimInstance`；本轮未出现指定 validation、PCA、AnimInstance、Skeleton、Slot 或 Montage 错误，结束后 PIE=false、五项资产均非脏。
+- UE5.8 源码结论纠正了早先的骨架阻塞判断：无需重定向玩家 AnimBP；运行时 Skeleton 来自玩家 Mesh，动态 Montage 来自序列，两者同为 CH_SciFiTrooper 骨架。
+- 覆盖边界：自动场景与两次临时定点未形成摆锤 Chaos 接触，出现过 `Expected source did not make contact` / `Prediction arrived too late`，因此未获得真实 `committed → Downed → recovery completed` 或起身画面证据，待用户验收。
+- 首次 EditorExit 曾在 UnrealEd/Slate 发生一次 AV，第二次正常退出；当前不把该单次退出问题归因于起身代码。

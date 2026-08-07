@@ -8,7 +8,9 @@
 
 #include "Data/Physics/HeavyImpactTuningData.h"
 
+#include "Animation/AnimSequenceBase.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Physics/HeavyImpactTypes.h"
 #include "PhysicsControlAsset.h"
 
@@ -79,7 +81,16 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(GroundProbeDistance)
 		&& FMath::IsFinite(CapsuleFollowInterpSpeed)
 		&& FMath::IsFinite(FreeFallbackAfterSeconds)
-		&& FMath::IsFinite(ForceDownedAfterSeconds);
+		&& FMath::IsFinite(ForceDownedAfterSeconds)
+		&& FMath::IsFinite(RecoveryDelaySeconds)
+		&& FMath::IsFinite(RecoveryRetrySeconds)
+		&& FMath::IsFinite(MaxRecoveryHorizontalAdjustmentCm)
+		&& FMath::IsFinite(RecoverySearchStepCm)
+		&& FMath::IsFinite(RecoveryMontageBlendInSeconds)
+		&& FMath::IsFinite(RecoveryMontageBlendOutSeconds)
+		&& FMath::IsFinite(RecoveryPlayRate)
+		&& FMath::IsFinite(FaceUpYawOffsetDegrees)
+		&& FMath::IsFinite(FaceDownYawOffsetDegrees);
 	if (!bThresholdsFinite)
 	{
 		return Reject(TEXT("HeavyImpact numeric thresholds must all be finite."));
@@ -95,7 +106,21 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| GroundProbeDistance <= 0.0f
 		|| CapsuleFollowInterpSpeed <= 0.0f
 		|| FreeFallbackAfterSeconds <= 0.0f
-		|| ForceDownedAfterSeconds <= FreeFallbackAfterSeconds)
+		|| ForceDownedAfterSeconds <= FreeFallbackAfterSeconds
+		|| RecoveryDelaySeconds < 0.0f
+		|| RecoveryRetrySeconds < 0.1f
+		|| MaxRecoveryHorizontalAdjustmentCm < 0.0f
+		|| MaxRecoveryHorizontalAdjustmentCm > 60.0f
+		|| RecoverySearchStepCm < 5.0f
+		|| RecoverySearchStepCm > 60.0f
+		|| (MaxRecoveryHorizontalAdjustmentCm > 0.0f
+			&& RecoverySearchStepCm > MaxRecoveryHorizontalAdjustmentCm)
+		|| RecoveryMontageBlendInSeconds < 0.0f
+		|| RecoveryMontageBlendInSeconds > 0.5f
+		|| RecoveryMontageBlendOutSeconds < 0.0f
+		|| RecoveryMontageBlendOutSeconds > 1.0f
+		|| RecoveryPlayRate < 0.1f
+		|| RecoveryPlayRate > 2.0f)
 	{
 		return Reject(TEXT("HeavyImpact thresholds are outside their safe runtime ranges."));
 	}
@@ -110,6 +135,53 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		return Reject(TEXT("HeavyImpact Mesh is missing."));
 	}
 
+	const USkeletalMesh* RuntimeSkeletalMesh = Mesh->GetSkeletalMeshAsset();
+	if (!IsValid(RuntimeSkeletalMesh) || !IsValid(RuntimeSkeletalMesh->GetSkeleton()))
+	{
+		return Reject(TEXT("HeavyImpact Mesh has no valid SkeletalMesh or Skeleton."));
+	}
+
+	const auto ValidateRecoveryAnimation = [RuntimeSkeletalMesh, &OutError](
+		const TCHAR* Label,
+		const UAnimSequenceBase* Animation) -> bool
+	{
+		if (!IsValid(Animation))
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "MissingRecoveryAnimation", "Missing HeavyImpact recovery animation: {0}"),
+				FText::FromString(Label));
+			return false;
+		}
+		if (Animation->GetSkeleton() != RuntimeSkeletalMesh->GetSkeleton())
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "RecoverySkeletonMismatch", "HeavyImpact recovery animation {0} does not use the runtime Mesh Skeleton."),
+				FText::FromString(Label));
+			return false;
+		}
+		if (Animation->HasRootMotion())
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "RecoveryRootMotionForbidden", "HeavyImpact recovery animation {0} must have Root Motion disabled."),
+				FText::FromString(Label));
+			return false;
+		}
+		if (!FMath::IsFinite(Animation->RateScale) || Animation->RateScale <= 0.0f)
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "RecoveryRateScaleInvalid", "HeavyImpact recovery animation {0} has an invalid RateScale."),
+				FText::FromString(Label));
+			return false;
+		}
+		return true;
+	};
+
+	if (!ValidateRecoveryAnimation(TEXT("FaceUp"), GetUpFaceUpAnimation)
+		|| !ValidateRecoveryAnimation(TEXT("FaceDown"), GetUpFaceDownAnimation))
+	{
+		return false;
+	}
+
 	if (!IsValid(PhysicsControlAsset))
 	{
 		return Reject(TEXT("HeavyImpact PhysicsControlAsset is missing."));
@@ -121,6 +193,18 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 			NSLOCTEXT("HeavyImpact", "MissingPelvis", "Missing pelvis bone: {0}"),
 			FText::FromName(PelvisBone));
 		return false;
+	}
+
+	const FName RecoveryBones[] = { HeadBone, LeftShoulderBone, RightShoulderBone };
+	for (const FName BoneName : RecoveryBones)
+	{
+		if (BoneName.IsNone() || Mesh->GetBoneIndex(BoneName) == INDEX_NONE)
+		{
+			OutError = FText::Format(
+				NSLOCTEXT("HeavyImpact", "MissingRecoveryBone", "Missing HeavyImpact recovery bone: {0}"),
+				FText::FromName(BoneName));
+			return false;
+		}
 	}
 
 	const TArray<FName> RequiredProfiles = {

@@ -12,6 +12,7 @@
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "Engine/TimerHandle.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Physics/HeavyImpactTypes.h"
 
@@ -19,14 +20,18 @@
 
 class AActor;
 class ACharacter;
+class UAnimMontage;
+class UAnimSequenceBase;
 class UCharacterMovementComponent;
 class UCapsuleComponent;
+class UHeavyImpactAnimInstance;
 class UHeavyImpactTuningData;
 class UPhysicsControlComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 class USkeletalMeshComponent;
 struct FHeavyImpactControlStageTuning;
+struct FPoseSnapshot;
 
 /** 通知角色适配层物理状态发生变化。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(
@@ -51,7 +56,7 @@ struct FHeavyImpactBodySnapshot
 };
 
 /** 仅供“预测到了但没有命中”事务恢复的角色快照。 */
-struct FHeavyImpactPreContactSnapshot
+struct FHeavyImpactFalsePositiveRollback
 {
 	bool bValid = false;
 	FTransform ActorTransform = FTransform::Identity;
@@ -59,6 +64,16 @@ struct FHeavyImpactPreContactSnapshot
 	TEnumAsByte<EMovementMode> MovementMode = MOVE_None;
 	uint8 CustomMovementMode = 0;
 
+	void Reset()
+	{
+		*this = FHeavyImpactFalsePositiveRollback();
+	}
+};
+
+/** Character shell/body configuration retained until a committed impact has recovered. */
+struct FHeavyImpactRecoveryBaseline
+{
+	bool bValid = false;
 	TWeakObjectPtr<USceneComponent> MeshAttachParent;
 	FName MeshAttachSocket = NAME_None;
 	FTransform MeshRelativeTransform = FTransform::Identity;
@@ -77,11 +92,26 @@ struct FHeavyImpactPreContactSnapshot
 	/** 清除全部临时引用和值。 */
 	void Reset()
 	{
-		*this = FHeavyImpactPreContactSnapshot();
+		*this = FHeavyImpactRecoveryBaseline();
 	}
 };
 
 /** 玩家和追猎者共用的权威重冲击物理响应组件。 */
+enum class EHeavyImpactRecoveryPhase : uint8
+{
+	None,
+	WaitingForSpace,
+	PlayingMontage
+};
+
+struct FHeavyImpactRecoveryPlan
+{
+	bool bFaceUp = true;
+	FVector CapsuleLocation = FVector::ZeroVector;
+	FRotator CapsuleRotation = FRotator::ZeroRotator;
+	TObjectPtr<UAnimSequenceBase> Animation = nullptr;
+};
+
 UCLASS(ClassGroup = (Physics))
 class DEMO_API UHeavyImpactResponseComponent final : public UActorComponent
 {
@@ -150,6 +180,10 @@ private:
 		FVector NormalImpulse,
 		const FHitResult& Hit);
 
+	/** Abort a recovery immediately if the Mesh rebuilds its AnimInstance mid-transaction. */
+	UFUNCTION()
+	void HandleAnimInitialized();
+
 	/** 从已编译 PCA 创建并记录独占 Controls/BodyModifiers。 */
 	bool InitializePhysicsControlAuthority(FText& OutError);
 
@@ -160,7 +194,7 @@ private:
 		float& OutAllowedMaximumSeconds) const;
 
 	/** 捕获 Prepared 误判时必须完整恢复的角色、碰撞和刚体属性。 */
-	bool CapturePreContactSnapshot(FString& OutReason);
+	bool CapturePreContactState(FString& OutReason);
 
 	/** 在同一调用栈停止角色驱动、脱离 Mesh 并启用全身物理。 */
 	bool EnterPrepared(
@@ -206,11 +240,43 @@ private:
 	/** 在 FreeFallback 已经过一次 PrePhysics 后睡眠，并关闭两个物理 Tick。 */
 	void FinishPendingDownedSleep();
 
+	void ScheduleRecoveryAttempt(float DelaySeconds);
+	void TryBeginRecovery(uint32 ExpectedTransactionSerial);
+	bool BuildRecoveryPlan(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
+	bool DetermineRecoveryOrientation(bool& bOutFaceUp, FRotator& OutRotation, FString& OutReason);
+	bool TryFindRecoveryCapsuleLocation(
+		const FRotator& UprightRotation,
+		FVector& OutLocation,
+		FString& OutReason) const;
+	bool TryResolveRecoveryCandidate(
+		const FVector& PelvisAnchor,
+		const FVector2D& HorizontalOffset,
+		const FRotator& UprightRotation,
+		float MaximumAdjustment,
+		FVector& OutLocation) const;
+	bool BeginPhysicalToAnimationHandoff(
+		const FHeavyImpactRecoveryPlan& Plan,
+		FString& OutReason);
+	void StartRecoveryMontage(uint32 ExpectedTransactionSerial);
+	void ReleaseRecoveryPoseSnapshot(uint32 ExpectedTransactionSerial);
+	void ValidateRecoverySlotEvaluation(uint32 ExpectedTransactionSerial);
+	void HandleRecoveryMontageWatchdog(uint32 ExpectedTransactionSerial);
+	void HandleRecoveryMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+	void CompleteRecovery(const TCHAR* Reason, bool bStopActiveMontage = false);
+	void CancelRecoveryAsync(bool bStopActiveMontage);
+	void ClearRecoveryAnimationState(bool bStopActiveMontage);
+	bool IsCurrentRecoveryTransaction(uint32 ExpectedTransactionSerial) const;
+	bool CaptureRelocatedRecoveryPose(
+		const FHeavyImpactRecoveryPlan& Plan,
+		FPoseSnapshot& OutPose,
+		FString& OutReason) const;
+
 	/** 恢复 Prepared 前的全部角色外壳和 Body 属性。 */
 	void RestoreSnapshotAfterFalsePositive();
 
 	/** 恢复每个 Physics Asset Body 的原始属性。 */
-	void RestoreBodySnapshot();
+	void RestoreBodyBaseline(const FHeavyImpactRecoveryBaseline& Baseline);
+	bool RestoreCharacterShell(const FHeavyImpactRecoveryBaseline& Baseline);
 
 	/** 只销毁本组件创建并记录的 Controls/BodyModifiers。 */
 	void DestroyOwnedPhysicsControlRecords();
@@ -260,23 +326,46 @@ private:
 	TObjectPtr<UPrimitiveComponent> ExpectedSourceComponent = nullptr;
 
 	FHeavyImpactPreparationRequest ActiveRequest;
-	FHeavyImpactPreContactSnapshot Snapshot;
+	FHeavyImpactFalsePositiveRollback FalsePositiveRollback;
+	FHeavyImpactRecoveryBaseline RecoveryBaseline;
 	TArray<FName> OwnedControlNames;
 	TArray<FName> OwnedBodyModifierNames;
 	TArray<FGuid> RecentImpactIds;
 	TArray<FGuid> LoggedRejectedImpactIds;
 
+	UPROPERTY(Transient)
+	TObjectPtr<UHeavyImpactAnimInstance> HeavyImpactAnimInstance = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveRecoveryMontage = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimSequenceBase> ActiveRecoverySequence = nullptr;
+
+	FTimerHandle RecoveryRetryTimer;
+	FTimerHandle RecoveryMontageStartTimer;
+	FTimerHandle RecoveryPoseReleaseTimer;
+	FTimerHandle RecoverySlotValidationTimer;
+	FTimerHandle RecoveryMontageWatchdogTimer;
+
 	EHeavyImpactState State = EHeavyImpactState::Inactive;
+	EHeavyImpactRecoveryPhase RecoveryPhase = EHeavyImpactRecoveryPhase::None;
 	float StateElapsedSeconds = 0.0f;
 	float TotalCommittedSeconds = 0.0f;
 	float StableElapsedSeconds = 0.0f;
 	float ActorToPelvisZ = 0.0f;
 	float ActivePreparationTimeoutSeconds = 0.0f;
+	float RecoveryBlockedElapsedSeconds = 0.0f;
+	float BodyFrontCalibrationSign = 1.0f;
 	uint64 PreparedEntryFrame = 0;
+	uint32 RecoveryTransactionSerial = 0;
 	bool bConfigured = false;
 	bool bInitialized = false;
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
 	bool bHardTimeoutReported = false;
 	bool bPureRagdollComparisonActive = false;
+	bool bBodyFrontCalibrationValid = false;
+	bool bRecoveryOrientationWarningLogged = false;
+	bool bRecoveryBlockedWarningLogged = false;
 };

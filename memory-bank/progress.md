@@ -152,3 +152,15 @@
 - [ ] 壁挂式制导机关仍未运行 PIE；冲锤追猎者通行/手感、HeavyImpact A/B、相机视觉、墙边/角落/连续碰撞仍待当前版本玩家验收。
 - [ ] `Recovering` 起身流程尚未实现；先验证两套重定向动画与实际玩家/追猎者 Mesh/AnimBP 的运行兼容。
 - [ ] 物理机关接入正式一局/PCG 前，只选择一个已验收原型，避免同时扩展三个生成合同。
+
+<!-- written by shiqiqiwang at 2026-08-07 04:44 UTC -->
+
+
+## 2026-08-07 HeavyImpact 起身恢复桥（已实现，待画面验收）
+
+- [x] 在现有 HeavyImpact 状态链上加入 `UHeavyImpactAnimInstance`、Pose Snapshot、恢复延迟/落点调整/仰俯面起身 Montage 等恢复桥代码与调参；旧追猎者局部受击路径保留但停用。
+- [x] 通过 UE5.8 官方 MCP 完成玩家项目 AnimBP、玩家 Mesh AnimClass、追猎者 AnimBP 与两份 HeavyImpact DataAsset 装配；相关蓝图编译/保存后均非脏。
+- [x] Demo 模块完整链接构建成功；`Demo.Physics.HeavyImpact.*` 5/5 自动化全部成功且无 warning/error。
+- [x] 短 PIE 回读确认玩家实际 AnimInstance 为 `ABP_Player_Unarmed_HeavyImpact_C`、追猎者为 `ABP_Pursuer_Locomotion_C`，两者父类均为 `HeavyImpactAnimInstance`；未见指定 validation/PCA/AnimInstance/Skeleton/Slot/Montage 错误。
+- [x] 源码核验确认无需玩家 AnimBP Target Skeleton 重定向：运行时 Skeleton 来自 Mesh，动态 Montage 来自序列，玩家 Mesh 与起身序列同为 CH_SciFiTrooper 骨架。
+- [ ] 自动场景及两次临时定点尚未形成摆锤 Chaos 接触，未覆盖真实 `committed → Downed → recovery completed`；倒地、起身动画、落点/朝向和恢复移动仍待用户画面验收，不标记功能完成。

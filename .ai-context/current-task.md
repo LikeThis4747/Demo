@@ -1,11 +1,9 @@
 # Current Task
 
-- 当前任务：把 2026-08-06 的 HeavyImpact、相机稳定、自动冲锤、壁挂式一次性制导机关与起身动画准备，收束为可重复的玩家/追猎者运行验收。
-- 已完成：共享 HeavyImpact 已正式链接并完成玩家/追猎者 PCA、DataAsset、Blueprint 装配；4 项 HeavyImpact 自动化已有通过记录。
-- 已完成：Level0 自动周期冲锤具备等待/预警/伸出/回收循环，并已有普通刚体与玩家/追猎者真实 Chaos 接触证据；玩家手感和追猎者实际通行仍待验收。
-- 已完成：CameraBoom 增加 HeavyImpact 更新依赖并启用位置延迟；构建与 Blueprint 回读通过，40/60/100 cm 玩家对照待验收。
-- 已完成：壁挂式制导机关 C++、Blueprint/DataAsset/材质与低顶 L 形测试走廊已落盘，构建和静态净空通过；尚未运行 PIE。
-- 已完成：玩家/追猎者仰面与俯面起身动画已导入和重定向；`Recovering` 起身逻辑尚未实现，玩家实际 Mesh/AnimBP Skeleton 兼容性须先用 PIE 验证。
-- 当前风险：8 月 6 日既有日志曾出现预测过晚、FreeFallback 与无地面支撑硬超时；必须用当前 DLL 和当前场景区分历史问题与现存问题。
-- 工具状态：2026-08-07 夜间官方 UE5.8 MCP 未暴露，本地 UE Editor MCP `pong=false`，所以蓝图审计未执行。
-- 下一步：先完成制导机关、冲锤、HeavyImpact A/B、相机和落点的联合 PIE；再实现真实倒地点起身；最后只选择一个已验收机关接入正式一局/PCG。
+- 当前任务：HeavyImpact 重冲击的起身恢复桥代码与玩家/追猎者资产装配已落盘，当前阶段是补齐真实 Chaos 命中后的起身画面覆盖并由用户验收；不得写成“功能完成”或“已验收”。
+- 代码与装配：新增/修改范围集中在 `Source/Demo` 的 HeavyImpact 响应组件、`UHeavyImpactAnimInstance`、恢复调参与自动化测试，以及 `/Game/ZeroEscape/Characters`、`/Game/ZeroEscape/Enemies/Animation`、`/Game/ZeroEscape/Physics/HeavyImpact` 下的玩家/AI AnimBP、角色 AnimClass 与两份 DataAsset。
+- 任务卡：`claude/tasks/active/` 下当前“重冲击物理受击/起身恢复桥”任务卡；Memory MCP 现有内容未记录精确文件名，本次不猜测编号。
+- 构建与自动验证：UE5.8 Demo 模块完整链接构建成功；`Demo.Physics.HeavyImpact.*` 5/5 通过，均无 warning/error；玩家与至少一个追猎者的实际 PIE AnimInstance 分别为项目玩家/AI AnimBP 类，且两者父类均回读为 `/Script/Demo.HeavyImpactAnimInstance`。
+- 资产状态：玩家项目 AnimBP、玩家 BP、AI AnimBP 与两份 HeavyImpact DataAsset 已由官方 MCP 编译/保存/回读，最终均 `is_dirty=false`。
+- 覆盖边界：普通短 PIE 未出现指定的 validation/PCA/AnimInstance/Skeleton/Slot/Montage 错误，但自动场景尚未覆盖真实 `committed → Downed → recovery completed`；未做真实起身画面验收。
+- 下一步：由用户在 Level0 以真实 Chaos 命中观察倒地、Pose Snapshot、起身 Montage、落点/朝向与重新恢复移动；只有画面和玩法验收通过后才能关闭任务。

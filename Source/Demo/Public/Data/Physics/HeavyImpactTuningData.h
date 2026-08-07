@@ -14,6 +14,7 @@
 #include "HeavyImpactTuningData.generated.h"
 
 class UPhysicsControlAsset;
+class UAnimSequenceBase;
 class USkeletalMeshComponent;
 
 /** 项目内的重冲击阶段倍率；只改变关节姿态驱动力，不约束骨盆的世界空间位移。 */
@@ -66,6 +67,62 @@ public:
 	/** 用于身体跟随、速度判稳和地面探测的骨盆骨骼。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Skeleton")
 	FName PelvisBone = TEXT("pelvis");
+
+	/** Get-up sequence selected when the calibrated chest normal faces upward. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation")
+	TObjectPtr<UAnimSequenceBase> GetUpFaceUpAnimation = nullptr;
+
+	/** Get-up sequence selected when the calibrated chest normal faces downward. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation")
+	TObjectPtr<UAnimSequenceBase> GetUpFaceDownAnimation = nullptr;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Skeleton")
+	FName HeadBone = TEXT("head");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Skeleton")
+	FName LeftShoulderBone = TEXT("upperarm_l");
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Skeleton")
+	FName RightShoulderBone = TEXT("upperarm_r");
+
+	/** Delay after the physical body has become stably Downed before the first recovery attempt. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
+		meta = (ClampMin = "0.0"))
+	float RecoveryDelaySeconds = 0.5f;
+
+	/** Retry interval while no safe standing capsule can be found. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
+		meta = (ClampMin = "0.1"))
+	float RecoveryRetrySeconds = 0.5f;
+
+	/** Hard-bounded horizontal adjustment from the final physical pelvis position. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Placement",
+		meta = (ClampMin = "0.0", ClampMax = "60.0"))
+	float MaxRecoveryHorizontalAdjustmentCm = 60.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Placement",
+		meta = (ClampMin = "5.0", ClampMax = "60.0"))
+	float RecoverySearchStepCm = 20.0f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation",
+		meta = (ClampMin = "0.0", ClampMax = "0.5"))
+	float RecoveryMontageBlendInSeconds = 0.05f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float RecoveryMontageBlendOutSeconds = 0.30f;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation",
+		meta = (ClampMin = "0.1", ClampMax = "2.0"))
+	float RecoveryPlayRate = 1.0f;
+
+	/** Asset-specific yaw correction applied after the face-up body direction is derived. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation")
+	float FaceUpYawOffsetDegrees = 0.0f;
+
+	/** Asset-specific yaw correction applied after the face-down body direction is derived. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation")
+	float FaceDownYawOffsetDegrees = 0.0f;
 
 	/** 正常帧率下等待指定刚体真实命中的最长秒数；严重低帧率时运行时最多临时扩到 2.5 帧/0.5 秒。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Timing", meta = (ClampMin = "0.03", ClampMax = "0.5"))
