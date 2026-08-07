@@ -84,6 +84,7 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(ForceDownedAfterSeconds)
 		&& FMath::IsFinite(RecoveryDelaySeconds)
 		&& FMath::IsFinite(RecoveryRetrySeconds)
+		&& FMath::IsFinite(MinimumDownedReimpactImpulse)
 		&& FMath::IsFinite(MaxRecoveryHorizontalAdjustmentCm)
 		&& FMath::IsFinite(RecoverySearchStepCm)
 		&& FMath::IsFinite(RecoveryMontageBlendInSeconds)
@@ -109,6 +110,7 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| ForceDownedAfterSeconds <= FreeFallbackAfterSeconds
 		|| RecoveryDelaySeconds < 0.0f
 		|| RecoveryRetrySeconds < 0.1f
+		|| MinimumDownedReimpactImpulse < 1.0f
 		|| MaxRecoveryHorizontalAdjustmentCm < 0.0f
 		|| MaxRecoveryHorizontalAdjustmentCm > 60.0f
 		|| RecoverySearchStepCm < 5.0f

@@ -4,19 +4,17 @@
 
 ## 当前焦点
 
-HeavyImpact 起身恢复桥已完成代码与玩家/追猎者资产装配、完整链接和自动验证；当前只补真实 Chaos 命中后的完整运行证据与用户画面验收，不继续扩展新机关或抽象公共层。
+HeavyImpact 倒地起身恢复桥已具备当前 DLL、自动化和真实恢复日志；下一步只收口玩家/追猎者画面、堵塞边界与追逐恢复，不继续扩展新机关或公共抽象。
 
 ## 已确认
 
-- 共享 HeavyImpact 仍由真实 Chaos 接触决定位移，角色侧不补 `AddImpulse`/`LaunchCharacter`；旧追猎者局部 Physics Control 受击路径完整保留，但运行装配保持停用。
-- 玩家/AI 使用项目 AnimBP，均继承 `UHeavyImpactAnimInstance`，Pose Snapshot 与起身 Montage 桥已装配；Demo 模块完整构建成功，HeavyImpact 自动化 5/5 通过。
-- 不再需要对玩家 AnimBP 做 Target Skeleton 重定向。玩家副本保留源资产的 `SK_Mannequin` TargetSkeleton 是预期状态，不把它误判为 Montage 播放硬门槛。
-- UE5.8 该运行路径中，AnimInstance 运行时 Skeleton 来自当前 SkeletalMesh；动态 Montage 的 Skeleton 来自动画序列。玩家实际 Mesh 与两条玩家起身序列均使用 CH_SciFiTrooper 骨架，因此无需 Skeleton Compatibility 或额外重定向绕过。
-- 短 PIE 已确认玩家与追猎者实际 AnimInstance 分别为对应项目 AnimBP 类，且两者父类均为 `HeavyImpactAnimInstance`；本轮未见 validation/PCA/AnimInstance/Skeleton/Slot/Montage 错误。
-- 玩家 AnimBP、玩家 BP、AI AnimBP 和两份 HeavyImpact DataAsset 最终均非脏。
+- 真实 Chaos 接触仍决定角色位移，角色侧不增加 `AddImpulse`/`LaunchCharacter`；旧追猎者局部受击路径保留但运行停用。
+- 玩家与追猎者项目 AnimBP 均继承 `UHeavyImpactAnimInstance`，当前加载状态 `UpToDate`；现有 HeavyImpact 自动化 5/5 成功。
+- 现有日志已覆盖玩家与追猎者 `committed → Downed → recovery completed`，也记录了少量无可信 Capsule Sweep 起点的恢复阻塞。
+- 当前磁盘 C++ 新增倒地二次接触最小 Chaos 冲量门槛，并调整恢复 Capsule 路径起点；DLL 时间晚于源码。
 
 ## 当前门槛
 
-1. 让玩家或追猎者取得真实 `committed → Downed → recovery completed` 日志和连续画面；现有自动场景及两次临时定点未覆盖摆锤 Chaos 接触。
-2. 用户验收倒地姿势、仰/俯面动画选择、起身落点/朝向、Montage 混合和恢复移动；此前验证不能替代画面验收。
-3. 保留首次 EditorExit 在 UnrealEd/Slate 的单次 AV 与第二次正常退出记录，不把它归因于起身代码；只有复现后再单独诊断。
+1. 玩家 AnimBP、追猎者 AnimBP 与 Level0 当前为编辑器内脏状态；先由用户决定保存或放弃，夜间任务不得代为保存。
+2. 用户验收正躺/趴倒、墙边/墙角、完全堵塞与解除堵塞、倒地二次接触、Montage 混合和控制恢复。
+3. 在有 Recast 的正式追逐环境确认追猎者起身后恢复追逐；Level0 当前 Recast 缺失日志不能替代该验证。

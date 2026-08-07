@@ -95,6 +95,11 @@ public:
 		meta = (ClampMin = "0.1"))
 	float RecoveryRetrySeconds = 0.5f;
 
+	/** Minimum Chaos contact impulse that may interrupt Downed recovery as a genuine second hit. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Interruption",
+		meta = (ClampMin = "1.0"))
+	float MinimumDownedReimpactImpulse = 1000.0f;
+
 	/** Hard-bounded horizontal adjustment from the final physical pelvis position. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Placement",
 		meta = (ClampMin = "0.0", ClampMax = "60.0"))

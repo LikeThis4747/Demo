@@ -682,7 +682,8 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 			&& OtherActor != GetOwner()
 			&& IsValid(OtherComponent)
 			&& OtherComponent->IsAnySimulatingPhysics()
-			&& !NormalImpulse.IsNearlyZero(1.0f))
+			&& NormalImpulse.SizeSquared()
+				>= FMath::Square(Tuning->MinimumDownedReimpactImpulse))
 		{
 			ResumeFromDownedHit(Hit, NormalImpulse);
 		}
@@ -1280,9 +1281,12 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(HeavyImpactRecoveryPath), false, Character);
 	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
 
-	// Establish a geometry-free sweep start without requiring it to have a floor. This lets the
-	// ring search reach a nearby ledge/floor while still refusing to sweep out of penetration.
-	FVector ResolvedPathStart = Character->GetActorLocation();
+	// Lift the path start above the prone pelvis. The grounded Character capsule is flush with
+	// the floor while Downed, so reusing its center can report a false initial overlap.
+	FVector ResolvedPathStart(
+		PelvisAnchor.X,
+		PelvisAnchor.Y,
+		PelvisAnchor.Z + HalfHeight);
 	FRotator ResolvedPathRotation = UprightRotation;
 	if (!World->FindTeleportSpot(Character, ResolvedPathStart, ResolvedPathRotation)
 		|| FVector::VectorPlaneProject(ResolvedPathStart - PelvisAnchor, FVector::UpVector).Size()

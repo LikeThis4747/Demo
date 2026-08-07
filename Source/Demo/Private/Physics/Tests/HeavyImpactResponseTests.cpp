@@ -392,6 +392,8 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->LandingControl.AngularDampingRatioMultiplier, 1.35f);
 		TestEqual(TEXT("Landing Torque 默认倍率必须稳定"),
 			Fixture.Tuning->LandingControl.MaxTorqueMultiplier, 3.5f);
+		TestEqual(TEXT("Downed reimpact threshold must reject residual contacts by default"),
+			Fixture.Tuning->MinimumDownedReimpactImpulse, 1000.0f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error)))
 		{
@@ -505,6 +507,11 @@ namespace ZeroEscape::Physics::Tests
 		TestFalse(TEXT("Recovery search step must stay inside the hard placement bound"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 		Fixture.Tuning->RecoverySearchStepCm = 20.0f;
+
+		Fixture.Tuning->MinimumDownedReimpactImpulse = 0.0f;
+		TestFalse(TEXT("Downed reimpact threshold must remain positive"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->MinimumDownedReimpactImpulse = 1000.0f;
 
 		Fixture.Tuning->RecoveryRetrySeconds =
 			std::numeric_limits<float>::quiet_NaN();
