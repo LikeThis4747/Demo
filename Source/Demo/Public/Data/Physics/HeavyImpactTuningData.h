@@ -121,6 +121,36 @@ public:
 		meta = (ClampMin = "0.1", ClampMax = "2.0"))
 	float RecoveryPlayRate = 1.0f;
 
+	/**
+	 * Time for the fully physical body to approach the sampled get-up pose, in seconds.
+	 * Higher values organize more gently; lower values reduce delay but can expose an abrupt correction.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
+		Category = "Heavy Impact|Recovery|Physical Pose Preparation",
+		meta = (ClampMin = "0.10", ClampMax = "1.00", UIMin = "0.20", UIMax = "0.60", Units = "s"))
+	float RecoveryPosePreparationSeconds = 0.40f;
+
+	/**
+	 * Initial fraction of Landing AngularStrength and MaxTorque during physical pose preparation.
+	 * The response component ramps this value to one while preserving the configured damping ratio.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
+		Category = "Heavy Impact|Recovery|Physical Pose Preparation",
+		meta = (ClampMin = "0.05", ClampMax = "1.00", UIMin = "0.10", UIMax = "0.60"))
+	float RecoveryPoseInitialControlScale = 0.30f;
+
+	/** Face-up Sequence Evaluator and dynamic Montage start time, in seconds. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
+		Category = "Heavy Impact|Recovery|Physical Pose Preparation",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float FaceUpPreparationSampleTimeSeconds = 0.0f;
+
+	/** Face-down Sequence Evaluator and dynamic Montage start time, in seconds. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly,
+		Category = "Heavy Impact|Recovery|Physical Pose Preparation",
+		meta = (ClampMin = "0.0", Units = "s"))
+	float FaceDownPreparationSampleTimeSeconds = 0.0f;
+
 	/** Asset-specific yaw correction applied after the face-up body direction is derived. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation")
 	float FaceUpYawOffsetDegrees = 0.0f;

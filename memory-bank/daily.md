@@ -4,12 +4,12 @@
 
 ## 2026-08-08
 
-- 夜间只读审计复核上一快照后的 4 个白天提交、6 个磁盘改动、109 个 Demo C++/Build 文件和当前 UE 状态；未修改项目代码、资产、配置或规范。
-- HeavyImpact 起身桥已有当前 DLL、5/5 自动化及玩家/追猎者真实 `committed → Downed → recovery completed` 日志；少量恢复仍因无可信 Capsule Sweep 起点阻塞，边界和画面验收未完成。
-- 双 MCP 在线；Level0 打开、PIE Stopped，两份项目 AnimBP 父类正确且 `UpToDate`。
-- 玩家 AnimBP、追猎者 AnimBP 与 Level0 为编辑器内脏状态；夜间未保存，Git 只能覆盖磁盘版本。
-- 明日 P0：先处理三项脏资产的保存/放弃选择，再验收墙边、墙角、堵塞解除、二次接触和追逐恢复。
-- 可玩方向：只选一个已验收冲锤形成“重冲击逃脱窗口”，不新增机关类型。
+- HeavyImpact 新增物理姿势准备：落地减速后全身刚体继续由 Chaos 模拟，AnimBP 提供从当前物理姿势到起身开头的渐变目标，Physics Control 只施加有限 ParentSpace 角向控制。
+- 玩家/AI AnimBP 均由官方 MCP 接入 Snapshot、Sequence Evaluator、Two Way Blend 与显式门；warnings-as-errors 编译保存成功，两份 DataAsset 新参数回读一致。
+- 实施基线 `df833aa896624d5d3a0436b7cc1d59f520f0871b` 已推送核验；最终 Demo 模块 `-Module=Demo -NoEngineChanges` 构建成功，HeavyImpact 自动化 5/5。
+- 短 PIE 只覆盖既有预测过迟和假阳性回滚，没有形成真实 Chaos 命中；物理收拢、Montage 闪切、墙边/墙角和恢复控制仍由用户画面验收。
+- 四条起身动画、玩家 BP、官方 `ABP_Unarmed`、Physics Asset/PCA、Level0、摆锤/冲锤/制导机关、PCG 与旧追猎者局部受击均未修改。
+- 夜间只读审计此前记录的 AnimBP/Level0 编辑器脏状态已经不再适用：本轮明确保存两份目标 AnimBP，Level0 与四个目标资产关闭 Editor 前均确认未脏。
 
 ## 2026-08-07
 

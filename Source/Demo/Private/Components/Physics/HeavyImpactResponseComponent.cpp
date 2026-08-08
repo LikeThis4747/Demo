@@ -2,7 +2,7 @@
 
 /**
  * @file HeavyImpactResponseComponent.cpp
- * 职责：把机关预测和真实 Chaos 接触转换为受控全身物理飞行、环境落地与无 Tick 倒地。
+ * 职责：把机关预测和真实 Chaos 接触转换为受控全身物理飞行、环境落地、姿势整理与安全起身。
  * 边界：所有冲量来自外部刚体接触；本文件不调用 AddImpulse、LaunchCharacter 或受击动画。
  */
 
@@ -50,6 +50,13 @@ namespace HeavyImpactRuntime
 		TEXT("demo.HeavyImpact.PureRagdoll"),
 		0,
 		TEXT("0: staged Physics Control (default). 1: pure ragdoll comparison for the next accepted HeavyImpact."),
+		ECVF_Cheat);
+
+	/** 开发期 A/B：0 保留旧 Snapshot 交接，1 让全物理身体先追随起身开头姿势。 */
+	TAutoConsoleVariable<int32> CVarRecoveryPosePreparation(
+		TEXT("demo.HeavyImpact.RecoveryPosePreparation"),
+		1,
+		TEXT("0: snapshot-only recovery handoff. 1: prepare the physical pose before get-up."),
 		ECVF_Cheat);
 }
 
@@ -154,6 +161,7 @@ void UHeavyImpactResponseComponent::BeginPlay()
 void UHeavyImpactResponseComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	CancelRecoveryAsync(true);
+	bUseRecoveryPosePreparationForTransaction = false;
 	if (State == EHeavyImpactState::Prepared
 		&& FalsePositiveRollback.bValid
 		&& RecoveryBaseline.bValid)
@@ -354,14 +362,7 @@ bool UHeavyImpactResponseComponent::ApplyPhysicalStage(
 		return bDisabled;
 	}
 
-	FPhysicsControlMultiplier Multipliers;
-	Multipliers.AngularStrengthMultiplier = StageTuning.AngularStrengthMultiplier;
-	Multipliers.AngularDampingRatioMultiplier = StageTuning.AngularDampingRatioMultiplier;
-	Multipliers.MaxTorqueMultiplier = StageTuning.MaxTorqueMultiplier;
-	const bool bApplied = PhysicsControl->SetControlMultipliersInSet(
-		TEXT("ParentSpace"),
-		Multipliers,
-		true);
+	const bool bApplied = ApplyParentSpaceControlMultipliers(StageTuning);
 	if (!bApplied)
 	{
 		UE_LOG(
@@ -372,6 +373,29 @@ bool UHeavyImpactResponseComponent::ApplyPhysicalStage(
 			*GetNameSafe(GetOwner()));
 	}
 	return bApplied;
+}
+
+/** 只改变 ParentSpace 角向追随强度；线性驱动继续保持 PCA 校验过的零值。 */
+bool UHeavyImpactResponseComponent::ApplyParentSpaceControlMultipliers(
+	const FHeavyImpactControlStageTuning& StageTuning,
+	const float StrengthAndTorqueScale)
+{
+	if (!IsValid(PhysicsControl) || !FMath::IsFinite(StrengthAndTorqueScale))
+	{
+		return false;
+	}
+
+	const float SafeScale = FMath::Clamp(StrengthAndTorqueScale, 0.0f, 1.0f);
+	FPhysicsControlMultiplier Multipliers;
+	Multipliers.AngularStrengthMultiplier =
+		StageTuning.AngularStrengthMultiplier * SafeScale;
+	Multipliers.AngularDampingRatioMultiplier =
+		StageTuning.AngularDampingRatioMultiplier;
+	Multipliers.MaxTorqueMultiplier = StageTuning.MaxTorqueMultiplier * SafeScale;
+	return PhysicsControl->SetControlMultipliersInSet(
+		TEXT("ParentSpace"),
+		Multipliers,
+		true);
 }
 
 /** 拒绝无法形成真实刚体接触、太早或太迟到达的预测请求。 */
@@ -633,6 +657,9 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 
 	bPureRagdollComparisonActive =
 		HeavyImpactRuntime::CVarPureRagdollComparison.GetValueOnGameThread() == 1;
+	bUseRecoveryPosePreparationForTransaction =
+		!bPureRagdollComparisonActive
+		&& HeavyImpactRuntime::CVarRecoveryPosePreparation.GetValueOnGameThread() != 0;
 	if (bPureRagdollComparisonActive)
 	{
 		UE_LOG(
@@ -660,6 +687,8 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
 	bHardTimeoutReported = false;
+	RecoveryBlockedElapsedSeconds = 0.0f;
+	bRecoveryBlockedWarningLogged = false;
 	PreparedEntryFrame = GFrameCounter;
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
@@ -711,6 +740,18 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 /** 接受 Chaos 已产生的速度，切到 Flight Profile 并广播一次提交事件。 */
 void UHeavyImpactResponseComponent::HandleAnimInitialized()
 {
+	if (IsRecoveryPosePreparationActive())
+	{
+		Mesh->bPauseAnims = true;
+		UE_LOG(
+			LogHeavyImpact,
+			Error,
+			TEXT("HeavyImpact AnimInstance was initialized during physical pose preparation on %s; returning to Downed."),
+			*GetNameSafe(GetOwner()));
+		EnterDowned(TEXT("AnimInstance was initialized during physical pose preparation."));
+		return;
+	}
+
 	if (State != EHeavyImpactState::Recovering)
 	{
 		return;
@@ -772,6 +813,8 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
 {
+	// Freeze the last evaluated preparation target before returning Physics Control to Flight.
+	Mesh->bPauseAnims = true;
 	CancelRecoveryAsync(false);
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
@@ -809,6 +852,28 @@ void UHeavyImpactResponseComponent::TickComponent(
 	if (State == EHeavyImpactState::Downed && bPendingDownedSleep)
 	{
 		FinishPendingDownedSleep();
+		return;
+	}
+
+	if (State == EHeavyImpactState::Downed && IsRecoveryPosePreparationActive())
+	{
+		UpdatePhysicalFollow(DeltaTime, false, true);
+		const FVector LinearVelocity =
+			Mesh->GetPhysicsLinearVelocity(Tuning->PelvisBone);
+		const FVector AngularVelocityDeg =
+			Mesh->GetPhysicsAngularVelocityInDegrees(Tuning->PelvisBone);
+		FHitResult GroundHit;
+		const bool bSlowEnough =
+			LinearVelocity.Size() <= Tuning->StableLinearSpeedCmPerSecond
+			&& AngularVelocityDeg.Size() <= Tuning->StableAngularSpeedDegPerSecond;
+		const bool bSupported = TryGetGroundSupport(GroundHit);
+		StableElapsedSeconds = bSlowEnough && bSupported
+			? StableElapsedSeconds + DeltaTime
+			: 0.0f;
+		UpdateRecoveryPosePreparation(
+			DeltaTime,
+			bSlowEnough,
+			bSupported);
 		return;
 	}
 
@@ -902,30 +967,58 @@ void UHeavyImpactResponseComponent::UpdateStability(float DeltaTime)
 		&& bSlowEnough
 		&& bSupported)
 	{
-		if (ApplyPhysicalStage(
+		if (!ApplyPhysicalStage(
 			Demo::HeavyImpact::ProfileLandingRecovery,
 			Tuning->LandingControl))
 		{
-			SetState(EHeavyImpactState::Settling);
-		}
-		else
-		{
 			EnterFreeFallback(TEXT("LandingRecovery profile failed."));
+			return;
+		}
+
+		SetState(EHeavyImpactState::Settling);
+		if (bUseRecoveryPosePreparationForTransaction)
+		{
+			FHeavyImpactRecoveryPlan Plan;
+			FString FailureReason;
+			if (BuildRecoveryPlan(Plan, FailureReason)
+				&& !BeginRecoveryPosePreparation(Plan, FailureReason))
+			{
+				UE_LOG(
+					LogHeavyImpact,
+					Warning,
+					TEXT("HeavyImpact could not begin physical pose preparation on %s: %s"),
+					*GetNameSafe(GetOwner()),
+					*FailureReason);
+			}
 		}
 	}
 
 	if (bMinimumTimeElapsed && bSlowEnough && bSupported)
 	{
 		StableElapsedSeconds += DeltaTime;
-		if (StableElapsedSeconds >= Tuning->RequiredStableSeconds)
+		if (IsRecoveryPosePreparationActive())
 		{
-			EnterDowned(TEXT("Body remained slow and supported."));
+			UpdateRecoveryPosePreparation(DeltaTime, true, true);
+			if (State != EHeavyImpactState::Settling)
+			{
+				return;
+			}
+		}
+		else if (StableElapsedSeconds >= Tuning->RequiredStableSeconds)
+		{
+			EnterDowned(TEXT("Body remained slow and supported without active pose preparation."));
 			return;
 		}
 	}
 	else
 	{
 		StableElapsedSeconds = 0.0f;
+		if (IsRecoveryPosePreparationActive())
+		{
+			CancelRecoveryPosePreparation(TEXT("Body lost settling stability."));
+			return;
+		}
+
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Settling)
 		{
 			if (ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
@@ -963,6 +1056,208 @@ void UHeavyImpactResponseComponent::UpdateStability(float DeltaTime)
 				*GetNameSafe(GetOwner()));
 		}
 	}
+}
+
+/** 捕获当前 Chaos 姿势，并恢复后台 AnimGraph 作为 ParentSpace 控制的渐进目标。 */
+bool UHeavyImpactResponseComponent::BeginRecoveryPosePreparation(
+	const FHeavyImpactRecoveryPlan& Plan,
+	FString& OutReason)
+{
+	const bool bValidState =
+		State == EHeavyImpactState::Settling || State == EHeavyImpactState::Downed;
+	if (!bValidState
+		|| !bUseRecoveryPosePreparationForTransaction
+		|| bPureRagdollComparisonActive
+		|| !IsValid(Plan.Animation)
+		|| !FMath::IsFinite(Plan.AnimationStartTimeSeconds)
+		|| Plan.AnimationStartTimeSeconds < 0.0f
+		|| Plan.AnimationStartTimeSeconds > Plan.Animation->GetPlayLength())
+	{
+		OutReason = TEXT("Recovery pose preparation prerequisites are invalid.");
+		return false;
+	}
+
+	UHeavyImpactAnimInstance* AnimInstance =
+		Cast<UHeavyImpactAnimInstance>(Mesh->GetAnimInstance());
+	if (!IsValid(AnimInstance))
+	{
+		OutReason = TEXT("Runtime AnimInstance is not UHeavyImpactAnimInstance.");
+		return false;
+	}
+
+	FPoseSnapshot PhysicalPose;
+	Mesh->SnapshotPose(PhysicalPose);
+	if (!AnimInstance->StoreHeavyImpactRecoveryPreparationPose(
+			MoveTemp(PhysicalPose),
+			Plan.Animation,
+			Plan.AnimationStartTimeSeconds))
+	{
+		OutReason = TEXT("AnimInstance rejected the physical preparation pose.");
+		return false;
+	}
+
+	HeavyImpactAnimInstance = AnimInstance;
+	ActiveRecoverySequence = Plan.Animation;
+	ActiveRecoveryAnimationStartTimeSeconds = Plan.AnimationStartTimeSeconds;
+	RecoveryPosePreparationElapsedSeconds = 0.0f;
+	RecoveryPoseFinalTargetFrame = 0;
+	bRecoveryPoseFinalTargetSubmitted = false;
+	RecoveryPhase = EHeavyImpactRecoveryPhase::PreparingPose;
+
+	// The visible body remains 100% physical. AnimGraph evaluation only supplies joint targets.
+	Mesh->bPauseAnims = false;
+	if (!ApplyParentSpaceControlMultipliers(
+		Tuning->LandingControl,
+		Tuning->RecoveryPoseInitialControlScale))
+	{
+		Mesh->bPauseAnims = true;
+		CancelRecoveryAsync(false);
+		OutReason = TEXT("Failed to apply the initial physical pose-preparation control scale.");
+		return false;
+	}
+
+	SetComponentTickEnabled(true);
+	OutReason.Reset();
+	return true;
+}
+
+/** 渐进提交动画目标与关节强度，并在至少一个后续 PrePhysics 后执行最终交接。 */
+void UHeavyImpactResponseComponent::UpdateRecoveryPosePreparation(
+	const float DeltaTime,
+	const bool bSlowEnough,
+	const bool bSupported)
+{
+	if (!IsRecoveryPosePreparationActive())
+	{
+		return;
+	}
+
+	if (!bSlowEnough || !bSupported)
+	{
+		CancelRecoveryPosePreparation(
+			TEXT("Physical body became unstable during recovery pose preparation."));
+		return;
+	}
+
+	if (!IsValid(HeavyImpactAnimInstance)
+		|| Mesh->GetAnimInstance() != HeavyImpactAnimInstance)
+	{
+		Mesh->bPauseAnims = true;
+		EnterDowned(TEXT("AnimInstance changed during recovery pose preparation."));
+		return;
+	}
+
+	RecoveryPosePreparationElapsedSeconds += DeltaTime;
+	const float RawAlpha = FMath::Clamp(
+		RecoveryPosePreparationElapsedSeconds / Tuning->RecoveryPosePreparationSeconds,
+		0.0f,
+		1.0f);
+	const float PoseAlpha = FMath::SmoothStep(0.0f, 1.0f, RawAlpha);
+	const float ControlScale = FMath::Lerp(
+		Tuning->RecoveryPoseInitialControlScale,
+		1.0f,
+		PoseAlpha);
+
+	HeavyImpactAnimInstance->SetHeavyImpactRecoveryPreparationAlpha(PoseAlpha);
+	if (!ApplyParentSpaceControlMultipliers(Tuning->LandingControl, ControlScale))
+	{
+		Mesh->bPauseAnims = true;
+		if (State == EHeavyImpactState::Downed)
+		{
+			EnterDowned(TEXT("Recovery pose-preparation multiplier update failed while Downed."));
+		}
+		else
+		{
+			CancelRecoveryAsync(false);
+			EnterFreeFallback(TEXT("Recovery pose-preparation multiplier update failed."));
+		}
+		return;
+	}
+
+	if (RawAlpha < 1.0f || StableElapsedSeconds < Tuning->RequiredStableSeconds)
+	{
+		return;
+	}
+
+	// This function runs in PostPhysics. A later frame is required before the PrePhysics
+	// Physics Control tick can consume the final target and torque scale.
+	if (!bRecoveryPoseFinalTargetSubmitted)
+	{
+		bRecoveryPoseFinalTargetSubmitted = true;
+		RecoveryPoseFinalTargetFrame = GFrameCounter;
+		return;
+	}
+	if (GFrameCounter <= RecoveryPoseFinalTargetFrame)
+	{
+		return;
+	}
+
+	FHeavyImpactRecoveryPlan FinalPlan;
+	FString FailureReason;
+	if (!BuildRecoveryPlan(FinalPlan, FailureReason)
+		|| FinalPlan.Animation != ActiveRecoverySequence
+		|| !FMath::IsNearlyEqual(
+			FinalPlan.AnimationStartTimeSeconds,
+			ActiveRecoveryAnimationStartTimeSeconds))
+	{
+		Mesh->bPauseAnims = true;
+		FString Reason(TEXT("Recovery plan changed after physical pose preparation."));
+		if (!FailureReason.IsEmpty())
+		{
+			Reason = FString::Printf(
+				TEXT("Recovery plan became blocked after physical pose preparation: %s"),
+				*FailureReason);
+		}
+		EnterDowned(*Reason);
+		return;
+	}
+
+	if (!BeginPhysicalToAnimationHandoff(FinalPlan, FailureReason))
+	{
+		Mesh->bPauseAnims = true;
+		const FString Reason = FString::Printf(
+			TEXT("Prepared physical-to-animation handoff failed: %s"),
+			*FailureReason);
+		EnterDowned(*Reason);
+	}
+}
+
+/** 失稳时冻结当前动画目标，清理准备分支，并重新让环境冲量决定身体结果。 */
+void UHeavyImpactResponseComponent::CancelRecoveryPosePreparation(const TCHAR* Reason)
+{
+	if (!IsRecoveryPosePreparationActive())
+	{
+		return;
+	}
+
+	Mesh->bPauseAnims = true;
+	ClearRecoveryAnimationState(false);
+	RecoveryPhase = EHeavyImpactRecoveryPhase::None;
+	StableElapsedSeconds = 0.0f;
+
+	if (ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
+	{
+		SetState(EHeavyImpactState::Simulating);
+	}
+	else
+	{
+		EnterFreeFallback(TEXT("Flight profile failed after cancelling recovery pose preparation."));
+	}
+
+	UE_LOG(
+		LogHeavyImpact,
+		Verbose,
+		TEXT("HeavyImpact recovery pose preparation cancelled on %s: %s"),
+		*GetNameSafe(GetOwner()),
+		Reason);
+}
+
+/** RecoveryPhase is the internal authority for whether the full-physics preparation path is active. */
+bool UHeavyImpactResponseComponent::IsRecoveryPosePreparationActive() const
+{
+	return RecoveryPhase == EHeavyImpactRecoveryPhase::PreparingPose
+		&& (State == EHeavyImpactState::Settling
+			|| State == EHeavyImpactState::Downed);
 }
 
 /** 从骨盆向下查询世界几何，并复用 CharacterMovement 的可行走法线判断。 */
@@ -1062,6 +1357,8 @@ void UHeavyImpactResponseComponent::EnterFreeFallback(const TCHAR* Reason)
 void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 {
 	UpdatePhysicalFollow(0.0f, true, true);
+	Mesh->bPauseAnims = true;
+	CancelRecoveryAsync(false);
 	if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfileFreeFallback))
 	{
 		EnterFreeFallback(TEXT("FreeFallback profile failed while entering Downed."));
@@ -1087,8 +1384,6 @@ void UHeavyImpactResponseComponent::FinishPendingDownedSleep()
 	bPendingDownedSleep = false;
 	Mesh->PutAllRigidBodiesToSleep();
 	PhysicsControl->SetComponentTickEnabled(false);
-	RecoveryBlockedElapsedSeconds = 0.0f;
-	bRecoveryBlockedWarningLogged = false;
 	ScheduleRecoveryAttempt(Tuning->RecoveryDelaySeconds);
 	SetComponentTickEnabled(false);
 
@@ -1099,7 +1394,7 @@ void UHeavyImpactResponseComponent::FinishPendingDownedSleep()
 		*GetNameSafe(GetOwner()));
 }
 
-/** Prepared 超时的唯一回滚入口。 */
+/** 为当前 Downed 事务安排一次可取消的安全空间重试。 */
 void UHeavyImpactResponseComponent::ScheduleRecoveryAttempt(const float DelaySeconds)
 {
 	UWorld* World = GetWorld();
@@ -1144,10 +1439,49 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 
 	FHeavyImpactRecoveryPlan Plan;
 	FString FailureReason;
-	if (BuildRecoveryPlan(Plan, FailureReason)
-		&& BeginPhysicalToAnimationHandoff(Plan, FailureReason))
+	if (BuildRecoveryPlan(Plan, FailureReason))
 	{
-		return;
+		if (!bUseRecoveryPosePreparationForTransaction)
+		{
+			if (BeginPhysicalToAnimationHandoff(Plan, FailureReason))
+			{
+				return;
+			}
+		}
+		else
+		{
+			PhysicsControl->SetComponentTickEnabled(true);
+			if (!ApplyPhysicalStage(
+				Demo::HeavyImpact::ProfileLandingRecovery,
+				Tuning->LandingControl))
+			{
+				FailureReason = TEXT("LandingRecovery profile failed during a Downed retry.");
+			}
+			else if (BeginRecoveryPosePreparation(Plan, FailureReason))
+			{
+				Mesh->WakeAllRigidBodies();
+				SetComponentTickEnabled(true);
+				return;
+			}
+
+			RecoveryBlockedElapsedSeconds += Tuning->RecoveryRetrySeconds;
+			if (!bRecoveryBlockedWarningLogged
+				&& RecoveryBlockedElapsedSeconds >= HeavyImpactRuntime::RecoveryBlockedWarningSeconds)
+			{
+				bRecoveryBlockedWarningLogged = true;
+				UE_LOG(
+					LogHeavyImpact,
+					Warning,
+					TEXT("HeavyImpact recovery remains blocked on %s: %s"),
+					*GetNameSafe(GetOwner()),
+					*FailureReason);
+			}
+
+			// Re-apply FreeFallback for one PrePhysics update before sleeping again.
+			Mesh->bPauseAnims = true;
+			EnterDowned(*FailureReason);
+			return;
+		}
 	}
 
 	RecoveryBlockedElapsedSeconds += Tuning->RecoveryRetrySeconds;
@@ -1184,13 +1518,19 @@ bool UHeavyImpactResponseComponent::BuildRecoveryPlan(
 	OutPlan.Animation = OutPlan.bFaceUp
 		? Tuning->GetUpFaceUpAnimation
 		: Tuning->GetUpFaceDownAnimation;
+	OutPlan.AnimationStartTimeSeconds = OutPlan.bFaceUp
+		? Tuning->FaceUpPreparationSampleTimeSeconds
+		: Tuning->FaceDownPreparationSampleTimeSeconds;
 	const USkeletalMesh* RuntimeSkeletalMesh = Mesh->GetSkeletalMeshAsset();
 	if (!IsValid(RuntimeSkeletalMesh)
 		|| !IsValid(OutPlan.Animation)
 		|| OutPlan.Animation->GetSkeleton() != RuntimeSkeletalMesh->GetSkeleton()
 		|| OutPlan.Animation->HasRootMotion()
 		|| !FMath::IsFinite(OutPlan.Animation->RateScale)
-		|| OutPlan.Animation->RateScale <= 0.0f)
+		|| OutPlan.Animation->RateScale <= 0.0f
+		|| !FMath::IsFinite(OutPlan.AnimationStartTimeSeconds)
+		|| OutPlan.AnimationStartTimeSeconds < 0.0f
+		|| OutPlan.AnimationStartTimeSeconds > OutPlan.Animation->GetPlayLength())
 	{
 		OutReason = TEXT("Selected recovery sequence is not valid for the runtime Mesh Skeleton.");
 		return false;
@@ -1505,14 +1845,34 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 	const FHeavyImpactRecoveryPlan& Plan,
 	FString& OutReason)
 {
+	const bool bPreparedPhysicalHandoff =
+		RecoveryPhase == EHeavyImpactRecoveryPhase::PreparingPose
+		&& (State == EHeavyImpactState::Settling
+			|| State == EHeavyImpactState::Downed);
+	const bool bLegacySnapshotHandoff =
+		!bUseRecoveryPosePreparationForTransaction
+		&& RecoveryPhase == EHeavyImpactRecoveryPhase::WaitingForSpace
+		&& State == EHeavyImpactState::Downed;
 	USceneComponent* RecoveryAttachParent = RecoveryBaseline.MeshAttachParent.Get();
-	if (State != EHeavyImpactState::Downed
+	if ((!bPreparedPhysicalHandoff && !bLegacySnapshotHandoff)
 		|| !RecoveryBaseline.bValid
 		|| !IsValid(RecoveryAttachParent)
 		|| !RecoveryAttachParent->CanAttachAsChild(Mesh, RecoveryBaseline.MeshAttachSocket)
-		|| !IsValid(Plan.Animation))
+		|| !IsValid(Plan.Animation)
+		|| !FMath::IsFinite(Plan.AnimationStartTimeSeconds)
+		|| Plan.AnimationStartTimeSeconds < 0.0f
+		|| Plan.AnimationStartTimeSeconds > Plan.Animation->GetPlayLength())
 	{
 		OutReason = TEXT("Recovery handoff prerequisites are no longer valid.");
+		return false;
+	}
+	if (bPreparedPhysicalHandoff
+		&& (Plan.Animation != ActiveRecoverySequence
+			|| !FMath::IsNearlyEqual(
+				Plan.AnimationStartTimeSeconds,
+				ActiveRecoveryAnimationStartTimeSeconds)))
+	{
+		OutReason = TEXT("Prepared recovery handoff no longer matches its sampled animation target.");
 		return false;
 	}
 
@@ -1563,6 +1923,7 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 		OutReason = TEXT("AnimInstance rejected the relocated physical pose snapshot.");
 		return false;
 	}
+	HeavyImpactAnimInstance->ClearHeavyImpactRecoveryPreparation();
 
 	PhysicsControl->SetComponentTickEnabled(true);
 	if (!InvokeRequiredProfile(Demo::HeavyImpact::ProfileInactive))
@@ -1609,6 +1970,7 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 	SetState(EHeavyImpactState::Recovering);
 	RecoveryPhase = EHeavyImpactRecoveryPhase::PlayingMontage;
 	ActiveRecoverySequence = Plan.Animation;
+	ActiveRecoveryAnimationStartTimeSeconds = Plan.AnimationStartTimeSeconds;
 
 	// Evaluate the stored-pose branch immediately so attachment cannot expose a reference-pose frame.
 	Mesh->TickAnimation(0.0f, false);
@@ -1655,7 +2017,7 @@ void UHeavyImpactResponseComponent::StartRecoveryMontage(
 		Tuning->RecoveryPlayRate,
 		1,
 		-1.0f,
-		0.0f);
+		ActiveRecoveryAnimationStartTimeSeconds);
 	if (!IsValid(ActiveRecoveryMontage))
 	{
 		UE_LOG(
@@ -1688,8 +2050,12 @@ void UHeavyImpactResponseComponent::StartRecoveryMontage(
 	const float EffectiveRate = FMath::Max(
 		FMath::Abs(ActiveRecoverySequence->RateScale * Tuning->RecoveryPlayRate),
 		UE_KINDA_SMALL_NUMBER);
+	const float RemainingSequenceSeconds = FMath::Max(
+		ActiveRecoverySequence->GetPlayLength()
+			- ActiveRecoveryAnimationStartTimeSeconds,
+		0.0f);
 	const float WatchdogSeconds =
-		ActiveRecoverySequence->GetPlayLength() / EffectiveRate
+		RemainingSequenceSeconds / EffectiveRate
 		+ Tuning->RecoveryMontageBlendInSeconds
 		+ Tuning->RecoveryMontageBlendOutSeconds
 		+ HeavyImpactRuntime::RecoveryWatchdogPaddingSeconds;
@@ -1816,6 +2182,7 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	FalsePositiveRollback.Reset();
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
+	bUseRecoveryPosePreparationForTransaction = false;
 	PhysicsControl->SetComponentTickEnabled(false);
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
@@ -1862,17 +2229,23 @@ void UHeavyImpactResponseComponent::ClearRecoveryAnimationState(
 
 	if (IsValid(HeavyImpactAnimInstance))
 	{
+		HeavyImpactAnimInstance->ClearHeavyImpactRecoveryPreparation();
 		HeavyImpactAnimInstance->ClearHeavyImpactDownedPose();
 	}
 	if (UHeavyImpactAnimInstance* CurrentAnimInstance =
 		Cast<UHeavyImpactAnimInstance>(IsValid(Mesh) ? Mesh->GetAnimInstance() : nullptr);
 		IsValid(CurrentAnimInstance) && CurrentAnimInstance != HeavyImpactAnimInstance)
 	{
+		CurrentAnimInstance->ClearHeavyImpactRecoveryPreparation();
 		CurrentAnimInstance->ClearHeavyImpactDownedPose();
 	}
 
 	ActiveRecoveryMontage = nullptr;
 	ActiveRecoverySequence = nullptr;
+	ActiveRecoveryAnimationStartTimeSeconds = 0.0f;
+	RecoveryPosePreparationElapsedSeconds = 0.0f;
+	RecoveryPoseFinalTargetFrame = 0;
+	bRecoveryPoseFinalTargetSubmitted = false;
 	HeavyImpactAnimInstance = nullptr;
 }
 
@@ -1974,6 +2347,7 @@ bool UHeavyImpactResponseComponent::RestoreCharacterShell(
 
 void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 {
+	CancelRecoveryAsync(false);
 	if (!FalsePositiveRollback.bValid || !RecoveryBaseline.bValid)
 	{
 		FalsePositiveRollback.Reset();
@@ -1984,6 +2358,7 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 		ActivePreparationTimeoutSeconds = 0.0f;
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
+		bUseRecoveryPosePreparationForTransaction = false;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
 		return;
@@ -2013,6 +2388,7 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 	RecoveryBaseline.Reset();
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
+	bUseRecoveryPosePreparationForTransaction = false;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
 }

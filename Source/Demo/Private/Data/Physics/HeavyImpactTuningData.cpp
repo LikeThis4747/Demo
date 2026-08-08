@@ -90,6 +90,10 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(RecoveryMontageBlendInSeconds)
 		&& FMath::IsFinite(RecoveryMontageBlendOutSeconds)
 		&& FMath::IsFinite(RecoveryPlayRate)
+		&& FMath::IsFinite(RecoveryPosePreparationSeconds)
+		&& FMath::IsFinite(RecoveryPoseInitialControlScale)
+		&& FMath::IsFinite(FaceUpPreparationSampleTimeSeconds)
+		&& FMath::IsFinite(FaceDownPreparationSampleTimeSeconds)
 		&& FMath::IsFinite(FaceUpYawOffsetDegrees)
 		&& FMath::IsFinite(FaceDownYawOffsetDegrees);
 	if (!bThresholdsFinite)
@@ -122,7 +126,13 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| RecoveryMontageBlendOutSeconds < 0.0f
 		|| RecoveryMontageBlendOutSeconds > 1.0f
 		|| RecoveryPlayRate < 0.1f
-		|| RecoveryPlayRate > 2.0f)
+		|| RecoveryPlayRate > 2.0f
+		|| RecoveryPosePreparationSeconds < 0.10f
+		|| RecoveryPosePreparationSeconds > 1.00f
+		|| RecoveryPoseInitialControlScale < 0.05f
+		|| RecoveryPoseInitialControlScale > 1.00f
+		|| FaceUpPreparationSampleTimeSeconds < 0.0f
+		|| FaceDownPreparationSampleTimeSeconds < 0.0f)
 	{
 		return Reject(TEXT("HeavyImpact thresholds are outside their safe runtime ranges."));
 	}
@@ -182,6 +192,12 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| !ValidateRecoveryAnimation(TEXT("FaceDown"), GetUpFaceDownAnimation))
 	{
 		return false;
+	}
+
+	if (FaceUpPreparationSampleTimeSeconds > GetUpFaceUpAnimation->GetPlayLength()
+		|| FaceDownPreparationSampleTimeSeconds > GetUpFaceDownAnimation->GetPlayLength())
+	{
+		return Reject(TEXT("HeavyImpact recovery preparation sample times must stay within their selected animation lengths."));
 	}
 
 	if (!IsValid(PhysicsControlAsset))
