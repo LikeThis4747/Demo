@@ -4,6 +4,10 @@
 
 ## 2026-08-10
 
+- 用户确认当前全部工作区改动保留并授权完整基线 commit/push；基线通过后可在 Level0 测试区手工制作首个 Geometry Collection，C++/Blueprint 运行逻辑仍需另行授权。
+- 磁力投掷物 P0 方案成文：只有正式 `ThrowHeldObject()` 后的第一次 Blocking Hit 才破碎；拉取、持有、普通放下和命中前重新抓取均不破碎，所有碎片经 Remove On Break 清空。
+- 官方 UE MCP 回读 `BP_MagneticProp` 为 20 kg 模拟物理静态网格刚体，使用第三方 `SM_crate4`；Blueprint 与源网格均非 Dirty。UE5.8 引擎接口确认初始速度、显式解簇和 Remove On Break 路径可用。
+- 新增 `DOC/DailyPlan/2026-08-10-磁力投掷物碰撞破碎实施计划.md` 和对应任务卡；本轮未修改 C++/UE 资产、未构建、未运行 PIE，功能实施仍待用户明确授权和完整 Git 基线门禁。
 - 壁挂式物理制导一次性机关完成稳定性重构：固定主 Thruster 前进、惯量感知真实转矩追踪、目标速度油门、完整出生胶囊净空和第一次阻挡接触立即停推；未抽取 HeavyImpact 公共层。
 - 默认机关 DataAsset 更新为质量 60 kg、目标速度 650 cm/s、最大受控加速度 900 cm/s²、受控时长 1.4 s；Launcher/Projectile Blueprint 以警告视为错误编译保存并逐字段回读，最终资产均非 Dirty。
 - Demo 模块无链接编译和最终完整链接成功；最终只链接 `UnrealEditor-Demo.lib/.dll`，没有编译 UE5.8 引擎。按用户要求未运行 PIE、未保存 Level0，画面、命中率、首碰停推与反弹仍待用户验收。
