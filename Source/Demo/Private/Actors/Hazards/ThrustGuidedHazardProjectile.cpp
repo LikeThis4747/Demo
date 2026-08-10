@@ -237,6 +237,7 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	}
 
 	Phase = EThrustGuidedHazardProjectilePhase::Ballistic;
+	SetLifeSpan(RuntimeTuningData->ProjectileLifetimeSeconds);
 	ProjectileBody->AddImpulse(
 		PendingLaunchVelocity * ActualMass,
 		NAME_None,
@@ -252,11 +253,12 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	UE_LOG(
 		LogThrustGuidedHazardProjectile,
 		Display,
-		TEXT("Projectile %s started LaunchId=%s Data=%s Mass=%.2f LaunchVelocity=%s HeavyImpact=%s Location=%s."),
+		TEXT("Projectile %s started LaunchId=%s Data=%s Mass=%.2f Lifetime=%.2f LaunchVelocity=%s HeavyImpact=%s Location=%s."),
 		*GetNameSafe(this),
 		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		*GetPathNameSafe(RuntimeTuningData),
 		ActualMass,
+		RuntimeTuningData->ProjectileLifetimeSeconds,
 		*PendingLaunchVelocity.ToCompactString(),
 		RuntimeTuningData->bEnableHeavyImpactPreparation ? TEXT("true") : TEXT("false"),
 		*ProjectileBody->GetComponentLocation().ToCompactString());

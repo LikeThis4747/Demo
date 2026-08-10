@@ -2,24 +2,25 @@
 
 ## 当前焦点
 
-- 壁挂式预判抛射 Chaos 机关已完成代码、资产、Level0 和触发缺陷修复；等待用户继续画面与玩法验收。
-- 磁力投掷物 P0 Geometry Collection 与轻受击方案为并行独立任务，当前不与机关 Source/Content 交叉写入。
+- 壁挂式预判抛射 Chaos 机关当前基础版本已获用户验收。
+- 当前权威参数：900 cm / 18 deg / 50 kg / 8 s，实际设计初速约 1225 cm/s。
+- 先提交验收版，再审计旧代码和文档权威入口；任何清理需先展示预览并获得用户许可。
 
-## 机关当前合同
+## 当前实现合同
 
-- 首个 ACharacter 进入 Trigger 后预警 0.55 秒；预警期 Timer 预测移动交点并机械转炮管，发射后只保留一次 Chaos 初速度。
-- Muzzle 是出口平面，ProjectileSpawnPoint 是真实质心；发射后无 Thruster、ProjectileMovement、Tick、目标引用或纠偏。
-- Level0 两个旧实例曾保留 `Muzzle -> SceneRoot` 并在 BeginPlay 自禁用；现已正式保存为 `AimPivot -> Muzzle -> ProjectileSpawnPoint`。
-- C++ 会安全恢复其他旧关卡实例的同类父级覆盖，并在恢复失败时输出旧/新父级后禁用。
+- 发射前预测与机械转向；发射后只施加一次 Chaos 质心冲量，无推进、持续制导或 Tick。
+- 弹体进入 Ballistic 后启动 8 秒 Actor LifeSpan。
+- Level0 两实例层级正确，C++ 保留旧实例父级自愈。
+- HeavyImpact Preparation 与 ExhaustVisualRoot/ExhaustLight 是后续受击和表现接缝，不视为旧推进残留。
 
-## 当前验证边界
+## 当前验证
 
-- UHT、Demo -NoLink、Demo-only 正式链接、Blueprint/DataAsset/Level0 回读均通过。
-- 定点 PIE 已覆盖两个实例 `Armed -> BeginOverlap -> Warning -> Fire`，原“完全不触发”错误已关闭。
-- 尚未由用户验收弹体可读性、移动命中、躲避、反弹与薄墙穿透；CCD 仍不能写成绝不穿透。
+- Demo -NoLink、Demo-only 正式链接、官方 DataAsset 回读通过。
+- 最小 PIE 覆盖实际 1224.97 cm/s、50 kg、8 s，并确认 9 秒后弹体 Actor 清除。
+- 用户已验收当前基础机制；模型、细节和轻受击接入另行处理。
 
 ## 下一步
 
-1. 收口本轮完整 Git commit/push 与远端核验。
-2. 用户重新进行 Level0 画面和玩法测试。
-3. 只依据运行画面决定后续速度、预警、尾迹、质量或碰撞调整。
+1. 完整 commit/push 当前验收版并恢复干净工作区。
+2. 完成 Level0 只读残留核对。
+3. 展示精确清理预览，等待用户授权后再写入。

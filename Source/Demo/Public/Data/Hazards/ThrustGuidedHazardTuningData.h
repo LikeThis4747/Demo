@@ -39,7 +39,7 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹道",
 		meta = (ClampMin = "300.0", ClampMax = "3000.0", UIMin = "400.0", UIMax = "1500.0", Units = "cm"))
-	float ReferenceRange = 600.0f;
+	float ReferenceRange = 900.0f;
 
 	/** 同高参考条件下用于推导初速的低抛角，单位 deg；每一发的实际仰角由目标几何决定。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹道",
@@ -99,7 +99,12 @@ public:
 	/** Chaos 刚体质量，单位 kg；只影响动量、接触和反弹，不参与弹道轨迹公式。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹体",
 		meta = (ClampMin = "1.0", ClampMax = "500.0", UIMin = "10.0", UIMax = "100.0", Units = "kg"))
-	float ProjectileMassKilograms = 25.0f;
+	float ProjectileMassKilograms = 50.0f;
+
+	/** 从弹体正式进入飞行状态起计算的最长存活时间，单位 s；到期由 Actor LifeSpan 自动清除。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹体",
+		meta = (ClampMin = "1.0", ClampMax = "30.0", UIMin = "3.0", UIMax = "15.0", Units = "s"))
+	float ProjectileLifetimeSeconds = 8.0f;
 
 	/** 离膛到首次有效阻挡接触之间的角阻尼。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹体",

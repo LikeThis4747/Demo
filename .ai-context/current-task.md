@@ -2,23 +2,23 @@
 
 ## 当前任务
 
-壁挂式一次性机关已重构为“发射前预测移动交点 → 炮管机械转向 → 一次质心冲量 → 全程 Chaos”。用户首次 PIE 发现两个机关完全不触发；运行日志确认 Level0 两个旧摆放实例仍保存重构前的 `Muzzle -> SceneRoot`，在 BeginPlay 组件层级校验处自禁用。
+壁挂式预判抛射 Chaos 机关的当前基础机制版本已获用户验收。当前权威参数为 `ReferenceRange=900 cm`、`PreferredLaunchAngle=18 deg`、`ProjectileMassKilograms=50 kg`、`ProjectileLifetimeSeconds=8 s`，实际初速约 `1224.97 cm/s`。
 
-## 已完成修复
+## 验收证据
 
-- UE5.8 官方 MCP 已把 Level0 两个实例正式保存为 `AimPivot -> Muzzle -> ProjectileSpawnPoint`，重启 Editor 后逐实例回读仍正确。
-- Launcher C++ 增加旧关卡实例自愈：父级不符时按顺序以 KeepRelativeTransform 恢复层级，严格复核；失败才禁用并输出具体父级。
-- 修复通过 Demo `-NoLink` 与 `DemoEditor Win64 Development` 正式链接，只构建 Demo 项目模块，未编译引擎。
-- 非破坏定点 PIE 中两个实例均成功 `armed`；运行时玩家从 Trigger 外移入后，两个实例均完成 `BeginOverlap -> 锁定角色 -> 0.55s Warning -> fired`，无 disabled/failed 日志。
-- PIE 已正常停止；Level0、两个机关 Blueprint 和默认 DataAsset 均为非 Dirty。
+- Demo `-NoLink` 与 `DemoEditor Win64 Development` 正式链接成功，只构建 Demo 模块。
+- 官方 MCP 回读默认 DataAsset 为 900 / 18 / 50 / 8，非 Dirty。
+- 最小 PIE 记录实际初速 1224.97 cm/s、50 kg、8 s；发射后存在，9 秒后 Actor 已清除，PIE 已停止。
+- 用户确认当前基础机关先验收通过；模型更换、表现细节和轻受击接入属于后续独立增量。
 
-## 当前边界
+## 当前门禁
 
-- 触发链缺陷已覆盖，但用户尚未验收画面可读性、移动目标命中率、急停/横移躲避、连续 Chaos 反弹和薄墙穿透；不得写成功能或玩法已验收。
-- 磁力碎裂与轻受击是并行独立任务；本机关不修改其 Source/Content。轻受击线程当前仅修改两份 Markdown，提交前需由其 Owner 确认稳定归属。
+1. 先把当前验收版完整 commit/push，核对内部工蜂远端与 clean status。
+2. 在新干净基线后，只读完成 Level0 和旧实现残留审计。
+3. 向用户展示精确清理预览；未经再次明确授权，不落盘技术债清理。
 
-## 下一步
+## 清理边界
 
-1. 更新实施报告、任务与项目记忆。
-2. 与轻受击文档 Owner 收口当前完整工作区，完成一次 commit/push、远端核验和 clean status。
-3. 由用户重新运行 Level0，继续画面与玩法验收。
+- 不把模型更换或轻受击接入混进本次清理。
+- HeavyImpact Preparation 与 Exhaust 表现挂点属于后续接口，不按旧推进残留删除。
+- 旧讨论文档可保留，但必须标明当前 2026-08-10 预判抛射 Chaos 方案与 Source/DataAsset 为权威。

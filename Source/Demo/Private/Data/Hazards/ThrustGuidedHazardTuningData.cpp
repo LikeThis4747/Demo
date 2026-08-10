@@ -36,6 +36,7 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 		|| !FMath::IsFinite(ProjectileRadius)
 		|| !FMath::IsFinite(ProjectileHalfHeight)
 		|| !FMath::IsFinite(ProjectileMassKilograms)
+		|| !FMath::IsFinite(ProjectileLifetimeSeconds)
 		|| !FMath::IsFinite(BallisticAngularDamping)
 		|| !FMath::IsFinite(PostImpactLinearDamping)
 		|| !FMath::IsFinite(PostImpactAngularDamping))
@@ -125,6 +126,11 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 	if (ProjectileMassKilograms < 1.0f || ProjectileMassKilograms > 500.0f)
 	{
 		return Reject(TEXT("ProjectileMassKilograms 必须位于 1~500 kg。"));
+	}
+
+	if (ProjectileLifetimeSeconds < 1.0f || ProjectileLifetimeSeconds > 30.0f)
+	{
+		return Reject(TEXT("ProjectileLifetimeSeconds 必须位于 1~30 s。"));
 	}
 
 	if (BallisticAngularDamping < 0.0f || BallisticAngularDamping > 10.0f
