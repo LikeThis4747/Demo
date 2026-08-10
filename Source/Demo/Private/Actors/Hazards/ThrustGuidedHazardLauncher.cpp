@@ -9,15 +9,72 @@
 #include "Actors/Hazards/ThrustGuidedHazardLauncher.h"
 
 #include "Actors/Hazards/ThrustGuidedHazardProjectile.h"
+#include "CollisionQueryParams.h"
+#include "CollisionShape.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Data/Hazards/ThrustGuidedHazardTuningData.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogThrustGuidedHazardLauncher, Log, All);
+
+namespace ThrustGuidedHazardLauncher
+{
+	/** 把任意期望方向限制在 Forward 周围的圆锥内；反向退化时保持 Forward。 */
+	FVector ClampDirectionToCone(
+		const FVector& Forward,
+		const FVector& Desired,
+		const float MaximumAngleRadians)
+	{
+		const FVector NormalizedForward = Forward.GetSafeNormal();
+		const FVector NormalizedDesired = Desired.GetSafeNormal();
+		if (NormalizedForward.IsNearlyZero() || NormalizedDesired.IsNearlyZero())
+		{
+			return NormalizedForward;
+		}
+
+		const float Dot = FMath::Clamp(
+			FVector::DotProduct(NormalizedForward, NormalizedDesired),
+			-1.0f,
+			1.0f);
+		const float Angle = FMath::Acos(Dot);
+		if (Angle <= MaximumAngleRadians)
+		{
+			return NormalizedDesired;
+		}
+
+		const FVector Axis =
+			FVector::CrossProduct(NormalizedForward, NormalizedDesired).GetSafeNormal();
+		if (Axis.IsNearlyZero())
+		{
+			return NormalizedForward;
+		}
+
+		return FQuat(Axis, MaximumAngleRadians)
+			.RotateVector(NormalizedForward)
+			.GetSafeNormal();
+	}
+
+	/** 镜像 ProjectileBody 对场景对象类型的阻挡响应，避免纯查询体造成出生假失败。 */
+	bool ProjectileBlocksObjectType(const ECollisionChannel ObjectType)
+	{
+		switch (ObjectType)
+		{
+		case ECC_WorldStatic:
+		case ECC_WorldDynamic:
+		case ECC_PhysicsBody:
+		case ECC_Pawn:
+		case ECC_Visibility:
+			return true;
+		default:
+			return false;
+		}
+	}
+}
 
 /** 装配固定壁挂外壳、独立发射口、独立触发锚点和预警挂点。 */
 AThrustGuidedHazardLauncher::AThrustGuidedHazardLauncher()
@@ -174,7 +231,7 @@ void AThrustGuidedHazardLauncher::EnterWarning(ACharacter& TargetCharacter)
 		false);
 }
 
-/** 用 Muzzle 位置和 +X 生成初始姿态；延迟生成保证 BeginPlay 前注入配置和目标。 */
+/** 先检查完整出生胶囊，再延迟生成；只有 FinishSpawning 成功才消耗一次性机关。 */
 void AThrustGuidedHazardLauncher::FireLockedTarget()
 {
 	if (Phase != EThrustGuidedHazardLauncherPhase::Warning)
@@ -183,8 +240,6 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 	}
 
 	GetWorldTimerManager().ClearTimer(WarningTimerHandle);
-	Phase = EThrustGuidedHazardLauncherPhase::Spent;
-	WarningVisualRoot->SetVisibility(false, true);
 
 	UWorld* World = GetWorld();
 	if (!IsValid(World) || !IsValid(TuningData) || !ProjectileClass)
@@ -194,20 +249,23 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 	}
 
 	USceneComponent* TargetComponent = LockedTargetComponent.Get();
-	const FVector InitialDirection = CalculateInitialLaunchDirection(TargetComponent);
-	if (InitialDirection.IsNearlyZero() || InitialDirection.ContainsNaN())
+	ACharacter* TargetActor = LockedTargetActor.Get();
+	if (!IsValid(TargetComponent)
+		|| !IsValid(TargetActor)
+		|| !TargetComponent->IsRegistered()
+		|| TargetComponent->GetOwner() != TargetActor)
 	{
-		DisableHazard(TEXT("无法得到有限的初始发射方向。"));
+		ReturnToArmedAfterCancelledWarning(TEXT("locked target became invalid"));
 		return;
 	}
 
-	// 弹体胶囊局部 +Z 是推进轴；这里只设置出生姿态，不在生成后改 Transform。
-	const FQuat LaunchRotation =
-		FQuat::FindBetweenNormals(FVector::UpVector, InitialDirection);
-	const FTransform SpawnTransform(
-		LaunchRotation,
-		Muzzle->GetComponentLocation(),
-		FVector::OneVector);
+	FTransform SpawnTransform;
+	FString FailureReason;
+	if (!TryBuildSpawnTransform(*TargetComponent, SpawnTransform, FailureReason))
+	{
+		DisableHazard(FailureReason);
+		return;
+	}
 
 	const FGuid LaunchId = FGuid::NewGuid();
 	AThrustGuidedHazardProjectile* Projectile =
@@ -233,6 +291,9 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 		return;
 	}
 
+	Phase = EThrustGuidedHazardLauncherPhase::Spent;
+	WarningVisualRoot->SetVisibility(false, true);
+
 	UE_LOG(
 		LogThrustGuidedHazardLauncher,
 		Display,
@@ -245,45 +306,175 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 	LockedTargetComponent.Reset();
 }
 
-/** 在 Muzzle 前方锥体内瞄向目标；目标在背后或方向退化时保持直射。 */
+/** 目标在预警期间消失时恢复 Armed；本次预警不自动改锁其他角色。 */
+void AThrustGuidedHazardLauncher::ReturnToArmedAfterCancelledWarning(
+	const TCHAR* Reason)
+{
+	GetWorldTimerManager().ClearTimer(WarningTimerHandle);
+	LockedTargetActor.Reset();
+	LockedTargetComponent.Reset();
+
+	if (IsValid(WarningVisualRoot))
+	{
+		WarningVisualRoot->SetVisibility(false, true);
+	}
+
+	Phase = EThrustGuidedHazardLauncherPhase::Armed;
+	if (IsValid(TriggerVolume))
+	{
+		bSuppressTriggerOverlap = true;
+		TriggerVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		bSuppressTriggerOverlap = false;
+	}
+
+	UE_LOG(
+		LogThrustGuidedHazardLauncher,
+		Display,
+		TEXT("Launcher %s cancelled warning and returned to Armed: %s."),
+		*GetNameSafe(this),
+		Reason);
+}
+
+/** 按距离计算短时目标前置，并在 Muzzle 前方锥体内限制初始瞄准。 */
 FVector AThrustGuidedHazardLauncher::CalculateInitialLaunchDirection(
 	const USceneComponent* TargetComponent) const
 {
 	const FVector MuzzleForward = Muzzle->GetForwardVector().GetSafeNormal();
-	if (MuzzleForward.IsNearlyZero() || !IsValid(TargetComponent))
+	if (MuzzleForward.IsNearlyZero()
+		|| MuzzleForward.ContainsNaN()
+		|| !IsValid(TargetComponent)
+		|| !IsValid(TuningData))
 	{
 		return MuzzleForward;
 	}
 
+	const FVector MuzzleLocation = Muzzle->GetComponentLocation();
+	const FVector TargetLocation = TargetComponent->GetComponentLocation();
+	const FVector TargetVelocity = TargetComponent->GetComponentVelocity();
+	if (MuzzleLocation.ContainsNaN()
+		|| TargetLocation.ContainsNaN()
+		|| TargetVelocity.ContainsNaN())
+	{
+		return MuzzleForward;
+	}
+
+	const float Distance = FVector::Distance(MuzzleLocation, TargetLocation);
+	if (!FMath::IsFinite(Distance))
+	{
+		return MuzzleForward;
+	}
+
+	const float LeadSeconds = FMath::Clamp(
+		Distance / FMath::Max(TuningData->TargetPoweredSpeed, 1.0f),
+		0.0f,
+		TuningData->MaximumTargetLeadTimeSeconds);
+	const FVector PredictedTargetLocation =
+		TargetLocation + TargetVelocity * LeadSeconds;
 	const FVector DesiredDirection =
-		(TargetComponent->GetComponentLocation() - Muzzle->GetComponentLocation()).GetSafeNormal();
+		(PredictedTargetLocation - MuzzleLocation).GetSafeNormal();
 	if (DesiredDirection.IsNearlyZero())
 	{
 		return MuzzleForward;
 	}
 
-	const float Dot = FMath::Clamp(
-		FVector::DotProduct(MuzzleForward, DesiredDirection),
-		-1.0f,
-		1.0f);
-	const float DesiredAngleRadians = FMath::Acos(Dot);
-	const float MaximumAngleRadians =
-		FMath::DegreesToRadians(TuningData->MaximumInitialAimAngleDegrees);
-	if (DesiredAngleRadians <= MaximumAngleRadians)
+	return ThrustGuidedHazardLauncher::ClampDirectionToCone(
+		MuzzleForward,
+		DesiredDirection,
+		FMath::DegreesToRadians(TuningData->MaximumInitialAimAngleDegrees));
+}
+
+/** Muzzle 是出口平面；中心前移半高和净空，胶囊局部 +Z 对齐初始方向。 */
+bool AThrustGuidedHazardLauncher::TryBuildSpawnTransform(
+	const USceneComponent& TargetComponent,
+	FTransform& OutSpawnTransform,
+	FString& OutFailureReason) const
+{
+	OutFailureReason.Reset();
+	if (!IsValid(Muzzle) || !IsValid(TuningData))
 	{
-		return DesiredDirection;
+		OutFailureReason = TEXT("Muzzle 或 TuningData 在出生检查前失效。");
+		return false;
 	}
 
-	const FVector RotationAxis =
-		FVector::CrossProduct(MuzzleForward, DesiredDirection).GetSafeNormal();
-	if (RotationAxis.IsNearlyZero())
+	const FVector InitialDirection =
+		CalculateInitialLaunchDirection(&TargetComponent);
+	if (InitialDirection.IsNearlyZero() || InitialDirection.ContainsNaN())
 	{
-		return MuzzleForward;
+		OutFailureReason = TEXT("无法得到有限的初始发射方向。");
+		return false;
 	}
 
-	return FQuat(RotationAxis, MaximumAngleRadians)
-		.RotateVector(MuzzleForward)
-		.GetSafeNormal();
+	const float CenterOffset =
+		TuningData->ProjectileHalfHeight + TuningData->SpawnClearanceMargin;
+	const FVector SpawnCenter =
+		Muzzle->GetComponentLocation() + InitialDirection * CenterOffset;
+	const FQuat SpawnRotation =
+		FQuat::FindBetweenNormals(FVector::UpVector, InitialDirection);
+	OutSpawnTransform = FTransform(
+		SpawnRotation,
+		SpawnCenter,
+		FVector::OneVector);
+
+	if (!OutSpawnTransform.IsValid())
+	{
+		OutFailureReason = TEXT("计算出的弹体出生 Transform 无效。");
+		return false;
+	}
+
+	return IsSpawnPoseClear(OutSpawnTransform, OutFailureReason);
+}
+
+/** 故意不忽略 Launcher；若胶囊仍与炮管、外壳或墙体阻挡，摆位必须明确失败。 */
+bool AThrustGuidedHazardLauncher::IsSpawnPoseClear(
+	const FTransform& SpawnTransform,
+	FString& OutFailureReason) const
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World) || !IsValid(TuningData))
+	{
+		OutFailureReason = TEXT("出生检查没有有效 World 或 TuningData。");
+		return false;
+	}
+
+	const FCollisionShape Shape = FCollisionShape::MakeCapsule(
+		TuningData->ProjectileRadius,
+		TuningData->ProjectileHalfHeight);
+	FCollisionQueryParams QueryParams(
+		SCENE_QUERY_STAT(ThrustGuidedHazardSpawn),
+		false);
+	TArray<FOverlapResult> Overlaps;
+	World->OverlapMultiByChannel(
+		Overlaps,
+		SpawnTransform.GetLocation(),
+		SpawnTransform.GetRotation(),
+		ECC_PhysicsBody,
+		Shape,
+		QueryParams);
+
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		UPrimitiveComponent* BlockingComponent = Overlap.Component.Get();
+		if (!IsValid(BlockingComponent)
+			|| (BlockingComponent->GetCollisionEnabled()
+				!= ECollisionEnabled::QueryAndPhysics
+				&& BlockingComponent->GetCollisionEnabled()
+					!= ECollisionEnabled::PhysicsOnly)
+			|| BlockingComponent->GetCollisionResponseToChannel(ECC_PhysicsBody)
+				!= ECR_Block
+			|| !ThrustGuidedHazardLauncher::ProjectileBlocksObjectType(
+				BlockingComponent->GetCollisionObjectType()))
+		{
+			continue;
+		}
+
+		OutFailureReason = FString::Printf(
+			TEXT("弹体出生胶囊被 %s.%s 阻挡。"),
+			*GetNameSafe(BlockingComponent->GetOwner()),
+			*GetNameSafe(BlockingComponent));
+		return false;
+	}
+
+	return true;
 }
 
 /** 只接受 ACharacter；道具不会消耗机关，第二个角色也不能替换已锁定目标。 */
@@ -295,7 +486,8 @@ void AThrustGuidedHazardLauncher::HandleTriggerBeginOverlap(
 	bool /*bFromSweep*/,
 	const FHitResult& /*SweepResult*/)
 {
-	if (Phase != EThrustGuidedHazardLauncherPhase::Armed)
+	if (bSuppressTriggerOverlap
+		|| Phase != EThrustGuidedHazardLauncherPhase::Armed)
 	{
 		return;
 	}

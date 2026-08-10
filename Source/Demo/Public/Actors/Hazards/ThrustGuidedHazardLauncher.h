@@ -59,11 +59,25 @@ private:
 	/** 锁定首个 ACharacter、关闭后续触发并开始预警。 */
 	void EnterWarning(ACharacter& TargetCharacter);
 
-	/** 预警结束后按 Muzzle +X 计算受限初始方向并延迟生成一个弹体。 */
+	/** 预警结束后计算完整出生姿态、检查净空，并延迟生成一个弹体。 */
 	void FireLockedTarget();
 
-	/** 返回目标方向钳制到 Muzzle 前方锥体后的单位向量；目标失效时返回 Muzzle +X。 */
+	/** 目标在预警期间失效时恢复可触发状态；不换成第二目标。 */
+	void ReturnToArmedAfterCancelledWarning(const TCHAR* Reason);
+
+	/** 返回动态前置目标方向钳制到 Muzzle 前方锥体后的单位向量。 */
 	FVector CalculateInitialLaunchDirection(const USceneComponent* TargetComponent) const;
+
+	/** 计算初始方向、完整胶囊出生中心和旋转，并执行出生净空检查。 */
+	bool TryBuildSpawnTransform(
+		const USceneComponent& TargetComponent,
+		FTransform& OutSpawnTransform,
+		FString& OutFailureReason) const;
+
+	/** 用弹体作为 PhysicsBody 时的真实通道响应检查整个出生胶囊。 */
+	bool IsSpawnPoseClear(
+		const FTransform& SpawnTransform,
+		FString& OutFailureReason) const;
 
 	/** 清理触发和预警状态并记录明确原因；不会生成隐藏兜底弹体。 */
 	void DisableHazard(const FString& Reason);
@@ -89,7 +103,8 @@ private:
 	TObjectPtr<USceneComponent> HousingVisualRoot;
 
 	/**
-	 * 发射口空间基准；世界位置是弹体出生点，局部 +X 是初始瞄准中心线。
+	 * 发射口空间基准；世界位置表示炮管出口平面，局部 +X 是初始瞄准中心线。
+	 * 弹体中心沿最终初始方向再前移 ProjectileHalfHeight + SpawnClearanceMargin。
 	 * Blueprint/关卡实例可调整其相对变换，以适配正面墙或斜角墙。
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
@@ -135,4 +150,7 @@ private:
 
 	/** 预警结束的一次性 Timer；Spent/Disabled/EndPlay 必须清理。 */
 	FTimerHandle WarningTimerHandle;
+
+	/** 目标失效后同步重开碰撞时，阻止盒内第二名角色在同一调用栈自动接管。 */
+	bool bSuppressTriggerOverlap = false;
 };

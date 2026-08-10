@@ -2,8 +2,8 @@
 
 /**
  * @file ThrustGuidedHazardProjectile.h
- * 职责：拥有一次发射的真实物理弹体、尾部 Thruster、短时制导、碰撞失导和重冲击准备预测。
- * 边界：不直接修改速度/Transform，不额外 AddTorque/AddImpulse，不决定玩家或追猎者受击结果。
+ * 职责：拥有一次发射的真实物理弹体、固定主 Thruster、短时姿态控制和重冲击准备预测。
+ * 边界：不直接修改速度/Transform，不 AddImpulse，不决定玩家或追猎者受击结果。
  * 状态 Owner：本 Actor 唯一写入推进阶段、LaunchId、首次有效碰撞和每接收者通知集合。
  * 轴约定：胶囊局部 +Z 是弹体前向；UE5.8 UPhysicsThrusterComponent 局部 -X 是实际施力轴。
  */
@@ -28,8 +28,7 @@ struct FHeavyImpactPreparationRequest;
 enum class EThrustGuidedHazardProjectilePhase : uint8
 {
 	Uninitialized,
-	PoweredGuided,
-	PoweredUnguided,
+	PoweredControlled,
 	Coasting,
 	Sleeping,
 	Disabled
@@ -58,7 +57,7 @@ protected:
 	/** 校验延迟生成合同，配置并启动刚体、Thruster、碰撞事件和预测 Timer。 */
 	virtual void BeginPlay() override;
 
-	/** 仅在 PoweredGuided/PoweredUnguided 更新推进计时和 Thruster 朝向。 */
+	/** 仅在 PoweredControlled 更新推进计时、油门和真实物理姿态转矩。 */
 	virtual void Tick(float DeltaSeconds) override;
 
 	/** 清理碰撞/休眠/重叠委托、预测 Timer、目标和候选集合。 */
@@ -71,25 +70,16 @@ private:
 	/** 检查锁定目标及其组件仍属于同一有效 Actor。 */
 	bool IsLockedTargetUsable() const;
 
-	/** 首次碰撞或目标失效时永久停止本次制导，但不停止推进计时。 */
-	void StopGuidance(const TCHAR* Reason);
+	/** 计时、首碰、目标失效和安全异常统一进入该单向出口。 */
+	void FinishPoweredPhase(const TCHAR* Reason);
 
-	/** 推进计时结束时关闭 Thruster、恢复重力、关闭 Actor Tick 并进入 Coasting。 */
-	void FinishPoweredPhase();
+	/** 计算预测目标方向和 0~1 油门，不写任何物理状态。 */
+	bool TryCalculateControlCommand(
+		FVector& OutDesiredDirection,
+		float& OutThrottle) const;
 
-	/**
-	 * 用目标短时前置、朝向误差和角速度阻尼计算期望世界推力方向。
-	 * 输出已经满足喷口最大偏角；失败时调用者转入 PoweredUnguided。
-	 */
-	bool TryCalculateGuidedForceDirection(FVector& OutWorldForceDirection) const;
-
-	/**
-	 * 以最大喷口转速把当前 Thruster 局部 -X 力轴转向期望世界方向。
-	 * 只改变子组件相对旋转，不改刚体 Transform、速度或角速度。
-	 */
-	void AimThrusterAtWorldForceDirection(
-		const FVector& DesiredWorldForceDirection,
-		float DeltaSeconds);
+	/** 把期望角加速度通过真实惯量张量换算为世界转矩。 */
+	bool ApplyPhysicalAttitudeControl(const FVector& DesiredDirection);
 
 	/** 启动 60 Hz 重冲击候选预测；Actor Tick 关闭后仍可在刚体醒着时工作。 */
 	void StartPreparationMonitoring();
@@ -113,7 +103,7 @@ private:
 	/** 关闭所有动力和碰撞并记录明确错误；仅用于无法安全运行的生命周期/配置失败。 */
 	void DisableProjectile(const FString& Reason);
 
-	/** 记录每个 Chaos Hit；首次非出生穿透、非 Owner 的阻挡碰撞会永久停止制导。 */
+	/** 记录每个 Chaos Hit；首次阻挡碰撞（包括出生穿透和 Launcher Owner）立即结束推进。 */
 	UFUNCTION()
 	void HandleProjectileHit(
 		UPrimitiveComponent* HitComponent,
@@ -155,7 +145,7 @@ private:
 
 	/**
 	 * 必须直接附着 ProjectileBody；UE5.8 Thruster 只向直接父 UPrimitiveComponent 施力。
-	 * 组件位于局部 -Z 尾部，局部 -X 是实际世界推力轴。
+	 * 组件固定在局部 -Z 尾部，局部 -X 映射到弹体 +Z；运行期不再偏转喷口。
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
 		meta = (AllowPrivateAccess = "true"))
@@ -180,7 +170,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UThrustGuidedHazardTuningData> RuntimeTuningData;
 
-	/** 推进阶段弱引用的目标组件；首次碰撞、目标失效或推进结束时清空。 */
+	/** 推进阶段弱引用的目标组件；首碰、目标失效或推进结束时清空。 */
 	TWeakObjectPtr<USceneComponent> LockedTargetComponent;
 
 	/** 与 LockedTargetComponent 对应的 Actor，用于拒绝组件易主或销毁。 */
@@ -193,13 +183,13 @@ private:
 	EThrustGuidedHazardProjectilePhase Phase =
 		EThrustGuidedHazardProjectilePhase::Uninitialized;
 
-	/** 推进开始后累计秒数；首次碰撞不会重置或提前结束。 */
+	/** 推进开始后累计秒数；首次阻挡碰撞会立即结束推进。 */
 	float PoweredElapsedSeconds = 0.0f;
 
 	/** ConfigureLaunch 已被延迟生成调用；BeginPlay 仍会分别校验每个输入。 */
 	bool bLaunchConfigured = false;
 
-	/** 本次是否已经出现首次有效阻挡碰撞；之后仍完整记录并允许真实重复接触。 */
+	/** 本次是否已经出现首次阻挡碰撞；之后仍完整记录并允许真实重复接触。 */
 	bool bHadMeaningfulBlockingContact = false;
 
 	/** 本次弹体每个 OnComponentHit 回调的递增序号，只用于诊断 Chaos 接触序列。 */

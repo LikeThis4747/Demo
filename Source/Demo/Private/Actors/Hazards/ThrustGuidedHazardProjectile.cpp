@@ -34,40 +34,6 @@ namespace ThrustGuidedHazardProjectile
 	/** 帧感知准备窗口绝对上限，避免一次卡顿造成长期提前接管。 */
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 
-	/** 把任意期望方向限制在 Forward 周围的圆锥内；反向退化时保持 Forward。 */
-	FVector ClampDirectionToCone(
-		const FVector& Forward,
-		const FVector& Desired,
-		const float MaximumAngleRadians)
-	{
-		const FVector NormalizedForward = Forward.GetSafeNormal();
-		const FVector NormalizedDesired = Desired.GetSafeNormal();
-		if (NormalizedForward.IsNearlyZero() || NormalizedDesired.IsNearlyZero())
-		{
-			return NormalizedForward;
-		}
-
-		const float Dot = FMath::Clamp(
-			FVector::DotProduct(NormalizedForward, NormalizedDesired),
-			-1.0f,
-			1.0f);
-		const float Angle = FMath::Acos(Dot);
-		if (Angle <= MaximumAngleRadians)
-		{
-			return NormalizedDesired;
-		}
-
-		const FVector Axis =
-			FVector::CrossProduct(NormalizedForward, NormalizedDesired).GetSafeNormal();
-		if (Axis.IsNearlyZero())
-		{
-			return NormalizedForward;
-		}
-
-		return FQuat(Axis, MaximumAngleRadians)
-			.RotateVector(NormalizedForward)
-			.GetSafeNormal();
-	}
 }
 
 /** 创建唯一物理胶囊、直接子级 Thruster、查询球和纯美术挂点。 */
@@ -86,7 +52,7 @@ AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 	ProjectileBody->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
-	ProjectileBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	ProjectileBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	ProjectileBody->SetGenerateOverlapEvents(true);
@@ -215,8 +181,8 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		this,
 		&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
 
-	ProjectileBody->SetLinearDamping(RuntimeTuningData->LinearDamping);
-	ProjectileBody->SetAngularDamping(RuntimeTuningData->AngularDamping);
+	ProjectileBody->SetLinearDamping(RuntimeTuningData->PoweredLinearDamping);
+	ProjectileBody->SetAngularDamping(RuntimeTuningData->PoweredAngularDamping);
 	ProjectileBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	PreparationVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	ProjectileBody->SetSimulatePhysics(true);
@@ -232,9 +198,7 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	ContactSequence = 0;
 	PreparationCandidates.Reset();
 	NotifiedReceiversThisLaunch.Reset();
-	Phase = IsLockedTargetUsable()
-		? EThrustGuidedHazardProjectilePhase::PoweredGuided
-		: EThrustGuidedHazardProjectilePhase::PoweredUnguided;
+	Phase = EThrustGuidedHazardProjectilePhase::PoweredControlled;
 
 	Thruster->Activate(true);
 	Thruster->SetComponentTickEnabled(true);
@@ -242,24 +206,33 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	SetActorTickEnabled(true);
 	StartPreparationMonitoring();
 
+	const FVector InitialVelocity = ProjectileBody->GetPhysicsLinearVelocity();
 	UE_LOG(
 		LogThrustGuidedHazardProjectile,
 		Display,
-		TEXT("Projectile %s started LaunchId=%s Phase=%s."),
+		TEXT("Projectile %s started LaunchId=%s Data=%s Mass=%.2f MaxAccel=%.2f TargetSpeed=%.2f MaxSpeed=%.2f Location=%s InitialVelocity=%s."),
 		*GetNameSafe(this),
 		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-		Phase == EThrustGuidedHazardProjectilePhase::PoweredGuided
-			? TEXT("PoweredGuided")
-			: TEXT("PoweredUnguided"));
+		*GetPathNameSafe(RuntimeTuningData),
+		ProjectileBody->GetMass(),
+		RuntimeTuningData->MaximumPoweredAcceleration,
+		RuntimeTuningData->TargetPoweredSpeed,
+		RuntimeTuningData->MaximumPoweredSpeed,
+		*ProjectileBody->GetComponentLocation().ToCompactString(),
+		*InitialVelocity.ToCompactString());
+
+	if (!IsLockedTargetUsable())
+	{
+		FinishPoweredPhase(TEXT("target invalid at BeginPlay"));
+	}
 }
 
-/** 推进期先更新时间，再转动喷口；Thruster 组件随后在同一 PrePhysics 帧施力。 */
+/** 推进期先更新油门和姿态转矩；固定 Thruster 随后在同一 PrePhysics 帧施力。 */
 void AThrustGuidedHazardProjectile::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
 
-	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredGuided
-		&& Phase != EThrustGuidedHazardProjectilePhase::PoweredUnguided)
+	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredControlled)
 	{
 		return;
 	}
@@ -268,35 +241,43 @@ void AThrustGuidedHazardProjectile::Tick(const float DeltaSeconds)
 		|| !FMath::IsFinite(DeltaSeconds)
 		|| DeltaSeconds <= 0.0f)
 	{
+		FinishPoweredPhase(TEXT("invalid powered tick input"));
 		return;
 	}
 
 	PoweredElapsedSeconds += DeltaSeconds;
 	if (PoweredElapsedSeconds >= RuntimeTuningData->PoweredDurationSeconds)
 	{
-		FinishPoweredPhase();
+		FinishPoweredPhase(TEXT("powered timeout"));
 		return;
 	}
 
-	FVector DesiredForceDirection = ProjectileBody->GetUpVector();
-	if (Phase == EThrustGuidedHazardProjectilePhase::PoweredGuided)
+	if (!IsLockedTargetUsable())
 	{
-		if (!IsLockedTargetUsable())
-		{
-			StopGuidance(TEXT("locked target became invalid"));
-		}
-		else if (!TryCalculateGuidedForceDirection(DesiredForceDirection))
-		{
-			StopGuidance(TEXT("guidance inputs became non-finite or degenerate"));
-		}
+		FinishPoweredPhase(TEXT("locked target became invalid"));
+		return;
 	}
 
-	// StopGuidance 可能在上方改变阶段；失导后喷口按速率回到弹体 +Z。
-	if (Phase == EThrustGuidedHazardProjectilePhase::PoweredUnguided)
+	FVector DesiredDirection = FVector::ZeroVector;
+	float Throttle = 0.0f;
+	if (!TryCalculateControlCommand(DesiredDirection, Throttle)
+		|| !ApplyPhysicalAttitudeControl(DesiredDirection))
 	{
-		DesiredForceDirection = ProjectileBody->GetUpVector();
+		FinishPoweredPhase(TEXT("control command became invalid or exceeded safety speed"));
+		return;
 	}
-	AimThrusterAtWorldForceDirection(DesiredForceDirection, DeltaSeconds);
+
+	const float ActualMass = ProjectileBody->GetMass();
+	if (!FMath::IsFinite(ActualMass) || ActualMass <= 0.0f)
+	{
+		FinishPoweredPhase(TEXT("rigid body mass became invalid"));
+		return;
+	}
+
+	Thruster->ThrustStrength =
+		ActualMass
+		* RuntimeTuningData->MaximumPoweredAcceleration
+		* FMath::Clamp(Throttle, 0.0f, 1.0f);
 }
 
 /** 清理全部本地委托、Timer 和弱引用；不会操作 Owner、角色或关卡。 */
@@ -355,7 +336,8 @@ void AThrustGuidedHazardProjectile::ApplyConfiguration(
 		false,
 		nullptr,
 		ETeleportType::None);
-	Thruster->ThrustStrength = Tuning.ThrustStrength;
+	// BeginPlay/Tick 验证完成前绝不保留资产或 CDO 的旧推力。
+	Thruster->ThrustStrength = 0.0f;
 }
 
 /** 目标组件必须仍有效、已注册且仍属于锁定 Actor；不按玩家/AI 类型分支。 */
@@ -369,61 +351,94 @@ bool AThrustGuidedHazardProjectile::IsLockedTargetUsable() const
 		&& TargetComponent->GetOwner() == TargetActor;
 }
 
-/** 本次发射的制导只能从 Guided 单向退出，后续碰撞或唤醒都不能重新开启。 */
-void AThrustGuidedHazardProjectile::StopGuidance(const TCHAR* Reason)
+/** 受控阶段的唯一出口；不改速度，只撤销施力并切换为低阻尼 Chaos 自由运动。 */
+void AThrustGuidedHazardProjectile::FinishPoweredPhase(const TCHAR* Reason)
 {
-	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredGuided)
+	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredControlled)
 	{
 		return;
 	}
 
-	Phase = EThrustGuidedHazardProjectilePhase::PoweredUnguided;
-	LockedTargetComponent.Reset();
-	LockedTargetActor.Reset();
-
-	UE_LOG(
-		LogThrustGuidedHazardProjectile,
-		Display,
-		TEXT("LaunchId=%s guidance stopped: %s."),
-		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-		Reason);
-}
-
-/** 推进计时是唯一关机条件；碰撞不会缩短或延长它。 */
-void AThrustGuidedHazardProjectile::FinishPoweredPhase()
-{
-	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredGuided
-		&& Phase != EThrustGuidedHazardProjectilePhase::PoweredUnguided)
+	FVector LinearVelocity = FVector::ZeroVector;
+	FVector BodyForward = FVector::UpVector;
+	if (IsValid(ProjectileBody))
 	{
-		return;
+		LinearVelocity = ProjectileBody->GetPhysicsLinearVelocity();
+		BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
+	}
+	const float ForwardSpeed =
+		FVector::DotProduct(LinearVelocity, BodyForward);
+	const float LateralSpeed =
+		(LinearVelocity - BodyForward * ForwardSpeed).Size();
+	float AppliedThrottle = 0.0f;
+	if (IsValid(Thruster)
+		&& IsValid(ProjectileBody)
+		&& IsValid(RuntimeTuningData))
+	{
+		const float FullThrust =
+			ProjectileBody->GetMass()
+			* RuntimeTuningData->MaximumPoweredAcceleration;
+		if (FMath::IsFinite(FullThrust) && FullThrust > KINDA_SMALL_NUMBER)
+		{
+			AppliedThrottle = FMath::Clamp(
+				Thruster->ThrustStrength / FullThrust,
+				0.0f,
+				1.0f);
+		}
 	}
 
 	Phase = EThrustGuidedHazardProjectilePhase::Coasting;
 	LockedTargetComponent.Reset();
 	LockedTargetActor.Reset();
-	Thruster->Deactivate();
-	Thruster->SetComponentTickEnabled(false);
-	ExhaustVisualRoot->SetVisibility(false, true);
-	ProjectileBody->SetEnableGravity(true);
+
+	if (IsValid(Thruster))
+	{
+		Thruster->ThrustStrength = 0.0f;
+		Thruster->Deactivate();
+		Thruster->SetComponentTickEnabled(false);
+	}
+	if (IsValid(ExhaustVisualRoot))
+	{
+		ExhaustVisualRoot->SetVisibility(false, true);
+	}
+	if (IsValid(ProjectileBody))
+	{
+		ProjectileBody->SetEnableGravity(true);
+		if (IsValid(RuntimeTuningData))
+		{
+			ProjectileBody->SetLinearDamping(
+				RuntimeTuningData->CoastingLinearDamping);
+			ProjectileBody->SetAngularDamping(
+				RuntimeTuningData->CoastingAngularDamping);
+		}
+	}
 	SetActorTickEnabled(false);
 
 	UE_LOG(
 		LogThrustGuidedHazardProjectile,
 		Display,
-		TEXT("LaunchId=%s powered phase finished after %.3f s; Chaos coasting owns motion."),
+		TEXT("LaunchId=%s powered phase finished after %.3f s: %s; TotalSpeed=%.2f ForwardSpeed=%.2f LateralSpeed=%.2f Throttle=%.3f Contact=%u; Chaos owns motion."),
 		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-		PoweredElapsedSeconds);
+		PoweredElapsedSeconds,
+		Reason != nullptr ? Reason : TEXT("unspecified"),
+		LinearVelocity.Size(),
+		ForwardSpeed,
+		LateralSpeed,
+		AppliedThrottle,
+		ContactSequence);
 }
 
-/**
- * PD 先决定需要的世界转矩，再由 tau = r x F 反算尾部横向力方向。
- * 这一步不可替换成“喷口直接朝目标”：尾部同向横推会产生相反转矩，使弹头转离目标。
- * Thruster 力幅值始终是 ThrustStrength；平方根只保持合成力长度不变。
- */
-bool AThrustGuidedHazardProjectile::TryCalculateGuidedForceDirection(
-	FVector& OutWorldForceDirection) const
+/** 动态前置只决定期望朝向；油门按有符号前向速度自然收小。 */
+bool AThrustGuidedHazardProjectile::TryCalculateControlCommand(
+	FVector& OutDesiredDirection,
+	float& OutThrottle) const
 {
-	if (!IsLockedTargetUsable() || !IsValid(RuntimeTuningData))
+	OutDesiredDirection = FVector::ZeroVector;
+	OutThrottle = 0.0f;
+
+	if (!IsLockedTargetUsable()
+		|| !IsValid(RuntimeTuningData)
+		|| !IsValid(ProjectileBody))
 	{
 		return false;
 	}
@@ -431,140 +446,169 @@ bool AThrustGuidedHazardProjectile::TryCalculateGuidedForceDirection(
 	const USceneComponent* TargetComponent = LockedTargetComponent.Get();
 	const FVector BodyCenter = ProjectileBody->GetCenterOfMass();
 	const FVector BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
+	const FVector BodyVelocity = ProjectileBody->GetPhysicsLinearVelocity();
 	const FVector TargetLocation = TargetComponent->GetComponentLocation();
 	const FVector TargetVelocity = TargetComponent->GetComponentVelocity();
-	const FVector PredictedTargetLocation =
-		TargetLocation + TargetVelocity * RuntimeTuningData->TargetLeadTimeSeconds;
-	const FVector DesiredDirection =
-		(PredictedTargetLocation - BodyCenter).GetSafeNormal();
 	if (BodyCenter.ContainsNaN()
 		|| BodyForward.IsNearlyZero()
+		|| BodyForward.ContainsNaN()
+		|| BodyVelocity.ContainsNaN()
 		|| TargetLocation.ContainsNaN()
-		|| TargetVelocity.ContainsNaN()
-		|| DesiredDirection.IsNearlyZero())
+		|| TargetVelocity.ContainsNaN())
 	{
 		return false;
 	}
 
-	const float OrientationDot = FMath::Clamp(
-		FVector::DotProduct(BodyForward, DesiredDirection),
-		-1.0f,
-		1.0f);
-	const float OrientationErrorRadians = FMath::Acos(OrientationDot);
-	FVector ErrorAxis =
-		FVector::CrossProduct(BodyForward, DesiredDirection).GetSafeNormal();
-	if (ErrorAxis.IsNearlyZero() && OrientationDot < 0.0f)
-	{
-		// 180 度退化时选择弹体局部 +X 作为确定的垂直轴，不随机翻滚。
-		ErrorAxis = ProjectileBody->GetForwardVector().GetSafeNormal();
-	}
-
-	const FVector OrientationErrorVector = ErrorAxis * OrientationErrorRadians;
-	const FVector AngularVelocity =
-		ProjectileBody->GetPhysicsAngularVelocityInRadians();
-	const FVector SteerableAngularVelocity =
-		AngularVelocity - BodyForward * FVector::DotProduct(AngularVelocity, BodyForward);
-	FVector NormalizedTorqueCommand =
-		OrientationErrorVector * RuntimeTuningData->OrientationGain
-		- SteerableAngularVelocity * RuntimeTuningData->AngularVelocityDampingGain;
-	if (AngularVelocity.ContainsNaN() || NormalizedTorqueCommand.ContainsNaN())
-	{
-		return false;
-	}
-	NormalizedTorqueCommand = NormalizedTorqueCommand.GetClampedToMaxSize(1.0f);
-
-	const FVector LeverArm = Thruster->GetComponentLocation() - BodyCenter;
-	const float LeverArmLengthSquared = LeverArm.SizeSquared();
-	const float ThrustStrength = RuntimeTuningData->ThrustStrength;
-	if (!FMath::IsFinite(LeverArmLengthSquared)
-		|| LeverArmLengthSquared <= KINDA_SMALL_NUMBER
-		|| !FMath::IsFinite(ThrustStrength)
-		|| ThrustStrength <= 0.0f)
+	const float ForwardSpeed =
+		FVector::DotProduct(BodyVelocity, BodyForward);
+	const FVector LateralVelocity =
+		BodyVelocity - BodyForward * ForwardSpeed;
+	const float LateralSpeed = LateralVelocity.Size();
+	const float TotalSpeed = BodyVelocity.Size();
+	const float ComponentLimit = RuntimeTuningData->MaximumPoweredSpeed;
+	const float EmergencyTotalLimit =
+		RuntimeTuningData->MaximumPoweredSpeed
+		+ RuntimeTuningData->SpeedControlBand;
+	if (!FMath::IsFinite(ForwardSpeed)
+		|| !FMath::IsFinite(LateralSpeed)
+		|| !FMath::IsFinite(TotalSpeed))
 	{
 		return false;
 	}
 
-	const float MaximumGimbalRadians =
-		FMath::DegreesToRadians(RuntimeTuningData->MaximumGimbalAngleDegrees);
-	const float MaximumLateralForce =
-		ThrustStrength * FMath::Sin(MaximumGimbalRadians);
-	const float MaximumTorque =
-		FMath::Sqrt(LeverArmLengthSquared) * MaximumLateralForce;
+	const TCHAR* SafetyReason = nullptr;
+	if (FMath::Abs(ForwardSpeed) >= ComponentLimit)
+	{
+		SafetyReason = TEXT("forward component limit");
+	}
+	else if (LateralSpeed >= ComponentLimit)
+	{
+		SafetyReason = TEXT("lateral component limit");
+	}
+	else if (TotalSpeed >= EmergencyTotalLimit)
+	{
+		SafetyReason = TEXT("combined total speed limit");
+	}
+	if (SafetyReason != nullptr)
+	{
+		UE_LOG(
+			LogThrustGuidedHazardProjectile,
+			Warning,
+			TEXT("LaunchId=%s powered safety stop (%s): TotalSpeed=%.2f ForwardSpeed=%.2f LateralSpeed=%.2f Limits=%.2f/%.2f."),
+			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
+			SafetyReason,
+			TotalSpeed,
+			ForwardSpeed,
+			LateralSpeed,
+			ComponentLimit,
+			EmergencyTotalLimit);
+		return false;
+	}
 
-	FVector DesiredTorque = NormalizedTorqueCommand * MaximumTorque;
-	const FVector LeverDirection = LeverArm.GetSafeNormal();
-	DesiredTorque -=
-		LeverDirection * FVector::DotProduct(DesiredTorque, LeverDirection);
-
-	// 由 tau = r x F 得 F_lateral = (tau x r) / |r|^2。
-	FVector LateralForce =
-		FVector::CrossProduct(DesiredTorque, LeverArm) / LeverArmLengthSquared;
-	LateralForce = LateralForce.GetClampedToMaxSize(MaximumLateralForce);
-
-	const float ForwardForceMagnitude = FMath::Sqrt(FMath::Max(
+	const float Distance = FVector::Distance(BodyCenter, TargetLocation);
+	if (!FMath::IsFinite(Distance))
+	{
+		return false;
+	}
+	const float LeadSeconds = FMath::Clamp(
+		Distance / FMath::Max(RuntimeTuningData->TargetPoweredSpeed, 1.0f),
 		0.0f,
-		FMath::Square(ThrustStrength) - LateralForce.SizeSquared()));
-	OutWorldForceDirection =
-		(BodyForward * ForwardForceMagnitude + LateralForce).GetSafeNormal();
-	return !OutWorldForceDirection.IsNearlyZero()
-		&& !OutWorldForceDirection.ContainsNaN();
+		RuntimeTuningData->MaximumTargetLeadTimeSeconds);
+	const FVector PredictedTarget =
+		TargetLocation + TargetVelocity * LeadSeconds;
+	OutDesiredDirection =
+		(PredictedTarget - BodyCenter).GetSafeNormal();
+	if (OutDesiredDirection.IsNearlyZero()
+		|| OutDesiredDirection.ContainsNaN())
+	{
+		return false;
+	}
+
+	const float SpeedThrottle = FMath::Clamp(
+		(RuntimeTuningData->TargetPoweredSpeed - ForwardSpeed)
+			/ RuntimeTuningData->SpeedControlBand,
+		0.0f,
+		1.0f);
+	const float AlignmentThrottle = FMath::Max(
+		0.0f,
+		FVector::DotProduct(BodyForward, OutDesiredDirection));
+	OutThrottle = SpeedThrottle * AlignmentThrottle;
+	return FMath::IsFinite(OutThrottle);
 }
 
-/** 对世界力轴做角速度受限的最短弧旋转；二次锥限是运行期安全边界，不改变正常 PD 输出。 */
-void AThrustGuidedHazardProjectile::AimThrusterAtWorldForceDirection(
-	const FVector& DesiredWorldForceDirection,
-	const float DeltaSeconds)
+/** 把期望世界角加速度转换到质量空间，与局部惯量逐轴相乘后施加真实世界转矩。 */
+bool AThrustGuidedHazardProjectile::ApplyPhysicalAttitudeControl(
+	const FVector& DesiredDirection)
 {
-	if (!IsValid(RuntimeTuningData) || DeltaSeconds <= 0.0f)
+	if (!IsValid(RuntimeTuningData) || !IsValid(ProjectileBody))
 	{
-		return;
+		return false;
 	}
 
 	const FVector BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
-	const float MaximumGimbalRadians =
-		FMath::DegreesToRadians(RuntimeTuningData->MaximumGimbalAngleDegrees);
-	const FVector ClampedDesiredDirection =
-		ThrustGuidedHazardProjectile::ClampDirectionToCone(
-			BodyForward,
-			DesiredWorldForceDirection,
-			MaximumGimbalRadians);
-	const FVector CurrentForceDirection =
-		Thruster->GetComponentTransform()
-			.TransformVectorNoScale(FVector(-1.0f, 0.0f, 0.0f))
-			.GetSafeNormal();
-	if (ClampedDesiredDirection.IsNearlyZero() || CurrentForceDirection.IsNearlyZero())
+	const FVector NormalizedDesired = DesiredDirection.GetSafeNormal();
+	if (BodyForward.IsNearlyZero()
+		|| NormalizedDesired.IsNearlyZero()
+		|| BodyForward.ContainsNaN()
+		|| NormalizedDesired.ContainsNaN())
 	{
-		return;
+		return false;
 	}
 
 	const float Dot = FMath::Clamp(
-		FVector::DotProduct(CurrentForceDirection, ClampedDesiredDirection),
+		FVector::DotProduct(BodyForward, NormalizedDesired),
 		-1.0f,
 		1.0f);
-	const float RemainingAngle = FMath::Acos(Dot);
-	if (!FMath::IsFinite(RemainingAngle) || RemainingAngle <= KINDA_SMALL_NUMBER)
+	const float ErrorRadians = FMath::Acos(Dot);
+	FVector ErrorAxis =
+		FVector::CrossProduct(BodyForward, NormalizedDesired).GetSafeNormal();
+	if (ErrorAxis.IsNearlyZero() && Dot < 0.0f)
 	{
-		return;
+		ErrorAxis = ProjectileBody->GetForwardVector().GetSafeNormal();
 	}
 
-	const float MaximumStepRadians =
-		FMath::DegreesToRadians(RuntimeTuningData->MaximumGimbalRateDegreesPerSecond)
-		* DeltaSeconds;
-	const float StepAlpha = FMath::Clamp(
-		MaximumStepRadians / RemainingAngle,
-		0.0f,
-		1.0f);
-	const FQuat FullDelta =
-		FQuat::FindBetweenNormals(CurrentForceDirection, ClampedDesiredDirection);
-	const FQuat StepDelta =
-		FQuat::Slerp(FQuat::Identity, FullDelta, StepAlpha).GetNormalized();
-	const FQuat NewWorldRotation =
-		(StepDelta * Thruster->GetComponentQuat()).GetNormalized();
-	Thruster->SetWorldRotation(
-		NewWorldRotation,
-		false,
-		nullptr,
-		ETeleportType::None);
+	const FVector AngularVelocity =
+		ProjectileBody->GetPhysicsAngularVelocityInRadians();
+	FVector DesiredAngularAcceleration =
+		ErrorAxis * ErrorRadians * RuntimeTuningData->OrientationGain
+		- AngularVelocity * RuntimeTuningData->AngularVelocityDampingGain;
+	DesiredAngularAcceleration = DesiredAngularAcceleration.GetClampedToMaxSize(
+		RuntimeTuningData->MaximumAngularAcceleration);
+	if (AngularVelocity.ContainsNaN()
+		|| DesiredAngularAcceleration.ContainsNaN())
+	{
+		return false;
+	}
+
+	FBodyInstance& BodyInstance = ProjectileBody->BodyInstance;
+	const FVector LocalInertia = BodyInstance.GetBodyInertiaTensor();
+	const FTransform MassToWorld = BodyInstance.GetMassSpaceToWorldSpace();
+	if (!FMath::IsFinite(LocalInertia.X)
+		|| !FMath::IsFinite(LocalInertia.Y)
+		|| !FMath::IsFinite(LocalInertia.Z)
+		|| LocalInertia.X <= KINDA_SMALL_NUMBER
+		|| LocalInertia.Y <= KINDA_SMALL_NUMBER
+		|| LocalInertia.Z <= KINDA_SMALL_NUMBER
+		|| MassToWorld.ContainsNaN())
+	{
+		return false;
+	}
+
+	const FVector LocalAngularAcceleration =
+		MassToWorld.InverseTransformVectorNoScale(DesiredAngularAcceleration);
+	const FVector LocalTorque(
+		LocalAngularAcceleration.X * LocalInertia.X,
+		LocalAngularAcceleration.Y * LocalInertia.Y,
+		LocalAngularAcceleration.Z * LocalInertia.Z);
+	const FVector WorldTorque =
+		MassToWorld.TransformVectorNoScale(LocalTorque);
+	if (WorldTorque.ContainsNaN())
+	{
+		return false;
+	}
+
+	ProjectileBody->AddTorqueInRadians(WorldTorque, NAME_None, false);
+	return true;
 }
 
 /** 立即刷新当前重叠者并启动独立 Timer；同一弹体不会重复创建 Timer。 */
@@ -886,27 +930,31 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 	const AActor* ContactOwner = IsValid(OtherActor)
 		? OtherActor
 		: (IsValid(OtherComponent) ? OtherComponent->GetOwner() : nullptr);
-	const bool bMeaningfulBlockingContact =
+	const bool bBlockingContact =
 		Hit.bBlockingHit
-		&& !Hit.bStartPenetrating
 		&& IsValid(OtherComponent)
 		&& IsValid(ContactOwner)
-		&& ContactOwner != this
-		&& ContactOwner != GetOwner();
-	if (bHadMeaningfulBlockingContact || !bMeaningfulBlockingContact)
+		&& ContactOwner != this;
+	if (bHadMeaningfulBlockingContact || !bBlockingContact)
 	{
 		return;
 	}
 
 	bHadMeaningfulBlockingContact = true;
-	StopGuidance(TEXT("first meaningful Chaos blocking contact"));
+	if (Hit.bStartPenetrating)
+	{
+		UE_LOG(
+			LogThrustGuidedHazardProjectile,
+			Warning,
+			TEXT("LaunchId=%s received penetrating blocking contact with %s."),
+			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
+			*GetNameSafe(ContactOwner));
+	}
 
-	UE_LOG(
-		LogThrustGuidedHazardProjectile,
-		Display,
-		TEXT("LaunchId=%s first blocking contact with %s; thrust timer continues."),
-		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-		*GetNameSafe(ContactOwner));
+	FinishPoweredPhase(
+		Hit.bStartPenetrating
+			? TEXT("penetrating blocking contact")
+			: TEXT("first blocking contact"));
 }
 
 /** 休眠后被外力唤醒只恢复 Coasting 预测，绝不恢复目标或制导。 */
@@ -988,6 +1036,7 @@ void AThrustGuidedHazardProjectile::DisableProjectile(const FString& Reason)
 
 	if (IsValid(Thruster))
 	{
+		Thruster->ThrustStrength = 0.0f;
 		Thruster->Deactivate();
 		Thruster->SetComponentTickEnabled(false);
 	}
