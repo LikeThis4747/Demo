@@ -100,6 +100,23 @@ public:
 		meta = (ClampMin = "1.0"))
 	float MinimumDownedReimpactImpulse = 1000.0f;
 
+	/**
+	 * Seconds of real PhysicsBody contact retained after the first committed Chaos impulse.
+	 * Once elapsed, the physical Mesh ignores PhysicsBody until animation recovery restores its baseline;
+	 * WorldStatic and WorldDynamic remain blocking, so walls and floors still participate.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Protection",
+		meta = (ClampMin = "0.0", ClampMax = "0.5", UIMin = "0.05", UIMax = "0.25", Units = "s"))
+	float PhysicsBodyReleaseDelaySeconds = 0.15f;
+
+	/**
+	 * Protection duration after recovery from the Actor that committed the last impact.
+	 * A valid repeated request from that same source refreshes the deadline; other sources remain eligible.
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Protection",
+		meta = (ClampMin = "0.1", ClampMax = "10.0", UIMin = "0.5", UIMax = "4.0", Units = "s"))
+	float SameSourceProtectionSeconds = 0.75f;
+
 	/** Hard-bounded horizontal adjustment from the final physical pelvis position. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Placement",
 		meta = (ClampMin = "0.0", ClampMax = "60.0"))

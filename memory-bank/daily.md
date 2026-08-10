@@ -4,11 +4,15 @@
 
 ## 2026-08-10
 
+- 用户验收 HeavyImpact 当前受击起身主效果；后续细调另记，不回退本次已接受的 Snapshot → Montage 交接路线。
+- 实现防夹增量：真实 Chaos 接触保留 0.15 秒后，仅将角色物理网格对 PhysicsBody 改为 Ignore；WorldStatic/WorldDynamic 仍保持原碰撞，恢复完成时统一还原角色基线。
+- 恢复后仅屏蔽同一来源 Actor：玩家 0.75 秒、追猎者 3.0 秒；保护期内同来源重复请求返回 Busy 并刷新期限，其他机关来源仍可命中。
+- 官方 MCP 回读两份 DataAsset 非脏，玩家/追猎者 CharacterMesh0 均为 QueryOnly；HeavyImpact 自动化 5/5、短 PIE 与最终 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过。防夹场景仍待用户现场复测。
 - 用户否决落地后可见的全物理姿势准备/蠕动路线；实现改为正常空间稳定 0.10 秒后保存当前物理姿势，同步启动起身 Montage，并用单一 Alpha 在 0.22 秒内混入原有 DefaultSlot。
 - 删除 PreparingPose、恢复姿势 Sequence Evaluator、准备时间/控制比例、额外计时器和开发期切换开关；没有保留并行旧路线或失效修复代码。
 - 修正墙角搜索前置死锁：最终位置仍要求完整站立 Capsule 无重叠；骨盆正上方无站立空间时，允许最多 60 cm、且骨盆退让路径不穿墙的小范围找位。完全封闭时保持 Downed 并持续重试。
 - 玩家/AI AnimBP 均简化为 HeavyImpactDownedPose(A) + DefaultSlot(B) + HeavyImpactRecoveryBlendAlpha，warnings-as-errors 编译成功；两份 DataAsset 重启回读为 0.10/0.22 秒与 60/20 cm。
-- HeavyImpact 自动化 5/5、短 PIE 初始化与最终 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过；短 PIE 未自动形成真实摆锤命中，正反面、墙角和最终画面仍待用户现场验收。
+- HeavyImpact 自动化 5/5、短 PIE 初始化与 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过；主效果随后已由用户现场验收，新增防夹保护仍需摆锤夹持、墙角和恢复追逐复测。
 - 用户已授权恢复 `origin`，内部工蜂 baseline `3350b78c7708ca170ecb6641d32e240d57077f34` 已推送并远端核验；本轮最终实现按完整提交收口。
 
 ## 2026-08-09

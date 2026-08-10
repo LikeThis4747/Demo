@@ -173,7 +173,7 @@ protected:
 		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
-	/** 只用真实 Mesh Hit 提交预期机关接触，Downed 时允许真实动态刚体再次唤醒。 */
+	/** 只用真实 Mesh Hit 提交预期机关接触；Downed 时拒绝同一来源再次把恢复打断。 */
 	UFUNCTION()
 	void HandleMeshHit(
 		UPrimitiveComponent* HitComponent,
@@ -207,8 +207,20 @@ private:
 	/** 将预期刚体的真实接触提交为物理飞行，不补第二份冲量。 */
 	void CommitRealImpact(const FHitResult& Hit, const FVector& NormalImpulse);
 
-	/** 从 Downed 的真实动态刚体接触恢复物理求解，不补冲量。 */
-	void ResumeFromDownedHit(const FHitResult& Hit, const FVector& NormalImpulse);
+	/** 从 Downed 的另一真实动态刚体接触恢复物理求解，不补冲量。 */
+	void ResumeFromDownedHit(
+		AActor* SourceActor,
+		const FHitResult& Hit,
+		const FVector& NormalImpulse);
+
+	/** 首次真实冲量保留短暂接触后，只放开 PhysicsBody；墙和地面碰撞保持不变。 */
+	void ReleasePhysicsBodyCollisionIfDue();
+
+	/** Inactive 时拒绝并刷新上一次命中来源的保护期；其他来源不受影响。 */
+	bool RefreshSameSourceProtectionIfActive(AActor* RequestSourceActor);
+
+	/** 起身事务完成时从本次真实命中来源建立保护期。 */
+	void BeginSameSourceProtection();
 
 	/** 取消未提交的 Prepared，并恢复唯一允许使用受击前 Transform 的快照。 */
 	void CancelUncommittedPreparation(const TCHAR* Reason);
@@ -341,6 +353,12 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UPrimitiveComponent> ExpectedSourceComponent = nullptr;
 
+	/** 当前已提交物理事务的真实来源；从 Commit 保留到恢复完成。 */
+	TWeakObjectPtr<AActor> CommittedSourceActor;
+
+	/** 最近一次完成恢复后受保护的机关来源；弱引用不延长机关生命周期。 */
+	TWeakObjectPtr<AActor> ProtectedSourceActor;
+
 	FHeavyImpactPreparationRequest ActiveRequest;
 	FHeavyImpactFalsePositiveRollback FalsePositiveRollback;
 	FHeavyImpactRecoveryBaseline RecoveryBaseline;
@@ -370,6 +388,8 @@ private:
 	float ActorToPelvisZ = 0.0f;
 	float ActivePreparationTimeoutSeconds = 0.0f;
 	float RecoveryBlockedElapsedSeconds = 0.0f;
+	/** 同一来源保护的游戏世界截止时间；同一来源持续请求时刷新。 */
+	float SameSourceProtectionUntilSeconds = 0.0f;
 	float BodyFrontCalibrationSign = 1.0f;
 	/** 动态 Montage 的起始时间，单位秒。 */
 	float ActiveRecoveryAnimationStartTimeSeconds = 0.0f;
@@ -382,6 +402,8 @@ private:
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
 	bool bHardTimeoutReported = false;
+	/** 当前已提交事务是否已经放开 Mesh 对 PhysicsBody 的阻挡。 */
+	bool bPhysicsBodyCollisionReleased = false;
 	bool bPureRagdollComparisonActive = false;
 	bool bBodyFrontCalibrationValid = false;
 	bool bRecoveryOrientationWarningLogged = false;

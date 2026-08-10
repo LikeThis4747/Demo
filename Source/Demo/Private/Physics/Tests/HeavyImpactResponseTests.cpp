@@ -394,6 +394,10 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->LandingControl.MaxTorqueMultiplier, 3.5f);
 		TestEqual(TEXT("Downed reimpact threshold must reject residual contacts by default"),
 			Fixture.Tuning->MinimumDownedReimpactImpulse, 1000.0f);
+		TestEqual(TEXT("PhysicsBody contact release must preserve a short real-contact window"),
+			Fixture.Tuning->PhysicsBodyReleaseDelaySeconds, 0.15f);
+		TestEqual(TEXT("Player-class default same-source protection must remain explicit"),
+			Fixture.Tuning->SameSourceProtectionSeconds, 0.75f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error)))
 		{
@@ -533,6 +537,17 @@ namespace ZeroEscape::Physics::Tests
 		TestFalse(TEXT("Downed reimpact threshold must remain positive"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 		Fixture.Tuning->MinimumDownedReimpactImpulse = 1000.0f;
+
+		Fixture.Tuning->PhysicsBodyReleaseDelaySeconds =
+			Fixture.Tuning->MinimumSimulationSeconds + 0.01f;
+		TestFalse(TEXT("PhysicsBody release must occur before stability-based recovery can begin"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->PhysicsBodyReleaseDelaySeconds = 0.15f;
+
+		Fixture.Tuning->SameSourceProtectionSeconds = 0.0f;
+		TestFalse(TEXT("Same-source protection duration must remain positive"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->SameSourceProtectionSeconds = 0.75f;
 
 		Fixture.Tuning->RecoveryRetrySeconds =
 			std::numeric_limits<float>::quiet_NaN();

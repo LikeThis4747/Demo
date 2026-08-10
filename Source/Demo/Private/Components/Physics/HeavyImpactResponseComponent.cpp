@@ -468,6 +468,11 @@ EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 		return EHeavyImpactPrepareResult::Busy;
 	}
 
+	if (RefreshSameSourceProtectionIfActive(Request.SourceActor))
+	{
+		return EHeavyImpactPrepareResult::Busy;
+	}
+
 	FString FailureReason;
 	float AllowedMaximumSeconds = 0.0f;
 	if (!ValidatePreparationRequest(Request, FailureReason, AllowedMaximumSeconds))
@@ -631,6 +636,8 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 	ActivePreparationTimeoutSeconds = AllowedMaximumSeconds;
 	ExpectedSourceActor = Request.SourceActor;
 	ExpectedSourceComponent = Request.SourceComponent;
+	CommittedSourceActor.Reset();
+	bPhysicsBodyCollisionReleased = false;
 
 	Movement->StopMovementImmediately();
 	Movement->DisableMovement();
@@ -697,6 +704,11 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 {
 	if (State == EHeavyImpactState::Downed)
 	{
+		if (OtherActor == CommittedSourceActor.Get())
+		{
+			return;
+		}
+
 		if (IsValid(OtherActor)
 			&& OtherActor != GetOwner()
 			&& IsValid(OtherComponent)
@@ -704,7 +716,7 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 			&& NormalImpulse.SizeSquared()
 				>= FMath::Square(Tuning->MinimumDownedReimpactImpulse))
 		{
-			ResumeFromDownedHit(Hit, NormalImpulse);
+			ResumeFromDownedHit(OtherActor, Hit, NormalImpulse);
 		}
 		return;
 	}
@@ -749,6 +761,8 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 {
 	// Once real Chaos contact commits, no later path may access the pre-impact Actor transform.
 	FalsePositiveRollback.Reset();
+	CommittedSourceActor = ExpectedSourceActor;
+	bPhysicsBodyCollisionReleased = false;
 	const bool bPreparedCrossedFrameBoundary = GFrameCounter > PreparedEntryFrame;
 	if (!bPreparedCrossedFrameBoundary)
 	{
@@ -788,6 +802,7 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 
 /** 重新开启 Flight 约束和 PostPhysics 判稳；接触冲量已由 Chaos 传递。 */
 void UHeavyImpactResponseComponent::ResumeFromDownedHit(
+	AActor* SourceActor,
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
 {
@@ -796,12 +811,15 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	CancelRecoveryAsync(false);
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
+	CommittedSourceActor = SourceActor;
+	bPhysicsBodyCollisionReleased = false;
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
 	bHardTimeoutReported = false;
 	PhysicsControl->SetComponentTickEnabled(true);
 	SetState(EHeavyImpactState::Simulating);
 	SetComponentTickEnabled(true);
+	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
 	Mesh->WakeAllRigidBodies();
 
 	if (!ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
@@ -852,9 +870,75 @@ void UHeavyImpactResponseComponent::TickComponent(
 	if (State == EHeavyImpactState::Simulating || State == EHeavyImpactState::Settling)
 	{
 		TotalCommittedSeconds += DeltaTime;
+		ReleasePhysicsBodyCollisionIfDue();
 		UpdatePhysicalFollow(DeltaTime, false, State == EHeavyImpactState::Settling);
 		UpdateStability(DeltaTime);
 	}
+}
+
+/** 保留首个 Chaos 接触的真实冲量后，避免 PhysicsBody 持续夹持；静态/动态关卡几何不变。 */
+void UHeavyImpactResponseComponent::ReleasePhysicsBodyCollisionIfDue()
+{
+	if (bPhysicsBodyCollisionReleased
+		|| !IsValid(Mesh)
+		|| !IsValid(Tuning)
+		|| TotalCommittedSeconds < Tuning->PhysicsBodyReleaseDelaySeconds)
+	{
+		return;
+	}
+
+	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	bPhysicsBodyCollisionReleased = true;
+	UE_LOG(
+		LogHeavyImpact,
+		Verbose,
+		TEXT("HeavyImpact released PhysicsBody contact on %s after %.3f seconds; world geometry remains blocking."),
+		*GetNameSafe(GetOwner()),
+		TotalCommittedSeconds);
+}
+
+/** 同一机关仍在请求范围内时延长保护；过期、销毁或不同来源均不阻断新事务。 */
+bool UHeavyImpactResponseComponent::RefreshSameSourceProtectionIfActive(
+	AActor* RequestSourceActor)
+{
+	UWorld* World = GetWorld();
+	AActor* ProtectedActor = ProtectedSourceActor.Get();
+	if (!IsValid(World)
+		|| !IsValid(Tuning)
+		|| !IsValid(RequestSourceActor)
+		|| RequestSourceActor != ProtectedActor)
+	{
+		return false;
+	}
+
+	const float CurrentTimeSeconds = World->GetTimeSeconds();
+	if (CurrentTimeSeconds >= SameSourceProtectionUntilSeconds)
+	{
+		ProtectedSourceActor.Reset();
+		SameSourceProtectionUntilSeconds = 0.0f;
+		return false;
+	}
+
+	SameSourceProtectionUntilSeconds =
+		CurrentTimeSeconds + Tuning->SameSourceProtectionSeconds;
+	return true;
+}
+
+/** 从完成的真实事务建立同一来源保护；没有有效来源时明确清空旧保护。 */
+void UHeavyImpactResponseComponent::BeginSameSourceProtection()
+{
+	UWorld* World = GetWorld();
+	AActor* SourceActor = CommittedSourceActor.Get();
+	if (!IsValid(World) || !IsValid(Tuning) || !IsValid(SourceActor))
+	{
+		ProtectedSourceActor.Reset();
+		SameSourceProtectionUntilSeconds = 0.0f;
+		return;
+	}
+
+	ProtectedSourceActor = SourceActor;
+	SameSourceProtectionUntilSeconds =
+		World->GetTimeSeconds() + Tuning->SameSourceProtectionSeconds;
 }
 
 /** 将 Actor/Capsule 外壳跟到真实骨盆；只复制水平朝向，不复制 Pitch/Roll。 */
@@ -1701,7 +1785,9 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 		Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		Mesh->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
 		Mesh->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
-		Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+		Mesh->SetCollisionResponseToChannel(
+			ECC_PhysicsBody,
+			bPhysicsBodyCollisionReleased ? ECR_Ignore : ECR_Block);
 		Mesh->SetAllBodiesNotifyRigidBodyCollision(true);
 		InvokeRequiredProfile(Demo::HeavyImpact::ProfileFreeFallback);
 		Mesh->SetAllBodiesSimulatePhysics(true);
@@ -1910,6 +1996,8 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 		RestoreCharacterShell(RecoveryBaseline);
 	}
 
+	BeginSameSourceProtection();
+
 	CancelRecoveryAsync(bStopActiveMontage);
 	Movement->StopMovementImmediately();
 	Movement->Velocity = FVector::ZeroVector;
@@ -1927,9 +2015,11 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
+	CommittedSourceActor.Reset();
 	FalsePositiveRollback.Reset();
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
+	bPhysicsBodyCollisionReleased = false;
 	PhysicsControl->SetComponentTickEnabled(false);
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
@@ -2097,9 +2187,11 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 		ActiveRequest = FHeavyImpactPreparationRequest();
 		ExpectedSourceActor = nullptr;
 		ExpectedSourceComponent = nullptr;
+		CommittedSourceActor.Reset();
 		ActivePreparationTimeoutSeconds = 0.0f;
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
+		bPhysicsBodyCollisionReleased = false;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
 		return;
@@ -2124,11 +2216,13 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
+	CommittedSourceActor.Reset();
 	ActivePreparationTimeoutSeconds = 0.0f;
 	FalsePositiveRollback.Reset();
 	RecoveryBaseline.Reset();
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
+	bPhysicsBodyCollisionReleased = false;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
 }
