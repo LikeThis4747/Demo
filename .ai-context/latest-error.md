@@ -1,7 +1,7 @@
 # Latest Error
 
-- 当前没有未解决的机关 C++ 构建、正式链接、Blueprint 编译、官方 MCP、资产保存或 Level0 装配错误。
-- UHT、Demo `-NoLink` 和 Demo-only 正式链接均成功；两个机关 Blueprint warnings-as-errors 编译成功，三个机关资产与 Level0 均为非 Dirty。
-- 当前真实未闭合边界是未运行 PIE：肉眼可读性、移动目标命中率、急停/横移躲避、首碰后连续 Chaos 反弹和薄墙穿透仍未覆盖。CCD 只能降低穿透风险，不能在无实测时写成已解决。
-- Level0 视口只确认半幅端墙、正面 Launcher、保留通路与灯具移位的静态布局，不能替代运行时真实 BeginOverlap、弹道和碰撞验证。
-- Editor 启动日志中的分析器 DLL 缺失、Android SDK、UnifiedError/Automation 自测输出和一次旧 MCP Session 错误均与本机关实现无关；当前官方 MCP 正常。
+- 已解决：用户首次 PIE 中两个机关完全不触发。
+- 根因：Level0 两个旧摆放实例仍序列化 `Muzzle -> SceneRoot`；Blueprint 默认模板虽已是 `Muzzle -> AimPivot`，运行时实例仍命中严格父级校验并在绑定 Trigger 前进入 Disabled。
+- 修复：两个 Level0 实例已正式保存正确父级；C++ 增加旧实例层级自愈、最终复核和详细失败日志。
+- 验证：Demo `-NoLink` 和正式链接成功；定点 PIE 覆盖两个实例 `armed -> BeginOverlap -> warning -> fired`，无 disabled/failed，运行后资产非 Dirty。
+- 当前没有未解决的机关构建、链接、Blueprint、资产保存或触发链错误。仍未闭合的是用户画面/玩法验收与薄墙、反弹专项；不得把这部分写成已通过。

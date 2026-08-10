@@ -69,3 +69,12 @@
 - PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow，并形成跨层宏结构 + 逐层二维 WFC 的正式方向。
 - 追猎者 Timer 状态机、locomotion、Physics Control 局部受击、地刺、磁性抓取和玩家生命基础链路形成；当前受击与多层追逐仍需现版本验收。
 - 第三方 SFCorridors 仅只读筛选；任何删除仍需依赖闭包、精确清单与用户授权。
+
+<!-- written by shiqiqiwang at 2026-08-10 11:41 UTC -->
+
+### 2026-08-10 — 机关首次 PIE 触发回归
+
+- 用户报告机关完全不触发；日志确认两个 Launcher 在 BeginPlay 因旧关卡实例 Muzzle 父级错误而 Disabled。
+- 官方 MCP 修正并保存两个 Level0 实例为 Muzzle -> AimPivot；C++ 增加旧实例层级自愈。
+- Demo-only 编译/链接成功；定点 PIE 中两个实例均完成 armed、锁定、0.55 秒预警和 fired，无 disabled/failed。
+- 未完成用户画面与玩法验收，薄墙和连续反弹专项仍开放。

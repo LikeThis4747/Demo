@@ -261,12 +261,50 @@ bool AThrustGuidedHazardLauncher::CacheNeutralAssembly(FString& OutError)
 	bNeutralAssemblyCached = false;
 	if (!IsValid(AimPivot)
 		|| !IsValid(Muzzle)
-		|| !IsValid(ProjectileSpawnPoint)
-		|| Muzzle->GetAttachParent() != AimPivot
-		|| ProjectileSpawnPoint->GetAttachParent() != Muzzle)
+		|| !IsValid(ProjectileSpawnPoint))
 	{
-		OutError = TEXT("AimPivot -> Muzzle -> ProjectileSpawnPoint 原生层级无效。");
+		OutError = TEXT("AimPivot、Muzzle 或 ProjectileSpawnPoint 组件无效。");
 		return false;
+	}
+
+	USceneComponent* PreviousMuzzleParent = Muzzle->GetAttachParent();
+	USceneComponent* PreviousSpawnPointParent = ProjectileSpawnPoint->GetAttachParent();
+	const bool bMuzzleParentMismatch = PreviousMuzzleParent != AimPivot;
+	const bool bSpawnPointParentMismatch = PreviousSpawnPointParent != Muzzle;
+	if (bMuzzleParentMismatch || bSpawnPointParentMismatch)
+	{
+		// 该 Blueprint 早于原生层级重构创建，继承组件模板可能保留旧 AttachParent。
+		// 相对变换本身仍是作者约定（Muzzle=100cm、SpawnPoint=半高+Margin），
+		// 因此在运行时按 C++ 唯一合同恢复层级，而不是直接禁用整个机关。
+		const bool bMuzzleAttached = !bMuzzleParentMismatch
+			|| Muzzle->AttachToComponent(
+				AimPivot,
+				FAttachmentTransformRules::KeepRelativeTransform);
+		const bool bSpawnPointAttached = !bSpawnPointParentMismatch
+			|| ProjectileSpawnPoint->AttachToComponent(
+				Muzzle,
+				FAttachmentTransformRules::KeepRelativeTransform);
+		if (!bMuzzleAttached
+			|| !bSpawnPointAttached
+			|| Muzzle->GetAttachParent() != AimPivot
+			|| ProjectileSpawnPoint->GetAttachParent() != Muzzle)
+		{
+			OutError = FString::Printf(
+				TEXT("无法恢复 AimPivot -> Muzzle -> ProjectileSpawnPoint 层级。旧父级：Muzzle=%s，SpawnPoint=%s；当前父级：Muzzle=%s，SpawnPoint=%s。"),
+				*GetNameSafe(PreviousMuzzleParent),
+				*GetNameSafe(PreviousSpawnPointParent),
+				*GetNameSafe(Muzzle->GetAttachParent()),
+				*GetNameSafe(ProjectileSpawnPoint->GetAttachParent()));
+			return false;
+		}
+
+		UE_LOG(
+			LogThrustGuidedHazardLauncher,
+			Warning,
+			TEXT("Launcher %s repaired inherited aim hierarchy at runtime. Previous parents: Muzzle=%s SpawnPoint=%s."),
+			*GetNameSafe(this),
+			*GetNameSafe(PreviousMuzzleParent),
+			*GetNameSafe(PreviousSpawnPointParent));
 	}
 	if (!AimPivot->GetComponentScale().Equals(FVector::OneVector, KINDA_SMALL_NUMBER)
 		|| !Muzzle->GetComponentScale().Equals(FVector::OneVector, KINDA_SMALL_NUMBER)
