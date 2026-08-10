@@ -8,10 +8,11 @@
 - 磁力投掷物 P0 方案成文：只有正式 `ThrowHeldObject()` 后的第一次 Blocking Hit 才破碎；拉取、持有、普通放下和命中前重新抓取均不破碎，所有碎片经 Remove On Break 清空。
 - 官方 UE MCP 回读 `BP_MagneticProp` 为 20 kg 模拟物理静态网格刚体，使用第三方 `SM_crate4`；Blueprint 与源网格均非 Dirty。UE5.8 引擎接口确认初始速度、显式解簇和 Remove On Break 路径可用。
 - 新增 `DOC/DailyPlan/2026-08-10-磁力投掷物碰撞破碎实施计划.md` 和对应任务卡；本轮未修改 C++/UE 资产、未构建、未运行 PIE，功能实施仍待用户明确授权和完整 Git 基线门禁。
-- 壁挂式物理制导一次性机关完成稳定性重构：固定主 Thruster 前进、惯量感知真实转矩追踪、目标速度油门、完整出生胶囊净空和第一次阻挡接触立即停推；未抽取 HeavyImpact 公共层。
-- 默认机关 DataAsset 更新为质量 60 kg、目标速度 650 cm/s、最大受控加速度 900 cm/s²、受控时长 1.4 s；Launcher/Projectile Blueprint 以警告视为错误编译保存并逐字段回读，最终资产均非 Dirty。
-- Demo 模块无链接编译和最终完整链接成功；最终只链接 `UnrealEditor-Demo.lib/.dll`，没有编译 UE5.8 引擎。按用户要求未运行 PIE、未保存 Level0，画面、命中率、首碰停推与反弹仍待用户验收。
-- 新增 `DOC/DailyReport/2026-08-10-壁挂式物理制导机关稳定性重构实施记录.md`，对应 Review 已处理并归档。
+- 用户否决旧“短时推进、飞行中制导”表现后，壁挂式机关重构为预警期预测移动交点、炮管机械转向、一次质心冲量和发射后全程 Chaos；保留旧类名仅为资产兼容。
+- 默认机关更新为约 1000 cm/s、25 kg、22/45 cm 胶囊、0.55 秒预警、30/18 度机械限角，HeavyImpact 准备关闭；无 Thruster、ProjectileMovement、Actor Tick 或 Powered 控制。
+- Launcher/Projectile Blueprint 以警告视为错误编译保存，DataAsset 与组件树逐项回读；Level0 西端新增南半幅端墙并保留北侧通路，转角 Launcher 朝东正面迎击，出口灯移出默认弹道。
+- UHT、Demo 无链接编译和 Demo-only 正式链接成功，只更新 `UnrealEditor-Demo.dll`，没有编译 UE5.8 引擎；机关资产和 Level0 均非 Dirty。
+- 新增 `DOC/DailyReport/2026-08-10-狭窄走廊预判抛射Chaos机关实施报告.md`。按用户要求未运行 PIE，画面可读性、移动命中、躲避、反弹与薄墙穿透仍待用户验收。
 - 新增 `DOC/DailyReport/2026-08-10-重冲击阶段验收收口.md`；两份 HeavyImpact 任务卡及四份已完成/被取代的 DailyPlan 已归档，旧物理姿势整理稿明确标为禁止恢复。
 - 用户完成 HeavyImpact 最终阶段验收：真实摆锤击飞、提前 Snapshot → Montage 起身、恢复控制/追逐及同机关防夹均可接受；当前效果作为稳定基线，后续细调另记。
 - 实现防夹增量：真实 Chaos 接触保留 0.15 秒后，仅将角色物理网格对 PhysicsBody 改为 Ignore；WorldStatic/WorldDynamic 仍保持原碰撞，恢复完成时统一还原角色基线。

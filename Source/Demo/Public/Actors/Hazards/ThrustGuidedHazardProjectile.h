@@ -2,10 +2,10 @@
 
 /**
  * @file ThrustGuidedHazardProjectile.h
- * 职责：拥有一次发射的真实物理弹体、固定主 Thruster、短时姿态控制和重冲击准备预测。
- * 边界：不直接修改速度/Transform，不 AddImpulse，不决定玩家或追猎者受击结果。
- * 状态 Owner：本 Actor 唯一写入推进阶段、LaunchId、首次有效碰撞和每接收者通知集合。
- * 轴约定：胶囊局部 +Z 是弹体前向；UE5.8 UPhysicsThrusterComponent 局部 -X 是实际施力轴。
+ * 职责：拥有一次发射的唯一 Chaos 胶囊刚体、一次质心冲量、接触阶段和可选 HeavyImpact 准备。
+ * 边界：不使用 Thruster/ProjectileMovement，不 Tick、不追踪目标、不直接改写速度或 Transform。
+ * 状态 Owner：本 Actor 唯一写入 Ballistic/FreePhysics/Sleeping/Disabled、LaunchId 和接触去重状态。
+ * 轴约定：胶囊局部 +Z 是弹体长轴；SpawnTransform 会把它对齐发射器实际炮管方向。
  */
 
 #pragma once
@@ -17,93 +17,86 @@
 #include "ThrustGuidedHazardProjectile.generated.h"
 
 class UCapsuleComponent;
-class UPhysicsThrusterComponent;
 class UPrimitiveComponent;
 class USceneComponent;
 class USphereComponent;
 class UThrustGuidedHazardTuningData;
 struct FHeavyImpactPreparationRequest;
 
-/** 项目内部的物理制导弹体阶段，不是 UE 官方 ProjectileMovement 状态。 */
+/** 项目内部的纯 Chaos 弹体阶段，不是 UE 官方 ProjectileMovement 状态。 */
 enum class EThrustGuidedHazardProjectilePhase : uint8
 {
 	Uninitialized,
-	PoweredControlled,
-	Coasting,
+	Ballistic,
+	FreePhysics,
 	Sleeping,
 	Disabled
 };
 
-/** 用尾部真实施力完成短时制导，并在碰撞/计时后交给 Chaos 的一次性弹体。 */
+/** 接受一次初速度后始终由同一个 Chaos 刚体运动的一次性弹体。 */
 UCLASS()
 class DEMO_API AThrustGuidedHazardProjectile final : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	/** 装配胶囊刚体、直接子级 Thruster、预测球和纯美术挂点；默认不模拟、不 Tick。 */
+	/** 装配唯一物理胶囊、查询球和纯美术挂点；本 Actor 永不 Tick。 */
 	AThrustGuidedHazardProjectile();
 
-	/**
-	 * 延迟生成期间注入本次唯一配置、弱目标和 LaunchId。
-	 * 只保存输入，不启动物理；FinishSpawningActor 后由 BeginPlay 统一校验和启动。
-	 */
+	/** 延迟生成期间注入唯一配置、最终初速度和 LaunchId；BeginPlay 才统一启动物理。 */
 	void ConfigureLaunch(
 		UThrustGuidedHazardTuningData* InTuningData,
-		USceneComponent* InTargetComponent,
+		const FVector& InLaunchVelocity,
 		const FGuid& InLaunchId);
 
 protected:
-	/** 校验延迟生成合同，配置并启动刚体、Thruster、碰撞事件和预测 Timer。 */
+	/** 校验延迟生成合同，配置同一个刚体并施加一次质心冲量。 */
 	virtual void BeginPlay() override;
 
-	/** 仅在 PoweredControlled 更新推进计时、油门和真实物理姿态转矩。 */
-	virtual void Tick(float DeltaSeconds) override;
-
-	/** 清理碰撞/休眠/重叠委托、预测 Timer、目标和候选集合。 */
+	/** 清理碰撞/休眠/可选重冲击委托、Timer 和候选集合。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	/** Blueprint 可在首个有效阻挡接触时播放撞击声光；C++ 不依赖实现。 */
+	UFUNCTION(BlueprintImplementableEvent, Category = "机关|预判抛射|表现")
+	void ReceiveFirstBlockingImpact(
+		AActor* OtherActor,
+		FVector ImpactPoint,
+		FVector NormalImpulse);
+
 private:
-	/** 将 DataAsset 的胶囊、预测球和 Thruster 尾部位置写入组件。 */
+	/** 将 DataAsset 的胶囊和可选预测球尺寸写入组件；关闭 HeavyImpact 时不读取其字段。 */
 	void ApplyConfiguration(const UThrustGuidedHazardTuningData& Tuning);
 
-	/** 检查锁定目标及其组件仍属于同一有效 Actor。 */
-	bool IsLockedTargetUsable() const;
-
-	/** 计时、首碰、目标失效和安全异常统一进入该单向出口。 */
-	void FinishPoweredPhase(const TCHAR* Reason);
-
-	/** 计算预测目标方向和 0~1 油门，不写任何物理状态。 */
-	bool TryCalculateControlCommand(
-		FVector& OutDesiredDirection,
-		float& OutThrottle) const;
-
-	/** 把期望角加速度通过真实惯量张量换算为世界转矩。 */
-	bool ApplyPhysicalAttitudeControl(const FVector& DesiredDirection);
-
-	/** 启动 60 Hz 重冲击候选预测；Actor Tick 关闭后仍可在刚体醒着时工作。 */
+	/** 启动 60 Hz HeavyImpact 候选预测；开关关闭或刚体休眠时不工作。 */
 	void StartPreparationMonitoring();
 
-	/** 停止重冲击预测 Timer，但保留候选和已通知集合以支持后续物理唤醒。 */
+	/** 停止 HeavyImpact 预测 Timer。 */
 	void StopPreparationMonitoring();
 
-	/** 对当前重叠的 IHeavyImpactReceiver 估算 ETA，并按 Actor 独立发送一次准备请求。 */
+	/** 对当前重叠的 IHeavyImpactReceiver 估算带重力 ETA，并按 Actor 独立发送一次请求。 */
 	void EvaluatePreparationCandidates();
 
-	/** 用胶囊真实表面、接收者真实预测组件和相对速度构造准备请求。 */
+	/** 用胶囊真实表面、接收者预测组件、相对速度和世界重力构造准备请求。 */
 	bool BuildPreparationRequest(
 		const AActor& Receiver,
 		FHeavyImpactPreparationRequest& OutRequest);
+
+	/** 解 Gap = Closing*t + 0.5*GravityAlong*t^2，返回最早有限非负根。 */
+	static bool TryEstimateGravityAwareContactTime(
+		float SurfaceGap,
+		float ClosingSpeed,
+		float GravityAlongApproach,
+		float& OutTimeSeconds);
 
 	/** 返回从胶囊中心沿世界方向射线到当前胶囊表面的精确距离，单位 cm。 */
 	static float CalculateCapsuleRaySurfaceDistance(
 		const UCapsuleComponent& Capsule,
 		const FVector& WorldDirection);
 
-	/** 关闭所有动力和碰撞并记录明确错误；仅用于无法安全运行的生命周期/配置失败。 */
+	/** 关闭碰撞/模拟和全部本地能力并记录明确错误。 */
 	void DisableProjectile(const FString& Reason);
 
-	/** 记录每个 Chaos Hit；首次阻挡碰撞（包括出生穿透和 Launcher Owner）立即结束推进。 */
+	/** 记录每个 Chaos Hit；首次有效阻挡只切阶段/阻尼/表现，不改写速度。 */
 	UFUNCTION()
 	void HandleProjectileHit(
 		UPrimitiveComponent* HitComponent,
@@ -112,15 +105,15 @@ private:
 		FVector NormalImpulse,
 		const FHitResult& Hit);
 
-	/** 刚体从 Sleeping 被真实物理交互唤醒时恢复 Coasting 预测。 */
+	/** 休眠刚体被真实外力唤醒时恢复 FreePhysics 和可选准备采样。 */
 	UFUNCTION()
 	void HandleProjectileWake(UPrimitiveComponent* WakingComponent, FName BoneName);
 
-	/** Coasting 刚体休眠时停止预测 Timer，不销毁弹体。 */
+	/** Ballistic/FreePhysics 刚体休眠时停止准备 Timer，不销毁弹体。 */
 	UFUNCTION()
 	void HandleProjectileSleep(UPrimitiveComponent* SleepingComponent, FName BoneName);
 
-	/** 只登记进入预测球且实现 IHeavyImpactReceiver 的 Actor。 */
+	/** HeavyImpact 开启时登记进入 Query-only 预测球的接收者。 */
 	UFUNCTION()
 	void HandlePreparationVolumeBeginOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -130,7 +123,7 @@ private:
 		bool bFromSweep,
 		const FHitResult& SweepResult);
 
-	/** Actor 的最后一个组件离开预测球后移除候选，避免 Capsule/Mesh 交替造成漏通知。 */
+	/** Actor 的最后一个组件离开预测球后移除候选。 */
 	UFUNCTION()
 	void HandlePreparationVolumeEndOverlap(
 		UPrimitiveComponent* OverlappedComponent,
@@ -138,31 +131,23 @@ private:
 		UPrimitiveComponent* OtherComponent,
 		int32 OtherBodyIndex);
 
-	/** 唯一模拟物理的根胶囊；局部 +Z 是弹体纵轴，阻挡世界和 PhysicsBody。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
+	/** 唯一模拟物理的根胶囊；局部 +Z 是长轴，阻挡世界、PhysicsBody 和 Pawn。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|预判抛射",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCapsuleComponent> ProjectileBody;
 
-	/**
-	 * 必须直接附着 ProjectileBody；UE5.8 Thruster 只向直接父 UPrimitiveComponent 施力。
-	 * 组件固定在局部 -Z 尾部，局部 -X 映射到弹体 +Z；运行期不再偏转喷口。
-	 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
-		meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UPhysicsThrusterComponent> Thruster;
-
-	/** ProjectileBody 下的纯美术挂点；Blueprint 装配气罐/导弹网格且网格碰撞必须关闭。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
+	/** ProjectileBody 下的纯美术挂点；Blueprint 网格碰撞必须关闭。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|预判抛射",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> BodyVisualRoot;
 
-	/** Thruster 下的纯美术尾焰挂点；随喷口偏转，C++ 只控制可见性。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导",
+	/** ProjectileBody 下的尾迹/烟迹挂点；仅辅助阅读方向，不代表持续推进。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|预判抛射",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> ExhaustVisualRoot;
 
-	/** 随弹体移动的 Query-only Pawn 预测球；不阻挡、不施力、不影响导航。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|物理制导|重冲击",
+	/** 可选 HeavyImpact 的 Query-only Pawn 预测球；关闭开关时始终 NoCollision。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|重冲击",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> PreparationVolume;
 
@@ -170,37 +155,34 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UThrustGuidedHazardTuningData> RuntimeTuningData;
 
-	/** 推进阶段弱引用的目标组件；首碰、目标失效或推进结束时清空。 */
-	TWeakObjectPtr<USceneComponent> LockedTargetComponent;
+	/** 发射器冻结的最终世界初速度；BeginPlay 施加一次后不再由代码修改。 */
+	FVector PendingLaunchVelocity = FVector::ZeroVector;
 
-	/** 与 LockedTargetComponent 对应的 Actor，用于拒绝组件易主或销毁。 */
-	TWeakObjectPtr<AActor> LockedTargetActor;
-
-	/** 本次发射的稳定 ID；用于日志和每个 HeavyImpact 接收者的独立去重。 */
+	/** 本次发射稳定 ID，用于日志和可选 HeavyImpact 接收者去重。 */
 	FGuid LaunchId;
 
-	/** 当前阶段，只由本 Actor 生命周期、Tick、Hit 和 Wake/Sleep 回调写入。 */
+	/** 当前阶段，只由生命周期、Hit 和 Wake/Sleep 回调写入。 */
 	EThrustGuidedHazardProjectilePhase Phase =
 		EThrustGuidedHazardProjectilePhase::Uninitialized;
 
-	/** 推进开始后累计秒数；首次阻挡碰撞会立即结束推进。 */
-	float PoweredElapsedSeconds = 0.0f;
-
-	/** ConfigureLaunch 已被延迟生成调用；BeginPlay 仍会分别校验每个输入。 */
+	/** ConfigureLaunch 是否在 FinishSpawningActor 前完整注入。 */
 	bool bLaunchConfigured = false;
 
-	/** 本次是否已经出现首次阻挡碰撞；之后仍完整记录并允许真实重复接触。 */
+	/** 本次是否已经出现首个有效阻挡；之后仍完整记录真实重复接触。 */
 	bool bHadMeaningfulBlockingContact = false;
 
-	/** 本次弹体每个 OnComponentHit 回调的递增序号，只用于诊断 Chaos 接触序列。 */
+	/** 是否已按 HeavyImpact 开关绑定预测球委托；EndPlay 只清理真实绑定。 */
+	bool bPreparationBindingsActive = false;
+
+	/** 每个 OnComponentHit 回调的递增序号，只用于诊断 Chaos 接触序列。 */
 	uint32 ContactSequence = 0;
 
-	/** 当前仍与预测球重叠、且实现 IHeavyImpactReceiver 的 Actor。 */
+	/** 当前与预测球重叠且实现 IHeavyImpactReceiver 的 Actor。 */
 	TSet<TWeakObjectPtr<AActor>> PreparationCandidates;
 
 	/** 本次 LaunchId 已返回 Accepted/Duplicate 的接收者；Busy/Invalid 会继续重试。 */
 	TSet<TWeakObjectPtr<AActor>> NotifiedReceiversThisLaunch;
 
-	/** 醒着时以 60 Hz 采样的重冲击预测 Timer；不负责推进或制导。 */
+	/** 醒着且 HeavyImpact 开启时以 60 Hz 采样的准备 Timer。 */
 	FTimerHandle PreparationTimerHandle;
 };

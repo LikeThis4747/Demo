@@ -1,7 +1,7 @@
 # Latest Error
 
-- 当前没有未解决的机关 C++ 构建、Blueprint 编译、官方 MCP、资产保存或 Git 范围错误。
-- 本轮无链接构建曾因 UHT 不识别属性显示单位 `rad/s^2` 失败；移除该显示元数据后，无链接与最终 Demo-only 链接均成功。该错误已解决，不涉及运行逻辑。
-- Editor 重启期间官方 MCP 曾短暂连接失败，端口恢复后资产写入、编译、保存和回读均成功；不是当前阻塞。
-- 按用户要求未运行 PIE，因此“是否肉眼可读、实际命中率、首次接触停推、后续反弹是否仍穿墙”均是尚未覆盖的运行验收，不应写成已通过。
-- 未来若更换 Launcher 外壳/炮管或由 PCG 装配，必须保证物理碰撞启用且真实阻挡 ProjectileBody；极端超过约 90° 的大转向仍可能触发速度安全停机，出现稳定复现后再作为调参或逻辑问题记录。
+- 当前没有未解决的机关 C++ 构建、正式链接、Blueprint 编译、官方 MCP、资产保存或 Level0 装配错误。
+- UHT、Demo `-NoLink` 和 Demo-only 正式链接均成功；两个机关 Blueprint warnings-as-errors 编译成功，三个机关资产与 Level0 均为非 Dirty。
+- 当前真实未闭合边界是未运行 PIE：肉眼可读性、移动目标命中率、急停/横移躲避、首碰后连续 Chaos 反弹和薄墙穿透仍未覆盖。CCD 只能降低穿透风险，不能在无实测时写成已解决。
+- Level0 视口只确认半幅端墙、正面 Launcher、保留通路与灯具移位的静态布局，不能替代运行时真实 BeginOverlap、弹道和碰撞验证。
+- Editor 启动日志中的分析器 DLL 缺失、Android SDK、UnifiedError/Automation 自测输出和一次旧 MCP Session 错误均与本机关实现无关；当前官方 MCP 正常。

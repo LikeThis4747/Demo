@@ -2,9 +2,8 @@
 
 /**
  * @file ThrustGuidedHazardProjectile.cpp
- * 职责：用尾部 UPhysicsThrusterComponent 的真实施力完成短时制导，并让碰撞后的路线完全服从 Chaos。
- * 边界：不用 UProjectileMovementComponent，不直接写速度/角速度/Transform，不补冲量，不做碰撞抖动过滤。
- * 轴约定：胶囊 +Z 是弹体前向；UE5.8 PhysicsThruster.cpp 固定沿组件局部 -X 向直接父刚体施力。
+ * 职责：实现一次质心冲量启动的唯一 Chaos 胶囊刚体、连续接触阶段和可选 HeavyImpact 准备。
+ * 边界：不使用 Thruster/ProjectileMovement，不 Tick、不追踪目标，不改写飞行中速度或 Transform。
  */
 
 #include "Actors/Hazards/ThrustGuidedHazardProjectile.h"
@@ -18,14 +17,13 @@
 #include "Interfaces/HeavyImpactReceiver.h"
 #include "Physics/HeavyImpactTypes.h"
 #include "PhysicsEngine/BodyInstance.h"
-#include "PhysicsEngine/PhysicsThrusterComponent.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogThrustGuidedHazardProjectile, Log, All);
 
 namespace ThrustGuidedHazardProjectile
 {
-	/** 重冲击准备只做短距离 ETA 采样，不承担推进或物理仿真。 */
+	/** 重冲击准备只做短距离 ETA 采样，不承担弹体运动。 */
 	constexpr float PreparationSampleIntervalSeconds = 1.0f / 60.0f;
 
 	/** 严重掉帧时允许的最大准备帧数，与现有 HeavyImpact 发送端语义一致。 */
@@ -34,14 +32,14 @@ namespace ThrustGuidedHazardProjectile
 	/** 帧感知准备窗口绝对上限，避免一次卡顿造成长期提前接管。 */
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 
+	/** 发射器和弹体各自推导初速时允许的浮点差异，单位 cm/s。 */
+	constexpr float MinimumLaunchSpeedTolerance = 1.0f;
 }
 
-/** 创建唯一物理胶囊、直接子级 Thruster、查询球和纯美术挂点。 */
+/** 创建唯一物理胶囊、查询球和两个纯美术挂点。 */
 AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 {
-	PrimaryActorTick.bCanEverTick = true;
-	PrimaryActorTick.bStartWithTickEnabled = false;
-	PrimaryActorTick.TickGroup = TG_PrePhysics;
+	PrimaryActorTick.bCanEverTick = false;
 
 	ProjectileBody = CreateDefaultSubobject<UCapsuleComponent>(TEXT("ProjectileBody"));
 	ProjectileBody->SetMobility(EComponentMobility::Movable);
@@ -63,22 +61,11 @@ AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 	ProjectileBody->BodyInstance.bGenerateWakeEvents = true;
 	SetRootComponent(ProjectileBody);
 
-	Thruster = CreateDefaultSubobject<UPhysicsThrusterComponent>(TEXT("Thruster"));
-	Thruster->SetupAttachment(ProjectileBody);
-	Thruster->SetMobility(EComponentMobility::Movable);
-	Thruster->SetAutoActivate(false);
-	Thruster->PrimaryComponentTick.bStartWithTickEnabled = false;
-	Thruster->SetComponentTickEnabled(false);
-	Thruster->ThrustStrength = 0.0f;
-
-	// Thruster 与 Actor 都在 PrePhysics；此依赖保证先更新喷口，再由组件施力。
-	Thruster->AddTickPrerequisiteActor(this);
-
 	BodyVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("BodyVisualRoot"));
 	BodyVisualRoot->SetupAttachment(ProjectileBody);
 
 	ExhaustVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("ExhaustVisualRoot"));
-	ExhaustVisualRoot->SetupAttachment(Thruster);
+	ExhaustVisualRoot->SetupAttachment(ProjectileBody);
 	ExhaustVisualRoot->SetVisibility(false, true);
 
 	PreparationVolume = CreateDefaultSubobject<USphereComponent>(TEXT("PreparationVolume"));
@@ -94,10 +81,10 @@ AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 	ApplyConfiguration(*GetDefault<UThrustGuidedHazardTuningData>());
 }
 
-/** 延迟生成阶段只保存输入，禁止绕过 BeginPlay 的统一物理启动顺序。 */
+/** 延迟生成阶段只保存冻结初速度；FinishSpawningActor 后由 BeginPlay 唯一启动物理。 */
 void AThrustGuidedHazardProjectile::ConfigureLaunch(
 	UThrustGuidedHazardTuningData* InTuningData,
-	USceneComponent* InTargetComponent,
+	const FVector& InLaunchVelocity,
 	const FGuid& InLaunchId)
 {
 	if (HasActorBegunPlay())
@@ -112,18 +99,14 @@ void AThrustGuidedHazardProjectile::ConfigureLaunch(
 
 	bLaunchConfigured = true;
 	RuntimeTuningData = InTuningData;
-	LockedTargetComponent = InTargetComponent;
-	LockedTargetActor = IsValid(InTargetComponent)
-		? InTargetComponent->GetOwner()
-		: nullptr;
+	PendingLaunchVelocity = InLaunchVelocity;
 	LaunchId = InLaunchId;
 }
 
-/** 统一校验配置、直接附着合同和单位缩放，再启动真实刚体与短时推进。 */
+/** 校验延迟生成合同并让同一个 Chaos 刚体从真实质心获得一次初始冲量。 */
 void AThrustGuidedHazardProjectile::BeginPlay()
 {
 	Super::BeginPlay();
-	SetActorTickEnabled(false);
 	Phase = EThrustGuidedHazardProjectilePhase::Uninitialized;
 
 	if (!bLaunchConfigured)
@@ -157,9 +140,51 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		return;
 	}
 
-	if (Thruster->GetAttachParent() != ProjectileBody)
+	UWorld* World = GetWorld();
+	if (!IsValid(World))
 	{
-		DisableProjectile(TEXT("Thruster 必须直接附着 ProjectileBody，否则 UE5.8 不会向刚体施力。"));
+		DisableProjectile(TEXT("弹体没有有效 World。"));
+		return;
+	}
+
+	const float GravityMagnitude = FMath::Abs(World->GetGravityZ());
+	const float ReferenceAngleRadians = FMath::DegreesToRadians(
+		RuntimeTuningData->PreferredLaunchAngleDegrees);
+	const float SinDoubleAngle = FMath::Sin(2.0f * ReferenceAngleRadians);
+	if (!FMath::IsFinite(GravityMagnitude)
+		|| GravityMagnitude <= KINDA_SMALL_NUMBER
+		|| !FMath::IsFinite(SinDoubleAngle)
+		|| SinDoubleAngle <= KINDA_SMALL_NUMBER)
+	{
+		DisableProjectile(TEXT("World 重力或参考发射角无法推导有限初速。"));
+		return;
+	}
+
+	const float ExpectedLaunchSpeed = FMath::Sqrt(
+		GravityMagnitude * RuntimeTuningData->ReferenceRange / SinDoubleAngle);
+	const float PendingLaunchSpeed = PendingLaunchVelocity.Size();
+	const float LaunchSpeedTolerance = FMath::Max(
+		ThrustGuidedHazardProjectile::MinimumLaunchSpeedTolerance,
+		ExpectedLaunchSpeed * 0.001f);
+	if (PendingLaunchVelocity.ContainsNaN()
+		|| !FMath::IsFinite(PendingLaunchSpeed)
+		|| PendingLaunchSpeed <= KINDA_SMALL_NUMBER
+		|| !FMath::IsFinite(ExpectedLaunchSpeed)
+		|| !FMath::IsNearlyEqual(
+			PendingLaunchSpeed,
+			ExpectedLaunchSpeed,
+			LaunchSpeedTolerance))
+	{
+		DisableProjectile(FString::Printf(
+			TEXT("冻结初速度无效或与设计初速不一致。Pending=%.3f Expected=%.3f。"),
+			PendingLaunchSpeed,
+			ExpectedLaunchSpeed));
+		return;
+	}
+
+	if (!ProjectileBody->GetComponentTransform().IsValid())
+	{
+		DisableProjectile(TEXT("ProjectileBody 出生 Transform 无效。"));
 		return;
 	}
 
@@ -174,117 +199,75 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	ProjectileBody->OnComponentSleep.AddDynamic(
 		this,
 		&AThrustGuidedHazardProjectile::HandleProjectileSleep);
-	PreparationVolume->OnComponentBeginOverlap.AddDynamic(
-		this,
-		&AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap);
-	PreparationVolume->OnComponentEndOverlap.AddDynamic(
-		this,
-		&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
 
-	ProjectileBody->SetLinearDamping(RuntimeTuningData->PoweredLinearDamping);
-	ProjectileBody->SetAngularDamping(RuntimeTuningData->PoweredAngularDamping);
+	if (RuntimeTuningData->bEnableHeavyImpactPreparation)
+	{
+		PreparationVolume->OnComponentBeginOverlap.AddDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap);
+		PreparationVolume->OnComponentEndOverlap.AddDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
+		bPreparationBindingsActive = true;
+	}
+
+	bHadMeaningfulBlockingContact = false;
+	ContactSequence = 0;
+	PreparationCandidates.Reset();
+	NotifiedReceiversThisLaunch.Reset();
+
 	ProjectileBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
-	PreparationVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	ProjectileBody->SetSimulatePhysics(true);
 	ProjectileBody->SetMassOverrideInKg(
 		NAME_None,
 		RuntimeTuningData->ProjectileMassKilograms,
 		true);
-	ProjectileBody->SetEnableGravity(!RuntimeTuningData->bDisableGravityWhilePowered);
+	ProjectileBody->SetEnableGravity(true);
+	// SuggestProjectileVelocity 假设无空气阻力；离膛阶段线性阻尼固定为零以保持求解合同。
+	ProjectileBody->SetLinearDamping(0.0f);
+	ProjectileBody->SetAngularDamping(RuntimeTuningData->BallisticAngularDamping);
+	ProjectileBody->SetUseCCD(true);
 	ProjectileBody->WakeAllRigidBodies();
 
-	PoweredElapsedSeconds = 0.0f;
-	bHadMeaningfulBlockingContact = false;
-	ContactSequence = 0;
-	PreparationCandidates.Reset();
-	NotifiedReceiversThisLaunch.Reset();
-	Phase = EThrustGuidedHazardProjectilePhase::PoweredControlled;
+	const float ActualMass = ProjectileBody->GetMass();
+	if (!FMath::IsFinite(ActualMass) || ActualMass <= KINDA_SMALL_NUMBER)
+	{
+		DisableProjectile(TEXT("ProjectileBody 无法得到有限正质量。"));
+		return;
+	}
 
-	Thruster->Activate(true);
-	Thruster->SetComponentTickEnabled(true);
+	Phase = EThrustGuidedHazardProjectilePhase::Ballistic;
+	ProjectileBody->AddImpulse(
+		PendingLaunchVelocity * ActualMass,
+		NAME_None,
+		false);
 	ExhaustVisualRoot->SetVisibility(true, true);
-	SetActorTickEnabled(true);
-	StartPreparationMonitoring();
 
-	const FVector InitialVelocity = ProjectileBody->GetPhysicsLinearVelocity();
+	if (RuntimeTuningData->bEnableHeavyImpactPreparation)
+	{
+		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		StartPreparationMonitoring();
+	}
+
 	UE_LOG(
 		LogThrustGuidedHazardProjectile,
 		Display,
-		TEXT("Projectile %s started LaunchId=%s Data=%s Mass=%.2f MaxAccel=%.2f TargetSpeed=%.2f MaxSpeed=%.2f Location=%s InitialVelocity=%s."),
+		TEXT("Projectile %s started LaunchId=%s Data=%s Mass=%.2f LaunchVelocity=%s HeavyImpact=%s Location=%s."),
 		*GetNameSafe(this),
 		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		*GetPathNameSafe(RuntimeTuningData),
-		ProjectileBody->GetMass(),
-		RuntimeTuningData->MaximumPoweredAcceleration,
-		RuntimeTuningData->TargetPoweredSpeed,
-		RuntimeTuningData->MaximumPoweredSpeed,
-		*ProjectileBody->GetComponentLocation().ToCompactString(),
-		*InitialVelocity.ToCompactString());
-
-	if (!IsLockedTargetUsable())
-	{
-		FinishPoweredPhase(TEXT("target invalid at BeginPlay"));
-	}
+		ActualMass,
+		*PendingLaunchVelocity.ToCompactString(),
+		RuntimeTuningData->bEnableHeavyImpactPreparation ? TEXT("true") : TEXT("false"),
+		*ProjectileBody->GetComponentLocation().ToCompactString());
 }
 
-/** 推进期先更新油门和姿态转矩；固定 Thruster 随后在同一 PrePhysics 帧施力。 */
-void AThrustGuidedHazardProjectile::Tick(const float DeltaSeconds)
-{
-	Super::Tick(DeltaSeconds);
-
-	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredControlled)
-	{
-		return;
-	}
-
-	if (!IsValid(RuntimeTuningData)
-		|| !FMath::IsFinite(DeltaSeconds)
-		|| DeltaSeconds <= 0.0f)
-	{
-		FinishPoweredPhase(TEXT("invalid powered tick input"));
-		return;
-	}
-
-	PoweredElapsedSeconds += DeltaSeconds;
-	if (PoweredElapsedSeconds >= RuntimeTuningData->PoweredDurationSeconds)
-	{
-		FinishPoweredPhase(TEXT("powered timeout"));
-		return;
-	}
-
-	if (!IsLockedTargetUsable())
-	{
-		FinishPoweredPhase(TEXT("locked target became invalid"));
-		return;
-	}
-
-	FVector DesiredDirection = FVector::ZeroVector;
-	float Throttle = 0.0f;
-	if (!TryCalculateControlCommand(DesiredDirection, Throttle)
-		|| !ApplyPhysicalAttitudeControl(DesiredDirection))
-	{
-		FinishPoweredPhase(TEXT("control command became invalid or exceeded safety speed"));
-		return;
-	}
-
-	const float ActualMass = ProjectileBody->GetMass();
-	if (!FMath::IsFinite(ActualMass) || ActualMass <= 0.0f)
-	{
-		FinishPoweredPhase(TEXT("rigid body mass became invalid"));
-		return;
-	}
-
-	Thruster->ThrustStrength =
-		ActualMass
-		* RuntimeTuningData->MaximumPoweredAcceleration
-		* FMath::Clamp(Throttle, 0.0f, 1.0f);
-}
-
-/** 清理全部本地委托、Timer 和弱引用；不会操作 Owner、角色或关卡。 */
+/** 清理所有真实绑定、Timer 和运行时集合；不依赖 Actor Tick。 */
 void AThrustGuidedHazardProjectile::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
 	StopPreparationMonitoring();
+	Phase = EThrustGuidedHazardProjectilePhase::Disabled;
 
 	if (IsValid(ProjectileBody))
 	{
@@ -298,7 +281,8 @@ void AThrustGuidedHazardProjectile::EndPlay(
 			this,
 			&AThrustGuidedHazardProjectile::HandleProjectileSleep);
 	}
-	if (IsValid(PreparationVolume))
+
+	if (bPreparationBindingsActive && IsValid(PreparationVolume))
 	{
 		PreparationVolume->OnComponentBeginOverlap.RemoveDynamic(
 			this,
@@ -306,17 +290,27 @@ void AThrustGuidedHazardProjectile::EndPlay(
 		PreparationVolume->OnComponentEndOverlap.RemoveDynamic(
 			this,
 			&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
+		bPreparationBindingsActive = false;
 	}
 
-	LockedTargetComponent.Reset();
-	LockedTargetActor.Reset();
+	if (IsValid(PreparationVolume))
+	{
+		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (IsValid(ExhaustVisualRoot))
+	{
+		ExhaustVisualRoot->SetVisibility(false, true);
+	}
+
 	PreparationCandidates.Reset();
 	NotifiedReceiversThisLaunch.Reset();
+	RuntimeTuningData = nullptr;
+	PendingLaunchVelocity = FVector::ZeroVector;
 
 	Super::EndPlay(EndPlayReason);
 }
 
-/** 胶囊 +Z 是纵轴，Thruster 位于 -Z 尾端，默认把自身 -X 力轴映射到胶囊 +Z。 */
+/** 配置唯一胶囊；HeavyImpact 关闭时不读取其半径或时间字段。 */
 void AThrustGuidedHazardProjectile::ApplyConfiguration(
 	const UThrustGuidedHazardTuningData& Tuning)
 {
@@ -324,297 +318,26 @@ void AThrustGuidedHazardProjectile::ApplyConfiguration(
 		Tuning.ProjectileRadius,
 		Tuning.ProjectileHalfHeight,
 		true);
-	PreparationVolume->SetSphereRadius(
-		Tuning.PreparationLookAheadDistance,
-		true);
 
-	const FQuat NeutralThrusterRotation =
-		FQuat::FindBetweenNormals(FVector(-1.0f, 0.0f, 0.0f), FVector::UpVector);
-	Thruster->SetRelativeLocationAndRotation(
-		FVector(0.0f, 0.0f, -Tuning.ProjectileHalfHeight),
-		NeutralThrusterRotation,
-		false,
-		nullptr,
-		ETeleportType::None);
-	// BeginPlay/Tick 验证完成前绝不保留资产或 CDO 的旧推力。
-	Thruster->ThrustStrength = 0.0f;
+	if (Tuning.bEnableHeavyImpactPreparation)
+	{
+		PreparationVolume->SetSphereRadius(
+			Tuning.PreparationLookAheadDistance,
+			true);
+	}
+	else
+	{
+		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
 }
 
-/** 目标组件必须仍有效、已注册且仍属于锁定 Actor；不按玩家/AI 类型分支。 */
-bool AThrustGuidedHazardProjectile::IsLockedTargetUsable() const
-{
-	const USceneComponent* TargetComponent = LockedTargetComponent.Get();
-	const AActor* TargetActor = LockedTargetActor.Get();
-	return IsValid(TargetComponent)
-		&& IsValid(TargetActor)
-		&& TargetComponent->IsRegistered()
-		&& TargetComponent->GetOwner() == TargetActor;
-}
-
-/** 受控阶段的唯一出口；不改速度，只撤销施力并切换为低阻尼 Chaos 自由运动。 */
-void AThrustGuidedHazardProjectile::FinishPoweredPhase(const TCHAR* Reason)
-{
-	if (Phase != EThrustGuidedHazardProjectilePhase::PoweredControlled)
-	{
-		return;
-	}
-
-	FVector LinearVelocity = FVector::ZeroVector;
-	FVector BodyForward = FVector::UpVector;
-	if (IsValid(ProjectileBody))
-	{
-		LinearVelocity = ProjectileBody->GetPhysicsLinearVelocity();
-		BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
-	}
-	const float ForwardSpeed =
-		FVector::DotProduct(LinearVelocity, BodyForward);
-	const float LateralSpeed =
-		(LinearVelocity - BodyForward * ForwardSpeed).Size();
-	float AppliedThrottle = 0.0f;
-	if (IsValid(Thruster)
-		&& IsValid(ProjectileBody)
-		&& IsValid(RuntimeTuningData))
-	{
-		const float FullThrust =
-			ProjectileBody->GetMass()
-			* RuntimeTuningData->MaximumPoweredAcceleration;
-		if (FMath::IsFinite(FullThrust) && FullThrust > KINDA_SMALL_NUMBER)
-		{
-			AppliedThrottle = FMath::Clamp(
-				Thruster->ThrustStrength / FullThrust,
-				0.0f,
-				1.0f);
-		}
-	}
-
-	Phase = EThrustGuidedHazardProjectilePhase::Coasting;
-	LockedTargetComponent.Reset();
-	LockedTargetActor.Reset();
-
-	if (IsValid(Thruster))
-	{
-		Thruster->ThrustStrength = 0.0f;
-		Thruster->Deactivate();
-		Thruster->SetComponentTickEnabled(false);
-	}
-	if (IsValid(ExhaustVisualRoot))
-	{
-		ExhaustVisualRoot->SetVisibility(false, true);
-	}
-	if (IsValid(ProjectileBody))
-	{
-		ProjectileBody->SetEnableGravity(true);
-		if (IsValid(RuntimeTuningData))
-		{
-			ProjectileBody->SetLinearDamping(
-				RuntimeTuningData->CoastingLinearDamping);
-			ProjectileBody->SetAngularDamping(
-				RuntimeTuningData->CoastingAngularDamping);
-		}
-	}
-	SetActorTickEnabled(false);
-
-	UE_LOG(
-		LogThrustGuidedHazardProjectile,
-		Display,
-		TEXT("LaunchId=%s powered phase finished after %.3f s: %s; TotalSpeed=%.2f ForwardSpeed=%.2f LateralSpeed=%.2f Throttle=%.3f Contact=%u; Chaos owns motion."),
-		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-		PoweredElapsedSeconds,
-		Reason != nullptr ? Reason : TEXT("unspecified"),
-		LinearVelocity.Size(),
-		ForwardSpeed,
-		LateralSpeed,
-		AppliedThrottle,
-		ContactSequence);
-}
-
-/** 动态前置只决定期望朝向；油门按有符号前向速度自然收小。 */
-bool AThrustGuidedHazardProjectile::TryCalculateControlCommand(
-	FVector& OutDesiredDirection,
-	float& OutThrottle) const
-{
-	OutDesiredDirection = FVector::ZeroVector;
-	OutThrottle = 0.0f;
-
-	if (!IsLockedTargetUsable()
-		|| !IsValid(RuntimeTuningData)
-		|| !IsValid(ProjectileBody))
-	{
-		return false;
-	}
-
-	const USceneComponent* TargetComponent = LockedTargetComponent.Get();
-	const FVector BodyCenter = ProjectileBody->GetCenterOfMass();
-	const FVector BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
-	const FVector BodyVelocity = ProjectileBody->GetPhysicsLinearVelocity();
-	const FVector TargetLocation = TargetComponent->GetComponentLocation();
-	const FVector TargetVelocity = TargetComponent->GetComponentVelocity();
-	if (BodyCenter.ContainsNaN()
-		|| BodyForward.IsNearlyZero()
-		|| BodyForward.ContainsNaN()
-		|| BodyVelocity.ContainsNaN()
-		|| TargetLocation.ContainsNaN()
-		|| TargetVelocity.ContainsNaN())
-	{
-		return false;
-	}
-
-	const float ForwardSpeed =
-		FVector::DotProduct(BodyVelocity, BodyForward);
-	const FVector LateralVelocity =
-		BodyVelocity - BodyForward * ForwardSpeed;
-	const float LateralSpeed = LateralVelocity.Size();
-	const float TotalSpeed = BodyVelocity.Size();
-	const float ComponentLimit = RuntimeTuningData->MaximumPoweredSpeed;
-	const float EmergencyTotalLimit =
-		RuntimeTuningData->MaximumPoweredSpeed
-		+ RuntimeTuningData->SpeedControlBand;
-	if (!FMath::IsFinite(ForwardSpeed)
-		|| !FMath::IsFinite(LateralSpeed)
-		|| !FMath::IsFinite(TotalSpeed))
-	{
-		return false;
-	}
-
-	const TCHAR* SafetyReason = nullptr;
-	if (FMath::Abs(ForwardSpeed) >= ComponentLimit)
-	{
-		SafetyReason = TEXT("forward component limit");
-	}
-	else if (LateralSpeed >= ComponentLimit)
-	{
-		SafetyReason = TEXT("lateral component limit");
-	}
-	else if (TotalSpeed >= EmergencyTotalLimit)
-	{
-		SafetyReason = TEXT("combined total speed limit");
-	}
-	if (SafetyReason != nullptr)
-	{
-		UE_LOG(
-			LogThrustGuidedHazardProjectile,
-			Warning,
-			TEXT("LaunchId=%s powered safety stop (%s): TotalSpeed=%.2f ForwardSpeed=%.2f LateralSpeed=%.2f Limits=%.2f/%.2f."),
-			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
-			SafetyReason,
-			TotalSpeed,
-			ForwardSpeed,
-			LateralSpeed,
-			ComponentLimit,
-			EmergencyTotalLimit);
-		return false;
-	}
-
-	const float Distance = FVector::Distance(BodyCenter, TargetLocation);
-	if (!FMath::IsFinite(Distance))
-	{
-		return false;
-	}
-	const float LeadSeconds = FMath::Clamp(
-		Distance / FMath::Max(RuntimeTuningData->TargetPoweredSpeed, 1.0f),
-		0.0f,
-		RuntimeTuningData->MaximumTargetLeadTimeSeconds);
-	const FVector PredictedTarget =
-		TargetLocation + TargetVelocity * LeadSeconds;
-	OutDesiredDirection =
-		(PredictedTarget - BodyCenter).GetSafeNormal();
-	if (OutDesiredDirection.IsNearlyZero()
-		|| OutDesiredDirection.ContainsNaN())
-	{
-		return false;
-	}
-
-	const float SpeedThrottle = FMath::Clamp(
-		(RuntimeTuningData->TargetPoweredSpeed - ForwardSpeed)
-			/ RuntimeTuningData->SpeedControlBand,
-		0.0f,
-		1.0f);
-	const float AlignmentThrottle = FMath::Max(
-		0.0f,
-		FVector::DotProduct(BodyForward, OutDesiredDirection));
-	OutThrottle = SpeedThrottle * AlignmentThrottle;
-	return FMath::IsFinite(OutThrottle);
-}
-
-/** 把期望世界角加速度转换到质量空间，与局部惯量逐轴相乘后施加真实世界转矩。 */
-bool AThrustGuidedHazardProjectile::ApplyPhysicalAttitudeControl(
-	const FVector& DesiredDirection)
-{
-	if (!IsValid(RuntimeTuningData) || !IsValid(ProjectileBody))
-	{
-		return false;
-	}
-
-	const FVector BodyForward = ProjectileBody->GetUpVector().GetSafeNormal();
-	const FVector NormalizedDesired = DesiredDirection.GetSafeNormal();
-	if (BodyForward.IsNearlyZero()
-		|| NormalizedDesired.IsNearlyZero()
-		|| BodyForward.ContainsNaN()
-		|| NormalizedDesired.ContainsNaN())
-	{
-		return false;
-	}
-
-	const float Dot = FMath::Clamp(
-		FVector::DotProduct(BodyForward, NormalizedDesired),
-		-1.0f,
-		1.0f);
-	const float ErrorRadians = FMath::Acos(Dot);
-	FVector ErrorAxis =
-		FVector::CrossProduct(BodyForward, NormalizedDesired).GetSafeNormal();
-	if (ErrorAxis.IsNearlyZero() && Dot < 0.0f)
-	{
-		ErrorAxis = ProjectileBody->GetForwardVector().GetSafeNormal();
-	}
-
-	const FVector AngularVelocity =
-		ProjectileBody->GetPhysicsAngularVelocityInRadians();
-	FVector DesiredAngularAcceleration =
-		ErrorAxis * ErrorRadians * RuntimeTuningData->OrientationGain
-		- AngularVelocity * RuntimeTuningData->AngularVelocityDampingGain;
-	DesiredAngularAcceleration = DesiredAngularAcceleration.GetClampedToMaxSize(
-		RuntimeTuningData->MaximumAngularAcceleration);
-	if (AngularVelocity.ContainsNaN()
-		|| DesiredAngularAcceleration.ContainsNaN())
-	{
-		return false;
-	}
-
-	FBodyInstance& BodyInstance = ProjectileBody->BodyInstance;
-	const FVector LocalInertia = BodyInstance.GetBodyInertiaTensor();
-	const FTransform MassToWorld = BodyInstance.GetMassSpaceToWorldSpace();
-	if (!FMath::IsFinite(LocalInertia.X)
-		|| !FMath::IsFinite(LocalInertia.Y)
-		|| !FMath::IsFinite(LocalInertia.Z)
-		|| LocalInertia.X <= KINDA_SMALL_NUMBER
-		|| LocalInertia.Y <= KINDA_SMALL_NUMBER
-		|| LocalInertia.Z <= KINDA_SMALL_NUMBER
-		|| MassToWorld.ContainsNaN())
-	{
-		return false;
-	}
-
-	const FVector LocalAngularAcceleration =
-		MassToWorld.InverseTransformVectorNoScale(DesiredAngularAcceleration);
-	const FVector LocalTorque(
-		LocalAngularAcceleration.X * LocalInertia.X,
-		LocalAngularAcceleration.Y * LocalInertia.Y,
-		LocalAngularAcceleration.Z * LocalInertia.Z);
-	const FVector WorldTorque =
-		MassToWorld.TransformVectorNoScale(LocalTorque);
-	if (WorldTorque.ContainsNaN())
-	{
-		return false;
-	}
-
-	ProjectileBody->AddTorqueInRadians(WorldTorque, NAME_None, false);
-	return true;
-}
-
-/** 立即刷新当前重叠者并启动独立 Timer；同一弹体不会重复创建 Timer。 */
+/** 立即收集现有重叠并启动独立 60 Hz Timer；关闭开关时完全无副作用。 */
 void AThrustGuidedHazardProjectile::StartPreparationMonitoring()
 {
-	if (Phase == EThrustGuidedHazardProjectilePhase::Disabled
+	if (!IsValid(RuntimeTuningData)
+		|| !RuntimeTuningData->bEnableHeavyImpactPreparation
+		|| !bPreparationBindingsActive
+		|| Phase == EThrustGuidedHazardProjectilePhase::Disabled
 		|| Phase == EThrustGuidedHazardProjectilePhase::Sleeping
 		|| !IsValid(PreparationVolume))
 	{
@@ -646,18 +369,22 @@ void AThrustGuidedHazardProjectile::StartPreparationMonitoring()
 	}
 }
 
-/** 休眠和 EndPlay 都只清除本 Actor 的预测 Timer。 */
+/** 休眠、禁用和 EndPlay 都只清除本 Actor 拥有的准备 Timer。 */
 void AThrustGuidedHazardProjectile::StopPreparationMonitoring()
 {
 	GetWorldTimerManager().ClearTimer(PreparationTimerHandle);
 }
 
-/** Accepted/Duplicate 才完成该接收者本次通知；Busy/Invalid 保留以便下一采样重试。 */
+/** Accepted/Duplicate 才完成该接收者通知；Busy/Invalid 保留以便后续采样重试。 */
 void AThrustGuidedHazardProjectile::EvaluatePreparationCandidates()
 {
-	if (Phase == EThrustGuidedHazardProjectilePhase::Disabled
+	if (!IsValid(RuntimeTuningData)
+		|| !RuntimeTuningData->bEnableHeavyImpactPreparation
+		|| !bPreparationBindingsActive
+		|| Phase == EThrustGuidedHazardProjectilePhase::Disabled
 		|| Phase == EThrustGuidedHazardProjectilePhase::Sleeping
-		|| !LaunchId.IsValid())
+		|| !LaunchId.IsValid()
+		|| !IsValid(PreparationVolume))
 	{
 		return;
 	}
@@ -695,22 +422,19 @@ void AThrustGuidedHazardProjectile::EvaluatePreparationCandidates()
 		if (Result == EHeavyImpactPrepareResult::Accepted
 			|| Result == EHeavyImpactPrepareResult::Duplicate)
 		{
-			// 同一个 LaunchId 可分别通知玩家、追猎者和其他接收者。
 			NotifiedReceiversThisLaunch.Add(Candidate);
 		}
 	}
 }
 
-/**
- * 预测只决定接收端何时准备物理身体；SourceLinearVelocity 来自当前 Chaos 刚体，
- * 最终位移、转动和路线仍由随后发生的真实接触决定。
- */
+/** 使用当前相对速度和世界重力估算短时间内的真实弹道接触准备。 */
 bool AThrustGuidedHazardProjectile::BuildPreparationRequest(
 	const AActor& Receiver,
 	FHeavyImpactPreparationRequest& OutRequest)
 {
 	if (!IsValid(ProjectileBody)
 		|| !IsValid(RuntimeTuningData)
+		|| !RuntimeTuningData->bEnableHeavyImpactPreparation
 		|| !LaunchId.IsValid())
 	{
 		return false;
@@ -753,7 +477,7 @@ bool AThrustGuidedHazardProjectile::BuildPreparationRequest(
 		ClosestSurfacePoint = FVector::ZeroVector;
 	}
 
-	// Physics Asset 最近点查询失败时，只回退同一个权威组件 Bounds，不改用角色外层 Capsule。
+	// Physics Asset 最近点查询失败时，只回退同一个权威组件 Bounds。
 	if (ClosestSurfaceDistance == BIG_NUMBER)
 	{
 		const FVector BoundsOrigin = PredictionPrimitive->Bounds.Origin;
@@ -804,10 +528,27 @@ bool AThrustGuidedHazardProjectile::BuildPreparationRequest(
 
 	const float SurfaceGap =
 		FMath::Max(0.0f, ClosestSurfaceDistance - BodySurfaceDistance);
-	const float EstimatedTimeToContact = SurfaceGap / ClosingSpeed;
 	const UWorld* World = GetWorld();
-	const float DeltaSeconds =
-		IsValid(World) ? FMath::Max(0.0f, World->GetDeltaSeconds()) : 0.0f;
+	if (!IsValid(World))
+	{
+		return false;
+	}
+
+	const FVector Gravity(0.0f, 0.0f, World->GetGravityZ());
+	const float GravityAlongApproach =
+		FVector::DotProduct(Gravity, ApproachDirection);
+	float EstimatedTimeToContact = 0.0f;
+	if (Gravity.ContainsNaN()
+		|| !TryEstimateGravityAwareContactTime(
+			SurfaceGap,
+			ClosingSpeed,
+			GravityAlongApproach,
+			EstimatedTimeToContact))
+	{
+		return false;
+	}
+
+	const float DeltaSeconds = FMath::Max(0.0f, World->GetDeltaSeconds());
 	const float FrameAwareMaximumSeconds = FMath::Min(
 		ThrustGuidedHazardProjectile::AbsoluteMaximumPreparationSeconds,
 		DeltaSeconds
@@ -822,7 +563,9 @@ bool AThrustGuidedHazardProjectile::BuildPreparationRequest(
 	}
 
 	const FVector PredictedBodyCenter =
-		BodyCenter + BodyVelocity * EstimatedTimeToContact;
+		BodyCenter
+		+ BodyVelocity * EstimatedTimeToContact
+		+ 0.5f * Gravity * FMath::Square(EstimatedTimeToContact);
 	const FVector PredictedReceiverSurface =
 		ClosestSurfacePoint + ReceiverVelocity * EstimatedTimeToContact;
 	FVector PredictedContactDirection =
@@ -854,6 +597,54 @@ bool AThrustGuidedHazardProjectile::BuildPreparationRequest(
 	FString ValidationError;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN()
 		&& OutRequest.IsStructurallyValid(&Receiver, ValidationError);
+}
+
+/** 解沿接近方向的一维匀加速位移，并选择最早有限非负根。 */
+bool AThrustGuidedHazardProjectile::TryEstimateGravityAwareContactTime(
+	const float SurfaceGap,
+	const float ClosingSpeed,
+	const float GravityAlongApproach,
+	float& OutTimeSeconds)
+{
+	OutTimeSeconds = 0.0f;
+	if (!FMath::IsFinite(SurfaceGap)
+		|| !FMath::IsFinite(ClosingSpeed)
+		|| !FMath::IsFinite(GravityAlongApproach)
+		|| SurfaceGap < 0.0f
+		|| ClosingSpeed <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+
+	if (SurfaceGap <= KINDA_SMALL_NUMBER)
+	{
+		return true;
+	}
+
+	if (FMath::Abs(GravityAlongApproach) <= KINDA_SMALL_NUMBER)
+	{
+		OutTimeSeconds = SurfaceGap / ClosingSpeed;
+		return FMath::IsFinite(OutTimeSeconds) && OutTimeSeconds >= 0.0f;
+	}
+
+	const float Discriminant =
+		FMath::Square(ClosingSpeed)
+		+ 2.0f * GravityAlongApproach * SurfaceGap;
+	if (!FMath::IsFinite(Discriminant) || Discriminant < 0.0f)
+	{
+		return false;
+	}
+
+	const float SqrtDiscriminant = FMath::Sqrt(Discriminant);
+	// 与水平极限连续的最早正根；该形式避免 (-Closing + SqrtD) 的浮点相消。
+	const float StableDenominator = ClosingSpeed + SqrtDiscriminant;
+	if (!FMath::IsFinite(StableDenominator)
+		|| StableDenominator <= KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+	OutTimeSeconds = 2.0f * SurfaceGap / StableDenominator;
+	return FMath::IsFinite(OutTimeSeconds) && OutTimeSeconds >= 0.0f;
 }
 
 /** 解析胶囊圆柱段与端球的射线交点，避免用包围盒夸大弹体前表面。 */
@@ -902,7 +693,7 @@ float AThrustGuidedHazardProjectile::CalculateCapsuleRaySurfaceDistance(
 	return SegmentHalfLength * AxisDot + FMath::Sqrt(SphereDiscriminant);
 }
 
-/** 每次回调都保留诊断；只有第一个“有效阻挡”改变 Guided 状态，之后不去重真实接触。 */
+/** 每次接触都记录；首个有效阻挡只切阶段、阻尼和表现，不接管速度。 */
 void AThrustGuidedHazardProjectile::HandleProjectileHit(
 	UPrimitiveComponent* /*HitComponent*/,
 	AActor* OtherActor,
@@ -927,7 +718,7 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 		*LinearVelocity.ToCompactString(),
 		*AngularVelocity.ToCompactString());
 
-	const AActor* ContactOwner = IsValid(OtherActor)
+	AActor* ContactOwner = IsValid(OtherActor)
 		? OtherActor
 		: (IsValid(OtherComponent) ? OtherComponent->GetOwner() : nullptr);
 	const bool bBlockingContact =
@@ -935,29 +726,40 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 		&& IsValid(OtherComponent)
 		&& IsValid(ContactOwner)
 		&& ContactOwner != this;
-	if (bHadMeaningfulBlockingContact || !bBlockingContact)
+	if (Phase != EThrustGuidedHazardProjectilePhase::Ballistic
+		|| bHadMeaningfulBlockingContact
+		|| !bBlockingContact)
 	{
 		return;
 	}
 
 	bHadMeaningfulBlockingContact = true;
+	Phase = EThrustGuidedHazardProjectilePhase::FreePhysics;
+	if (IsValid(RuntimeTuningData))
+	{
+		ProjectileBody->SetLinearDamping(
+			RuntimeTuningData->PostImpactLinearDamping);
+		ProjectileBody->SetAngularDamping(
+			RuntimeTuningData->PostImpactAngularDamping);
+	}
+
 	if (Hit.bStartPenetrating)
 	{
 		UE_LOG(
 			LogThrustGuidedHazardProjectile,
 			Warning,
-			TEXT("LaunchId=%s received penetrating blocking contact with %s."),
+			TEXT("LaunchId=%s received penetrating first blocking contact with %s."),
 			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 			*GetNameSafe(ContactOwner));
 	}
 
-	FinishPoweredPhase(
-		Hit.bStartPenetrating
-			? TEXT("penetrating blocking contact")
-			: TEXT("first blocking contact"));
+	ReceiveFirstBlockingImpact(
+		ContactOwner,
+		Hit.ImpactPoint,
+		NormalImpulse);
 }
 
-/** 休眠后被外力唤醒只恢复 Coasting 预测，绝不恢复目标或制导。 */
+/** 休眠后被真实外力唤醒只恢复自由物理标签和可选准备链。 */
 void AThrustGuidedHazardProjectile::HandleProjectileWake(
 	UPrimitiveComponent* WakingComponent,
 	FName /*BoneName*/)
@@ -970,18 +772,19 @@ void AThrustGuidedHazardProjectile::HandleProjectileWake(
 
 	if (Phase == EThrustGuidedHazardProjectilePhase::Sleeping)
 	{
-		Phase = EThrustGuidedHazardProjectilePhase::Coasting;
+		Phase = EThrustGuidedHazardProjectilePhase::FreePhysics;
 		StartPreparationMonitoring();
 	}
 }
 
-/** 只有无动力滑行可进入 Sleeping；推进期间的 AddForce 会继续保持刚体活跃。 */
+/** Ballistic 或 FreePhysics 刚体休眠时停止可选准备 Timer，不销毁弹体。 */
 void AThrustGuidedHazardProjectile::HandleProjectileSleep(
 	UPrimitiveComponent* SleepingComponent,
 	FName /*BoneName*/)
 {
 	if (SleepingComponent != ProjectileBody
-		|| Phase != EThrustGuidedHazardProjectilePhase::Coasting)
+		|| (Phase != EThrustGuidedHazardProjectilePhase::Ballistic
+			&& Phase != EThrustGuidedHazardProjectilePhase::FreePhysics))
 	{
 		return;
 	}
@@ -990,7 +793,7 @@ void AThrustGuidedHazardProjectile::HandleProjectileSleep(
 	StopPreparationMonitoring();
 }
 
-/** Overlap 只登记共享接口，不在回调中直接切换角色状态。 */
+/** HeavyImpact 开启时才登记共享接收接口，不在 Overlap 回调中切换角色状态。 */
 void AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap(
 	UPrimitiveComponent* /*OverlappedComponent*/,
 	AActor* OtherActor,
@@ -999,7 +802,11 @@ void AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap(
 	bool /*bFromSweep*/,
 	const FHitResult& /*SweepResult*/)
 {
-	if (Phase != EThrustGuidedHazardProjectilePhase::Disabled
+	if (bPreparationBindingsActive
+		&& IsValid(RuntimeTuningData)
+		&& RuntimeTuningData->bEnableHeavyImpactPreparation
+		&& Phase != EThrustGuidedHazardProjectilePhase::Disabled
+		&& Phase != EThrustGuidedHazardProjectilePhase::Sleeping
 		&& IsValid(OtherActor)
 		&& OtherActor != this
 		&& OtherActor->GetClass()->ImplementsInterface(
@@ -1009,49 +816,62 @@ void AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap(
 	}
 }
 
-/** 多组件 Actor 仅在最后一个组件离开球体时移除。 */
+/** 多组件 Actor 仅在最后一个组件离开预测球时移除。 */
 void AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap(
 	UPrimitiveComponent* /*OverlappedComponent*/,
 	AActor* OtherActor,
 	UPrimitiveComponent* /*OtherComponent*/,
 	int32 /*OtherBodyIndex*/)
 {
-	if (IsValid(OtherActor)
+	if (bPreparationBindingsActive
+		&& IsValid(PreparationVolume)
+		&& IsValid(OtherActor)
 		&& !PreparationVolume->IsOverlappingActor(OtherActor))
 	{
 		PreparationCandidates.Remove(OtherActor);
 	}
 }
 
-/** 无法安全运行时关闭全部本地能力；不自动销毁，便于在 Level0 中诊断错误实例。 */
+/** 无法安全运行时关闭模拟、碰撞、表现和可选 HeavyImpact 准备。 */
 void AThrustGuidedHazardProjectile::DisableProjectile(const FString& Reason)
 {
 	StopPreparationMonitoring();
 	Phase = EThrustGuidedHazardProjectilePhase::Disabled;
-	SetActorTickEnabled(false);
-	LockedTargetComponent.Reset();
-	LockedTargetActor.Reset();
 	PreparationCandidates.Reset();
 	NotifiedReceiversThisLaunch.Reset();
 
-	if (IsValid(Thruster))
+	if (IsValid(ProjectileBody))
 	{
-		Thruster->ThrustStrength = 0.0f;
-		Thruster->Deactivate();
-		Thruster->SetComponentTickEnabled(false);
+		ProjectileBody->OnComponentHit.RemoveDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandleProjectileHit);
+		ProjectileBody->OnComponentWake.RemoveDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandleProjectileWake);
+		ProjectileBody->OnComponentSleep.RemoveDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandleProjectileSleep);
+		ProjectileBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ProjectileBody->SetSimulatePhysics(false);
 	}
-	if (IsValid(ExhaustVisualRoot))
+
+	if (bPreparationBindingsActive && IsValid(PreparationVolume))
 	{
-		ExhaustVisualRoot->SetVisibility(false, true);
+		PreparationVolume->OnComponentBeginOverlap.RemoveDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap);
+		PreparationVolume->OnComponentEndOverlap.RemoveDynamic(
+			this,
+			&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
+		bPreparationBindingsActive = false;
 	}
 	if (IsValid(PreparationVolume))
 	{
 		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	}
-	if (IsValid(ProjectileBody))
+	if (IsValid(ExhaustVisualRoot))
 	{
-		ProjectileBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-		ProjectileBody->SetSimulatePhysics(false);
+		ExhaustVisualRoot->SetVisibility(false, true);
 	}
 
 	UE_LOG(
