@@ -27,6 +27,9 @@ public:
 	/** 创建无常驻 Tick 的控制器。 */
 	APursuerAIController();
 
+	/** 受击适配层已取消当前路径；若攻击冷却尚未结束，记录恢复后仍需继续追击。 */
+	void NotifyImpactMovementBlocked();
+
 protected:
 	/** 占有追猎者后缓存角色与 Config，并按 ThinkInterval 启动思考 Timer。 */
 	virtual void OnPossess(APawn* InPawn) override;
@@ -56,6 +59,9 @@ private:
 	/** 是否处于追击态（已察觉玩家）；配合察觉/丢失双阈值防抖。 */
 	bool bIsChasing = false;
 
-	/** 是否处于攻击冷却中；冷却期间不发起新攻击、不追击移动。 */
+	/** 是否处于攻击冷却中；冷却期间不发起新攻击，正常攻击后仍维持原有回追节奏。 */
 	bool bIsOnAttackCooldown = false;
+
+	/** Stop/Heavy 取消路径时保留；只放行追击移动，不提前结束攻击冷却。 */
+	bool bResumeChaseDuringAttackCooldown = false;
 };

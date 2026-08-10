@@ -8,10 +8,12 @@
 
 #include "Actors/Hazards/SpikeTrapHazard.h"
 
-#include "Characters/PursuerCharacter.h"
+#include "Characters/ZeroEscapeCharacter.h"
 #include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Curves/CurveFloat.h"
+#include "Data/Physics/CharacterImpactSourceProfile.h"
+#include "Interfaces/CharacterImpactReceiver.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
@@ -109,9 +111,11 @@ void ASpikeTrapHazard::StartRising()
 void ASpikeTrapHazard::EnterExtended()
 {
 	bIsDangerous = true;
+	ActiveDangerImpactId = FGuid::NewGuid();
+	ProcessedDangerTargets.Reset();
 	for (const TObjectPtr<AActor>& Pawn : OverlappingPawns)
 	{
-		ApplyDamageTo(Pawn);
+		ProcessDangerousContact(Pawn);
 	}
 	GetWorldTimerManager().SetTimer(
 		PhaseTimerHandle, this, &ASpikeTrapHazard::StartLowering, FMath::Max(ExtendedDuration, 0.01f), false);
@@ -153,7 +157,8 @@ void ASpikeTrapHazard::HandleHurtZoneBeginOverlap(
 	bool /*bFromSweep*/,
 	const FHitResult& /*SweepResult*/)
 {
-	if (!IsValid(OtherActor) || OtherActor->IsA<APursuerCharacter>())
+	if (!IsValid(OtherActor)
+		|| !OtherActor->GetClass()->ImplementsInterface(UCharacterImpactReceiver::StaticClass()))
 	{
 		return;
 	}
@@ -161,7 +166,7 @@ void ASpikeTrapHazard::HandleHurtZoneBeginOverlap(
 	OverlappingPawns.Add(OtherActor);
 	if (bIsDangerous)
 	{
-		ApplyDamageTo(OtherActor);
+		ProcessDangerousContact(OtherActor);
 	}
 }
 
@@ -180,10 +185,64 @@ void ASpikeTrapHazard::HandleHurtZoneEndOverlap(
 	OverlappingPawns.Remove(OtherActor);
 }
 
-/** 官方 ApplyDamage 结算；接收方接入生命系统后生效，当前仅记录命中时机。 */
-void ASpikeTrapHazard::ApplyDamageTo(AActor* Target)
+/** 向所有受击接口角色提交轻受击；仅玩家额外走 ApplyDamage。 */
+void ASpikeTrapHazard::ProcessDangerousContact(AActor* Target)
 {
-	if (!IsValid(Target))
+	if (!IsValid(Target)
+		|| !Target->GetClass()->ImplementsInterface(UCharacterImpactReceiver::StaticClass()))
+	{
+		return;
+	}
+	if (ProcessedDangerTargets.Contains(Target))
+	{
+		return;
+	}
+	ProcessedDangerTargets.Add(Target);
+
+	if (!IsValid(StandingImpactSourceProfile))
+	{
+		UE_LOG(LogSpikeTrap, Warning,
+			TEXT("%s cannot submit standing impact to %s: StandingImpactSourceProfile is not configured."),
+			*GetName(), *Target->GetName());
+	}
+	else
+	{
+		FString ConfigurationError;
+		if (!StandingImpactSourceProfile->IsConfigured(ConfigurationError))
+		{
+			UE_LOG(LogSpikeTrap, Warning,
+				TEXT("%s cannot submit standing impact to %s: invalid source profile %s (%s)."),
+				*GetName(), *Target->GetName(), *GetNameSafe(StandingImpactSourceProfile), *ConfigurationError);
+		}
+		else if (!ActiveDangerImpactId.IsValid())
+		{
+			UE_LOG(LogSpikeTrap, Warning,
+				TEXT("%s cannot submit standing impact to %s: active danger phase has no valid ImpactId."),
+				*GetName(), *Target->GetName());
+		}
+		else
+		{
+			FStandingImpactRequest Request;
+			Request.ImpactId = ActiveDangerImpactId;
+			Request.SourceActor = this;
+			Request.SourceComponent = SpikeMesh;
+			Request.SourceProfile = StandingImpactSourceProfile;
+			Request.WorldDirection = FVector::UpVector;
+			Request.ImpactPoint = Target->GetActorLocation();
+			Request.NormalizedStrength = FMath::Clamp(StandingImpactStrength, 0.0f, 1.0f);
+
+			const EStandingImpactSubmitResult SubmitResult =
+				ICharacterImpactReceiver::Execute_SubmitStandingImpact(Target, Request);
+			if (SubmitResult == EStandingImpactSubmitResult::Invalid)
+			{
+				UE_LOG(LogSpikeTrap, Warning,
+					TEXT("%s standing impact request was rejected as invalid by %s."),
+					*GetName(), *Target->GetName());
+			}
+		}
+	}
+
+	if (!Target->IsA<AZeroEscapeCharacter>())
 	{
 		return;
 	}

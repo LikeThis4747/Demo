@@ -11,10 +11,14 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Interfaces/CharacterImpactReceiver.h"
 #include "Interfaces/HeavyImpactReceiver.h"
 
 #include "PursuerCharacter.generated.h"
 
+class UAnimMontage;
+class UCharacterImpactResponseComponent;
+class UCharacterImpactTuningData;
 class UHeavyImpactResponseComponent;
 class UHeavyImpactTuningData;
 class UPursuerConfig;
@@ -27,7 +31,10 @@ enum class EPhysicsHitDirection : uint8;
 
 /** 单一追猎者角色：只负责组件装配、移动参数应用与攻击蒙太奇播放，决策交给 AI 控制器。 */
 UCLASS()
-class DEMO_API APursuerCharacter final : public ACharacter, public IHeavyImpactReceiver
+class DEMO_API APursuerCharacter final
+	: public ACharacter
+	, public IHeavyImpactReceiver
+	, public ICharacterImpactReceiver
 {
 	GENERATED_BODY()
 
@@ -42,11 +49,23 @@ public:
 	virtual EHeavyImpactPrepareResult PrepareForHeavyImpact_Implementation(
 		const FHeavyImpactPreparationRequest& Request) override;
 
+	virtual EStandingImpactSubmitResult SubmitStandingImpact_Implementation(
+		const FStandingImpactRequest& Request) override;
+
 	/** 返回行为参数资产；可能为空，调用方需自行判空。 */
 	const UPursuerConfig* GetConfig() const { return Config; }
 
 	/** 播放攻击蒙太奇；Config 或蒙太奇缺失时记录错误并安全返回。 */
 	void PlayAttackMontage();
+
+	/** Heavy 或 Light Stop 是否阻断追击移动。 */
+	bool IsImpactMovementBlocked() const;
+
+	/** Heavy 或任意活动 Light 是否禁止发起新攻击。 */
+	bool IsImpactAttackSuppressed() const;
+
+	/** 只停止本角色明确记录的当前攻击 Montage，不影响 Light 或 Heavy 起身 Montage。 */
+	void InterruptActiveAttackMontage();
 
 	/** 是否正在播放受击反应；AI 在受击期间应停止追击与攻击。 */
 	bool IsReacting() const;
@@ -57,6 +76,9 @@ public:
 
 	/** 受击蒙太奇结束（正常或被打断）时清除受击状态，允许 AI 恢复追击。 */
 	void OnHitReactMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+
+	/** 攻击 Montage 正常结束或被精确打断时清理记录。 */
+	void OnAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
 protected:
 	/** 组件初始化后按 Config 应用移动速度；Config 无效时保留引擎默认并记录错误。 */
@@ -71,9 +93,17 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|重冲击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UHeavyImpactResponseComponent> HeavyImpactResponse;
 
+	/** 追猎者站立轻受击、速度恢复与 Heavy 抢占的运行时 Owner。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCharacterImpactResponseComponent> CharacterImpactResponse;
+
 	/** 追猎者独立的重冲击 PCA 与判稳参数；必须在 BP_Pursuer 类默认值中指定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "追猎者|重冲击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UHeavyImpactTuningData> HeavyImpactTuningData;
+
+	/** 追猎者轻受击三方向动画和时序参数；必须在 BP_Pursuer 类默认值中指定。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCharacterImpactTuningData> CharacterImpactTuningData;
 
 	/** 保留用于旧局部受击回退；重冲击原型期间不创建、不配置也不解引用。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|物理受击", meta = (AllowPrivateAccess = "true"))
@@ -92,4 +122,8 @@ private:
 
 	/** 受击反应播放期间为 true；由 HandleHitReact 置位、受击蒙太奇结束回调清除，供 AI 查询以暂停行动。 */
 	bool bIsReacting = false;
+
+	/** 仅记录由 PlayAttackMontage 成功启动的精确攻击 Montage。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UAnimMontage> ActiveAttackMontage = nullptr;
 };

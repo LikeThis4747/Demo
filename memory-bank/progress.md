@@ -28,7 +28,7 @@
 - [x] HeavyImpact 防夹与最终恢复现场复测完成；用户确认当前效果可作为稳定阶段基线，极端封闭空间与细小动画差异转为非阻塞候选优化。
 - [x] 壁挂式预判抛射机关基础机制已由用户验收：当前权威参数为 900 cm / 18 deg / 50 kg / 8 s。
 - [ ] 壁挂式预判抛射机关后续专项：移动目标命中、近距静止、急停/横移躲避、连续 Chaos 反弹、薄墙连续多发，以及模型/表现和轻受击接入。
-- [ ] 轻受击融合方案：先确定共享来源/方向/强度输入、轻重状态优先级和表现边界，再决定动画、局部 Physics Control 或混合实现。
+- [ ] 轻受击第一版已完成代码、配置、DataAsset、Blueprint 装配与技术验证：磁力验证 AI Stop，地刺验证玩家 Stop / AI Slow，Heavy 优先级与空中保留 Z 已落地；真实手感和交叉场景待用户验收。
 - [ ] 冲锤玩家/追猎者手感和安全窗口验收；接入正式一局前只选择一个已验收原型。
 - [ ] 近战/方向受击、磁力 Camera 通道、重复投掷和连续局部 Physics Control 命中的当前版本验收。
 
@@ -77,3 +77,12 @@
 - 禁用失败弹体增加 1 秒 LifeSpan 回收；正常弹体继续使用 DataAsset 的 8 秒寿命。
 - 当前方案权威统一为正式 DailyPlan、DailyReport、Source 与默认 DataAsset；旧推进文档只作历史。
 - Demo `-NoLink` 与 DemoEditor 正式链接成功，只构建 Demo 项目模块；Blueprint、DataAsset、Level0、模型和轻受击均未修改。
+
+
+## 2026-08-10 — 统一轻受击响应第一版技术交付
+
+- 新增共享 Standing Impact 输入、来源 Profile、角色协调组件与 None/Slow/Stop 结果；HeavyImpact 内部保持不变。
+- 磁力物当前映射为玩家 None / 追猎者 Stop 0.60 秒；地刺为玩家 Stop 0.25 秒 / 追猎者 Slow 0.60 秒、速度倍率 0.45。
+- 空中 Stop 只清水平速度；AI Slow/Stop 都断攻击，只有 Stop 取消 PathFollowing；Stop 后立即恢复追击但不提前结束攻击冷却；Heavy 真正 Prepared 后原子清 Light。
+- Demo-only 构建成功，CharacterImpact 2/2 + HeavyImpact 5/5，Blueprint/DataAsset/运行时碰撞基线经官方 MCP 回读。
+- 真实磁力命中、地刺手感、Light/Heavy 交叉与不同帧率仍待用户验收；玩家动画待人工重定向。

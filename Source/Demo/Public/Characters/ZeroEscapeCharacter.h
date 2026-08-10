@@ -11,6 +11,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Character.h"
+#include "Interfaces/CharacterImpactReceiver.h"
 #include "Interfaces/HeavyImpactReceiver.h"
 
 #include "ZeroEscapeCharacter.generated.h"
@@ -18,6 +19,8 @@
 class UCameraComponent;
 class UElectromagneticGrabComponent;
 class UEnhancedInputLocalPlayerSubsystem;
+class UCharacterImpactResponseComponent;
+class UCharacterImpactTuningData;
 class UHeavyImpactResponseComponent;
 class UHeavyImpactTuningData;
 class UHealthComponent;
@@ -29,7 +32,10 @@ struct FInputActionValue;
 
 /** 第三人称玩家角色，只负责组件装配、移动、相机和玩家意图转发。 */
 UCLASS()
-class DEMO_API AZeroEscapeCharacter final : public ACharacter, public IHeavyImpactReceiver
+class DEMO_API AZeroEscapeCharacter final
+	: public ACharacter
+	, public IHeavyImpactReceiver
+	, public ICharacterImpactReceiver
 {
 	GENERATED_BODY()
 
@@ -43,6 +49,10 @@ public:
 	/** 把机关的重冲击准备请求转发给唯一共享响应组件。 */
 	virtual EHeavyImpactPrepareResult PrepareForHeavyImpact_Implementation(
 		const FHeavyImpactPreparationRequest& Request) override;
+
+	/** 把命中后的站立轻受击请求转发给角色共享协调组件。 */
+	virtual EStandingImpactSubmitResult SubmitStandingImpact_Implementation(
+		const FStandingImpactRequest& Request) override;
 
 	/** 本地 Pawn 再次可玩时，按输入 DataAsset 幂等应用本角色拥有的映射。 */
 	virtual void PawnClientRestart() override;
@@ -122,9 +132,17 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UHeavyImpactResponseComponent> HeavyImpactResponse;
 
+	/** 玩家站立轻受击、速度恢复与 Heavy 抢占的运行时 Owner。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCharacterImpactResponseComponent> CharacterImpactResponse;
+
 	/** 玩家独立的重冲击 PCA 与判稳参数；必须在 BP_ZeroEscapeCharacter 类默认值中指定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UHeavyImpactTuningData> HeavyImpactTuningData;
+
+	/** 玩家轻受击动画和时序参数；动画可暂时为空，必须在角色蓝图类默认值中指定资产。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCharacterImpactTuningData> CharacterImpactTuningData;
 
 	/**
 	 * 输入资源唯一来源；对应 UZeroEscapeInputConfig，由 PawnClientRestart 与 SetupPlayerInputComponent 读取。

@@ -52,6 +52,7 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		|| !ValidateFloat(TEXT("PullGracePeriod"), PullGracePeriod, 0.0f, 3.0f)
 		|| !ValidateFloat(TEXT("MaximumHoldError"), MaximumHoldError, 100.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("ThrowSpeed"), ThrowSpeed, 100.0f, 8000.0f)
+		|| !ValidateFloat(TEXT("ThrownWeaponActiveDuration"), ThrownWeaponActiveDuration, 0.1f, 10.0f)
 		|| !ValidateFloat(TEXT("AimTraceDistance"), AimTraceDistance, 1000.0f, 50000.0f)
 		|| !ValidateFloat(TEXT("HandleLinearStiffness"), HandleLinearStiffness, 1.0f, 10000.0f)
 		|| !ValidateFloat(TEXT("HandleLinearDamping"), HandleLinearDamping, 0.0f, 5000.0f)

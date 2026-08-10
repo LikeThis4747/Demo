@@ -12,12 +12,14 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/Physics/CharacterImpactResponseComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/Physics/PhysicsControlHitResponseComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "PhysicsControlComponent.h"
+#include "Physics/DemoCollisionChannels.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPursuer, Log, All);
 
@@ -29,6 +31,7 @@ APursuerCharacter::APursuerCharacter()
 	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
+	CharacterImpactResponse = CreateDefaultSubobject<UCharacterImpactResponseComponent>(TEXT("CharacterImpactResponse"));
 
 	AIControllerClass = APursuerAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -57,11 +60,49 @@ EHeavyImpactPrepareResult APursuerCharacter::PrepareForHeavyImpact_Implementatio
 		: EHeavyImpactPrepareResult::Invalid;
 }
 
+/** 应用 Light 后由追猎者适配层精确中断攻击；Stop 还取消 PathFollowing，并在空中保留 Z。 */
+EStandingImpactSubmitResult APursuerCharacter::SubmitStandingImpact_Implementation(
+	const FStandingImpactRequest& Request)
+{
+	if (!IsValid(CharacterImpactResponse))
+	{
+		return EStandingImpactSubmitResult::Invalid;
+	}
+
+	const EStandingImpactSubmitResult Result = CharacterImpactResponse->SubmitImpact(Request);
+	if (Result != EStandingImpactSubmitResult::Applied)
+	{
+		return Result;
+	}
+
+	InterruptActiveAttackMontage();
+	if (CharacterImpactResponse->IsMovementBlocked())
+	{
+		if (APursuerAIController* AIController = Cast<APursuerAIController>(GetController()))
+		{
+			AIController->NotifyImpactMovementBlocked();
+		}
+	}
+	return Result;
+}
+
 /** 旧蒙太奇反应与新重冲击任一忙碌时都暂停 AI，旧布尔状态保留用于无损回退。 */
 bool APursuerCharacter::IsReacting() const
 {
 	return bIsReacting
 		|| (IsValid(HeavyImpactResponse) && HeavyImpactResponse->IsBusy());
+}
+
+bool APursuerCharacter::IsImpactMovementBlocked() const
+{
+	return (IsValid(HeavyImpactResponse) && HeavyImpactResponse->IsBusy())
+		|| (IsValid(CharacterImpactResponse) && CharacterImpactResponse->IsMovementBlocked());
+}
+
+bool APursuerCharacter::IsImpactAttackSuppressed() const
+{
+	return (IsValid(HeavyImpactResponse) && HeavyImpactResponse->IsBusy())
+		|| (IsValid(CharacterImpactResponse) && CharacterImpactResponse->IsAttackSuppressed());
 }
 
 /** 按 Config 应用移动速度；Config 缺失或非法时保留引擎默认并记录错误，不阻断游戏。 */
@@ -71,6 +112,10 @@ void APursuerCharacter::PostInitializeComponents()
 
 	// Blueprint 组件模板应用完成后再建立碰撞职责：Capsule 管移动，Manny Physics Asset 接收物理道具命中。
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(
+		Demo::CollisionChannels::AttackProjectileBody, ECR_Block);
+	GetMesh()->SetCollisionResponseToChannel(
+		Demo::CollisionChannels::AttackProjectileBody, ECR_Ignore);
 	// 敌人不触发玩家第三人称弹簧臂的相机回缩：对 Camera 通道 Ignore（保留相机对世界几何防穿墙，且与 PhysicsBody 受击独立）。
 	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
 	GetMesh()->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
@@ -84,6 +129,17 @@ void APursuerCharacter::PostInitializeComponents()
 			GetCharacterMovement(),
 			PhysicsControl,
 			HeavyImpactTuningData);
+	}
+
+	if (IsValid(CharacterImpactResponse))
+	{
+		CharacterImpactResponse->Configure(
+			this,
+			GetMesh(),
+			GetCharacterMovement(),
+			EImpactReceiverCategory::Pursuer,
+			CharacterImpactTuningData,
+			HeavyImpactResponse);
 	}
 
 	FString ConfigurationError;
@@ -103,6 +159,10 @@ void APursuerCharacter::PostInitializeComponents()
 /** 同步加载并播放攻击蒙太奇；缺失 Config 或蒙太奇时记录错误并安全返回。 */
 void APursuerCharacter::PlayAttackMontage()
 {
+	if (IsImpactAttackSuppressed())
+	{
+		return;
+	}
 	if (!IsValid(Config))
 	{
 		UE_LOG(LogPursuer, Error, TEXT("%s 无 Config，无法播放攻击。"), *GetName());
@@ -117,7 +177,42 @@ void APursuerCharacter::PlayAttackMontage()
 		return;
 	}
 
-	PlayAnimMontage(Montage);
+	if (IsValid(ActiveAttackMontage))
+	{
+		return;
+	}
+
+	if (PlayAnimMontage(Montage) > 0.0f)
+	{
+		ActiveAttackMontage = Montage;
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			FOnMontageEnded EndDelegate;
+			EndDelegate.BindUObject(this, &APursuerCharacter::OnAttackMontageEnded);
+			AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
+		}
+	}
+}
+
+void APursuerCharacter::InterruptActiveAttackMontage()
+{
+	UAnimMontage* MontageToStop = ActiveAttackMontage;
+	ActiveAttackMontage = nullptr;
+	if (IsValid(MontageToStop))
+	{
+		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
+		{
+			AnimInstance->Montage_Stop(0.05f, MontageToStop);
+		}
+	}
+}
+
+void APursuerCharacter::OnAttackMontageEnded(UAnimMontage* Montage, bool /*bInterrupted*/)
+{
+	if (Montage == ActiveAttackMontage)
+	{
+		ActiveAttackMontage = nullptr;
+	}
 }
 
 /** 按命中方向从 Config 加载对应受击蒙太奇并播放；Config 缺失或蒙太奇为空时安全返回。 */

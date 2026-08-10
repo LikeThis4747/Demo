@@ -17,6 +17,7 @@
 #include "SpikeTrapHazard.generated.h"
 
 class UBoxComponent;
+class UCharacterImpactSourceProfile;
 class UCurveFloat;
 class UPrimitiveComponent;
 class USceneComponent;
@@ -72,8 +73,8 @@ private:
 		UPrimitiveComponent* OtherComponent,
 		int32 OtherBodyIndex);
 
-	/** 通过官方 ApplyDamage 结算一次；无接收方时不产生效果，仅记录时机。 */
-	void ApplyDamageTo(AActor* Target);
+	/** 提交一次站立轻受击；仅玩家额外通过官方 ApplyDamage 结算伤害。 */
+	void ProcessDangerousContact(AActor* Target);
 
 	/** 固定的场景根；格栅、刺与伤害区都挂其下，升降只动刺网格。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|地刺", meta = (AllowPrivateAccess = "true"))
@@ -119,6 +120,16 @@ private:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|地刺", meta = (AllowPrivateAccess = "true", ClampMin = "0"))
 	float Damage = 20.0f;
 
+	/** Source-owned mapping from this spike contact to Player/Pursuer light-impact behavior. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Hazard|Spike|Standing Impact",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCharacterImpactSourceProfile> StandingImpactSourceProfile;
+
+	/** Normalized strength submitted with this spike contact. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Hazard|Spike|Standing Impact",
+		meta = (AllowPrivateAccess = "true", ClampMin = "0.0", ClampMax = "1.0"))
+	float StandingImpactStrength = 1.0f;
+
 	/** 蓝图中对齐好的刺“伸出”相对位置；BeginPlay 记录，作为升降基准。 */
 	FVector SpikeBaseLocation = FVector::ZeroVector;
 
@@ -128,9 +139,16 @@ private:
 	/** 当前是否处于伤害生效的伸出相位。 */
 	bool bIsDangerous = false;
 
+	/** Stable for one extended phase so a receiver can reject repeat overlap callbacks. */
+	FGuid ActiveDangerImpactId;
+
 	/** 当前处于伤害区内的 Pawn 集合。 */
 	UPROPERTY()
 	TSet<TObjectPtr<AActor>> OverlappingPawns;
+
+	/** 当前伸出相位已经结算过的目标；离开再进入也不会重复轻受击或伤害。 */
+	UPROPERTY()
+	TSet<TObjectPtr<AActor>> ProcessedDangerTargets;
 
 	/** 收起/伸出相位停留的单次计时器。 */
 	FTimerHandle PhaseTimerHandle;

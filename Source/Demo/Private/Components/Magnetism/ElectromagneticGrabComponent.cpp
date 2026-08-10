@@ -19,8 +19,7 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerController.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
-#include "Physics/DemoHitTags.h"
-#include "TimerManager.h"
+#include "Physics/DemoCollisionChannels.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeMagneticGrab, Log, All);
 
@@ -139,7 +138,7 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 		return;
 	}
 
-	const UMagneticObjectComponent* MagneticObject = HeldMagneticObject.Get();
+	UMagneticObjectComponent* MagneticObject = HeldMagneticObject.Get();
 	const float SpeedMultiplier = IsValid(MagneticObject) ? MagneticObject->ThrowSpeedMultiplier : 1.0f;
 	const FVector CenterOfMass = ComponentToThrow->GetCenterOfMass();
 	const FVector ThrowDirection = (CalculateAimPoint() - CenterOfMass).GetSafeNormal();
@@ -150,29 +149,16 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 
 	if (IsValid(ComponentToThrow) && !ThrowDirection.IsNearlyZero())
 	{
+		if (IsValid(MagneticObject))
+		{
+			MagneticObject->ArmThrownImpact(
+				ComponentToThrow,
+				GetOwner(),
+				TuningData->ThrownWeaponActiveDuration);
+		}
+
 		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
 		ComponentToThrow->AddImpulse(DesiredVelocity - ExistingVelocity, NAME_None, true);
-
-		// 标记为攻击性抛射物：追猎者受击只认带此 Tag 的物体；有效期后移除，物体回归普通物体不再触发受击。
-		if (AActor* ProjectileActor = ComponentToThrow->GetOwner())
-		{
-			ProjectileActor->Tags.AddUnique(DemoHitTags::AttackProjectile());
-			if (UWorld* World = GetWorld())
-			{
-				const TWeakObjectPtr<AActor> WeakProjectile(ProjectileActor);
-				FTimerHandle ClearTagHandle;
-				World->GetTimerManager().SetTimer(
-					ClearTagHandle,
-					[WeakProjectile]()
-					{
-						if (AActor* Actor = WeakProjectile.Get())
-						{
-							Actor->Tags.Remove(DemoHitTags::AttackProjectile());
-						}
-					},
-					TuningData->ThrownWeaponActiveDuration, /*bLoop=*/false);
-			}
-		}
 	}
 }
 
@@ -300,7 +286,9 @@ UPrimitiveComponent* UElectromagneticGrabComponent::FindBestCandidate(UMagneticO
 
 	const FVector CameraLocation = ViewCamera->GetComponentLocation();
 	const FQuat QueryRotation = FQuat::Identity;
-	const FCollisionObjectQueryParams ObjectQueryParams(ECC_PhysicsBody);
+	FCollisionObjectQueryParams ObjectQueryParams;
+	ObjectQueryParams.AddObjectTypesToQuery(ECC_PhysicsBody);
+	ObjectQueryParams.AddObjectTypesToQuery(Demo::CollisionChannels::AttackProjectileBody);
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticGrabSelection), false, GetOwner());
 	TArray<FOverlapResult> Overlaps;
 	World->OverlapMultiByObjectType(
@@ -396,6 +384,9 @@ void UElectromagneticGrabComponent::GrabCandidate(
 	{
 		return;
 	}
+
+	// 先结束正式投掷事务，再快照抓取基线；否则会把攻击通道/CCD/通知误当成原始值。
+	MagneticObject->DisarmThrownImpact();
 
 	HeldComponent = CandidateComponent;
 	HeldMagneticObject = MagneticObject;

@@ -13,6 +13,7 @@
 #include "Components/Attributes/HealthComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
+#include "Components/Physics/CharacterImpactResponseComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/Input/ZeroEscapeInputConfig.h"
@@ -25,6 +26,7 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "PhysicsControlComponent.h"
+#include "Physics/DemoCollisionChannels.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeInput, Log, All);
@@ -64,6 +66,7 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	PhysicsControl->SetAutoActivate(false);
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
+	CharacterImpactResponse = CreateDefaultSubobject<UCharacterImpactResponseComponent>(TEXT("CharacterImpactResponse"));
 
 	// HeavyImpact 先在 PostPhysics 更新角色根节点，弹簧臂再读取同帧的最终位置。
 	CameraBoom->AddTickPrerequisiteComponent(HeavyImpactResponse);
@@ -82,6 +85,15 @@ EHeavyImpactPrepareResult AZeroEscapeCharacter::PrepareForHeavyImpact_Implementa
 	return IsValid(HeavyImpactResponse)
 		? HeavyImpactResponse->PrepareForImpact(Request)
 		: EHeavyImpactPrepareResult::Invalid;
+}
+
+/** 轻受击接口只转发给唯一 Light Owner；未装配时明确返回 Invalid。 */
+EStandingImpactSubmitResult AZeroEscapeCharacter::SubmitStandingImpact_Implementation(
+	const FStandingImpactRequest& Request)
+{
+	return IsValid(CharacterImpactResponse)
+		? CharacterImpactResponse->SubmitImpact(Request)
+		: EStandingImpactSubmitResult::Invalid;
 }
 
 /** 重新占有时以幂等方式应用输入 DataAsset 声明的上下文。 */
@@ -106,6 +118,12 @@ void AZeroEscapeCharacter::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
 
+	// Blueprint 模板已应用：站立 Capsule 接攻击投掷物，Mesh 永久忽略该临时通道，避免与 Heavy 全身物理冲突。
+	GetCapsuleComponent()->SetCollisionResponseToChannel(
+		Demo::CollisionChannels::AttackProjectileBody, ECR_Block);
+	GetMesh()->SetCollisionResponseToChannel(
+		Demo::CollisionChannels::AttackProjectileBody, ECR_Ignore);
+
 	if (IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->Configure(PhysicsHandle, FollowCamera);
@@ -123,6 +141,17 @@ void AZeroEscapeCharacter::PostInitializeComponents()
 		HeavyImpactResponse->OnImpactCommitted.AddUObject(
 			this,
 			&AZeroEscapeCharacter::HandleHeavyImpactCommitted);
+	}
+
+	if (IsValid(CharacterImpactResponse))
+	{
+		CharacterImpactResponse->Configure(
+			this,
+			GetMesh(),
+			GetCharacterMovement(),
+			EImpactReceiverCategory::Player,
+			CharacterImpactTuningData,
+			HeavyImpactResponse);
 	}
 }
 
@@ -164,7 +193,9 @@ void AZeroEscapeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 /** 重冲击从 Prepared 到倒地期间独占身体控制；未装配组件时不阻断原玩家输入。 */
 bool AZeroEscapeCharacter::CanAcceptBodyInput() const
 {
-	return !IsValid(HeavyImpactResponse) || !HeavyImpactResponse->IsBusy();
+	const bool bHeavyBusy = IsValid(HeavyImpactResponse) && HeavyImpactResponse->IsBusy();
+	const bool bLightStop = IsValid(CharacterImpactResponse) && CharacterImpactResponse->IsMovementBlocked();
+	return !bHeavyBusy && !bLightStop;
 }
 
 /** 查找本地玩家输入子系统；服务器、AI 控制或占有尚未完成时安全返回空。 */

@@ -2,22 +2,24 @@
 
 ## 当前任务
 
-壁挂式预判抛射 Chaos 机关的当前基础机制版本已获用户验收，验收版提交为 `f7ae4f44f427b562ec87cfd4a0ce9a109a873747`。当前权威参数为 `ReferenceRange=900 cm`、`PreferredLaunchAngle=18 deg`、`ProjectileMassKilograms=50 kg`、`ProjectileLifetimeSeconds=8 s`。
+统一轻受击响应第一版已完成代码、配置、DataAsset 与 Blueprint 装配，当前等待用户现场手感验收。实施基线为 `aa00afca171cc4864e742f83f1815a2d9c1a8111`。
 
-## 本轮清理
+## 当前实现
 
-- 删除与 `Ballistic -> FreePhysics` 完全重复的首次阻挡布尔状态，`Phase` 是唯一阶段来源。
-- `ProjectileBody` 关闭无效 Overlap 事件生成；HeavyImpact `PreparationVolume` 仍独立负责可选 Pawn Overlap。
-- 配置或生成失败的禁用弹体增加 1 秒 LifeSpan 回收；正常发射仍使用 DataAsset 的 8 秒 LifeSpan。
-- 正式文档权威统一为 2026-08-10 狭窄走廊 DailyPlan、DailyReport、当前 Source 与默认 DataAsset；旧推进文档保留历史标记。
+- 玩家与追猎者共享 Standing Impact 请求、方向/强度、去重与 Heavy 抢占；来源 Profile 分别映射 `None / Slow / Stop`。
+- 磁力投掷物：玩家 None，追猎者 Stop 0.60 秒并播放方向动画。
+- 地刺：玩家 Stop 0.25 秒；追猎者 Slow 0.60 秒、速度倍率 0.45。
+- 空中 Stop 只清水平速度，保留 Z、Falling 与重力。
+- AI Stop 结束后即使旧攻击冷却未结束也恢复追击移动，但冷却仍限制下一次攻击。
+- HeavyImpact 保持唯一击飞、PCA、倒地和起身权威，内部未修改。
 
-## 验证
+## 技术验证
 
-- Demo `-NoLink` 编译成功。
-- `DemoEditor Win64 Development` 正式链接成功，只重建 Demo 项目模块。
-- 两轮独立只读复核无 Blocker/High；`git diff --check` 通过。
-- 未修改 Blueprint、DataAsset、Level0、模型或轻受击系统。
+- DemoEditor 只构建 Demo 模块成功，使用 `-Module=Demo -NoEngineChanges`。
+- CharacterImpact 2/2 + HeavyImpact 5/5，合计 7/7 自动化成功。
+- 四个 Blueprint 和四份新 DataAsset 已编译/保存/官方 MCP 回读。
+- 短 PIE 初始化与运行时碰撞基线回读正常，无轻受击配置错误。
 
-## 后续边界
+## 待用户验收
 
-本轮清理由最终 Git 提交收口；模型更换、表现细节、轻受击接入和边界专项均另行处理。
+真实磁力命中、地刺玩家/AI手感、空中 Stop、Light/Heavy 交叉抢占及不同帧率边界。玩家三条方向动画仍待人工 Replace Skeleton 与 Persona 观感确认；当前字段有意留空，不使用绕过。

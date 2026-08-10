@@ -2,23 +2,25 @@
 
 ## 当前焦点
 
-- 壁挂式预判抛射 Chaos 机关当前基础版本已获用户验收，验收版提交为 `f7ae4f44f427b562ec87cfd4a0ce9a109a873747`。
-- 当前权威参数：900 cm / 18 deg / 50 kg / 8 s，实际设计初速约 1225 cm/s。
-- 验收后最小技术债与文档权威清理已完成并通过构建，由最终 Git 提交收口。
+- 统一轻受击响应第一版已完成技术交付，等待用户现场验收。
+- HeavyImpact 已验收且保持不变；Standing Impact 只负责不会击飞/击倒的 None/Slow/Stop。
+- 磁力物与地刺是首轮验证来源；高压气罐和地刺 Heavy 不在本轮预建。
 
 ## 当前实现合同
 
-- 发射前预测与机械转向；发射后只施加一次 Chaos 质心冲量，无推进、持续制导或 Tick。
-- `Phase` 唯一管理 Ballistic/FreePhysics/Sleeping/Disabled；不再保留重复首次阻挡布尔状态。
-- 正常弹体使用 DataAsset 的 8 秒 LifeSpan；配置或生成失败的禁用弹体 1 秒后回收。
-- HeavyImpact Preparation 与 ExhaustVisualRoot/ExhaustLight 是后续受击和表现接缝，不视为旧推进残留。
+- 来源决定允许的玩法结果，真实接触数据只决定结果内部的方向与强度；不做全局冲量自动判轻重。
+- 固定优先级：Heavy > Stop > Slow > Inactive。Heavy 真正 Prepared 后先恢复 Light 的速度上限写入，再清 Light；Heavy Busy 不排队。
+- 玩家 Stop 锁移动、跳跃、新抓取和投掷，保留镜头与松手。AI Slow/Stop 都断攻击，只有 Stop 取消 PathFollowing；Stop 结束后立即恢复追击，但不提前结束攻击冷却。
+- Falling Stop 只清 XY，保留 Z、Falling 与重力。
+- AttackProjectileBody：角色 Capsule Block、Mesh Ignore，避免 Light 投掷物持续顶住 Heavy/Downed 身体。
 
 ## 当前验证
 
-- 用户已验收当前基础机制；模型、细节和轻受击接入另行处理。
-- Demo `-NoLink` 与 DemoEditor 正式链接成功，只构建 Demo 项目模块。
-- 独立代码/文档复核无 Blocker/High，未修改 Blueprint、DataAsset 或 Level0。
+- Demo-only 正式链接成功；CharacterImpact 2/2 + HeavyImpact 5/5。
+- 四个 Blueprint、四份 DataAsset 与运行时装配经官方 MCP 回读。
+- 短 PIE 无配置错误，但没有替代用户对真实命中画面的验收。
 
-## 后续边界
+## 下一步
 
-- 后续如需模型更换、表现细节、轻受击或边界专项，另开独立增量。
+- 用户测试磁力物命中追猎者、地刺玩家/AI、空中 Stop 与 Light/Heavy 抢占。
+- 玩家方向动画按既有 GetUp 工作流复制并人工 Replace Skeleton、Persona 检查后再装配。

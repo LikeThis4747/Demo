@@ -4,6 +4,12 @@
 
 ## 2026-08-10
 
+- 统一轻受击响应第一版完成技术交付：共享 Standing Impact 请求/优先级/去重，来源 Profile 分别映射玩家与追猎者，HeavyImpact 内部保持不变。
+- 当前初值：磁力玩家 None、追猎者 Stop 0.60 秒；地刺玩家 Stop 0.25 秒、追猎者 Slow 0.60 秒且速度倍率 0.45。
+- 空中 Stop 只清 XY 并保留 Z/Falling/重力；AI Slow/Stop 均中断攻击，只有 Stop 取消 PathFollowing；Stop 后立即恢复追击但不提前结束攻击冷却。
+- Demo-only 构建成功，CharacterImpact 2/2 + HeavyImpact 5/5；四个 Blueprint、四份 DataAsset 与运行时碰撞基线经官方 MCP 回读，短 PIE 无相关配置错误。
+- 用户尚需验收真实磁力命中、地刺玩家/AI、空中 Stop、Light/Heavy 交叉和不同帧率；玩家动画等待人工 Replace Skeleton 与 Persona 检查。
+
 - 用户确认当前全部工作区改动保留并授权完整基线 commit/push；基线通过后可在 Level0 测试区手工制作首个 Geometry Collection，C++/Blueprint 运行逻辑仍需另行授权。
 - 磁力投掷物 P0 方案成文：只有正式 `ThrowHeldObject()` 后的第一次 Blocking Hit 才破碎；拉取、持有、普通放下和命中前重新抓取均不破碎，所有碎片经 Remove On Break 清空。
 - 官方 UE MCP 回读 `BP_MagneticProp` 为 20 kg 模拟物理静态网格刚体，使用第三方 `SM_crate4`；Blueprint 与源网格均非 Dirty。UE5.8 引擎接口确认初始速度、显式解簇和 Remove On Break 路径可用。
