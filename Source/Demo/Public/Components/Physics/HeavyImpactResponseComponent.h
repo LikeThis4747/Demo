@@ -101,7 +101,7 @@ enum class EHeavyImpactRecoveryPhase : uint8
 {
 	None,
 	WaitingForSpace,
-	PreparingPose,
+	BlendingSnapshotToMontage,
 	PlayingMontage
 };
 
@@ -221,6 +221,8 @@ private:
 
 	/** 用骨盆速度、可行走地面和持续时间判断落地稳定。 */
 	void UpdateStability(float DeltaTime);
+	/** 身体尚未睡眠时尝试安全找位并直接进入 Snapshot-to-Montage 交接。 */
+	bool TryBeginRecoveryWhileSettling();
 
 	/** 从骨盆向下查找可行走地面，拒绝墙面和机关自身。 */
 	bool TryGetGroundSupport(FHitResult& OutGroundHit) const;
@@ -253,19 +255,6 @@ private:
 	void ScheduleRecoveryAttempt(float DelaySeconds);
 	void TryBeginRecovery(uint32 ExpectedTransactionSerial);
 	bool BuildRecoveryPlan(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
-	/** 捕获当前物理姿势并启动全物理身体向起身开头姿势的渐进关节追随。 */
-	bool BeginRecoveryPosePreparation(
-		const FHeavyImpactRecoveryPlan& Plan,
-		FString& OutReason);
-	/** 在 PostPhysics 更新目标姿势和控制强度；完成后尝试安全交接。 */
-	void UpdateRecoveryPosePreparation(
-		float DeltaTime,
-		bool bSlowEnough,
-		bool bSupported);
-	/** 身体重新失稳时冻结当前动画目标、清理准备数据并恢复 Flight 控制。 */
-	void CancelRecoveryPosePreparation(const TCHAR* Reason);
-	/** 当前是否仍由 Chaos 模拟全身、同时执行起身姿势准备。 */
-	bool IsRecoveryPosePreparationActive() const;
 	bool DetermineRecoveryOrientation(bool& bOutFaceUp, FRotator& OutRotation, FString& OutReason);
 	bool TryFindRecoveryCapsuleLocation(
 		const FRotator& UprightRotation,
@@ -280,8 +269,12 @@ private:
 	bool BeginPhysicalToAnimationHandoff(
 		const FHeavyImpactRecoveryPlan& Plan,
 		FString& OutReason);
-	void StartRecoveryMontage(uint32 ExpectedTransactionSerial);
-	void ReleaseRecoveryPoseSnapshot(uint32 ExpectedTransactionSerial);
+	/** 在物理交接提交前同步创建动态 Montage；失败时调用方仍可保持当前物理状态。 */
+	bool StartRecoveryMontageNow(
+		const FHeavyImpactRecoveryPlan& Plan,
+		FString& OutReason);
+	/** 在短生命周期 PostPhysics Tick 中推进唯一的 Snapshot-to-Slot 混合。 */
+	void UpdateRecoverySnapshotBlend(float DeltaTime);
 	void ValidateRecoverySlotEvaluation(uint32 ExpectedTransactionSerial);
 	void HandleRecoveryMontageWatchdog(uint32 ExpectedTransactionSerial);
 	void HandleRecoveryMontageEnded(UAnimMontage* Montage, bool bInterrupted);
@@ -366,8 +359,6 @@ private:
 	TObjectPtr<UAnimSequenceBase> ActiveRecoverySequence = nullptr;
 
 	FTimerHandle RecoveryRetryTimer;
-	FTimerHandle RecoveryMontageStartTimer;
-	FTimerHandle RecoveryPoseReleaseTimer;
 	FTimerHandle RecoverySlotValidationTimer;
 	FTimerHandle RecoveryMontageWatchdogTimer;
 
@@ -380,12 +371,10 @@ private:
 	float ActivePreparationTimeoutSeconds = 0.0f;
 	float RecoveryBlockedElapsedSeconds = 0.0f;
 	float BodyFrontCalibrationSign = 1.0f;
-	/** Sequence Evaluator 与动态 Montage 共用的起始时间，单位秒。 */
+	/** 动态 Montage 的起始时间，单位秒。 */
 	float ActiveRecoveryAnimationStartTimeSeconds = 0.0f;
-	/** 当前全物理姿势准备已累计的 PostPhysics 秒数。 */
-	float RecoveryPosePreparationElapsedSeconds = 0.0f;
-	/** Alpha 首次达到一时的 PostPhysics 帧；后续帧才允许关闭物理。 */
-	uint64 RecoveryPoseFinalTargetFrame = 0;
+	/** 当前 Snapshot-to-Montage 混合已累计的 PostPhysics 秒数。 */
+	float RecoveryBlendElapsedSeconds = 0.0f;
 	uint64 PreparedEntryFrame = 0;
 	uint32 RecoveryTransactionSerial = 0;
 	bool bConfigured = false;
@@ -394,10 +383,6 @@ private:
 	bool bPendingDownedSleep = false;
 	bool bHardTimeoutReported = false;
 	bool bPureRagdollComparisonActive = false;
-	/** EnterPrepared 锁存的 A/B 路线；同一真实冲击的 Downed 重试继续沿用。 */
-	bool bUseRecoveryPosePreparationForTransaction = false;
-	/** 防止提交最终目标的同一 PostPhysics 帧立即关闭 Chaos。 */
-	bool bRecoveryPoseFinalTargetSubmitted = false;
 	bool bBodyFrontCalibrationValid = false;
 	bool bRecoveryOrientationWarningLogged = false;
 	bool bRecoveryBlockedWarningLogged = false;

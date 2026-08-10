@@ -477,28 +477,29 @@ namespace ZeroEscape::Physics::Tests
 
 		FTuningFixture Fixture;
 		FText Error;
-		TestEqual(TEXT("Recovery pose preparation duration default must remain stable"),
-			Fixture.Tuning->RecoveryPosePreparationSeconds, 0.40f);
-		TestEqual(TEXT("Recovery pose initial control scale default must remain stable"),
-			Fixture.Tuning->RecoveryPoseInitialControlScale, 0.30f);
+		TestEqual(TEXT("Early recovery stable-window default must remain stable"),
+			Fixture.Tuning->RecoveryHandoffStableSeconds, 0.10f);
+		TestEqual(TEXT("Snapshot recovery blend default must remain stable"),
+			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.22f);
 		TestTrue(TEXT("Recovery tuning fixture must begin valid"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 
-		Fixture.Tuning->RecoveryPosePreparationSeconds =
+		Fixture.Tuning->RecoverySnapshotBlendSeconds =
 			std::numeric_limits<float>::quiet_NaN();
-		TestFalse(TEXT("Recovery pose preparation duration must reject NaN"),
+		TestFalse(TEXT("Snapshot recovery blend must reject NaN"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->RecoveryPosePreparationSeconds = 0.40f;
+		Fixture.Tuning->RecoverySnapshotBlendSeconds = 0.22f;
 
-		Fixture.Tuning->RecoveryPoseInitialControlScale = 0.0f;
-		TestFalse(TEXT("Recovery pose initial control scale must remain positive"),
+		Fixture.Tuning->RecoveryHandoffStableSeconds =
+			Fixture.Tuning->RequiredStableSeconds + 0.01f;
+		TestFalse(TEXT("Early recovery window may not exceed the sleep threshold"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->RecoveryPoseInitialControlScale = 0.30f;
+		Fixture.Tuning->RecoveryHandoffStableSeconds = 0.10f;
 
-		Fixture.Tuning->FaceUpPreparationSampleTimeSeconds = 0.1f;
-		TestFalse(TEXT("FaceUp preparation sample time may not exceed its sequence length"),
+		Fixture.Tuning->FaceUpAnimationStartTimeSeconds = 0.1f;
+		TestFalse(TEXT("FaceUp Montage start time may not exceed its sequence length"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->FaceUpPreparationSampleTimeSeconds = 0.0f;
+		Fixture.Tuning->FaceUpAnimationStartTimeSeconds = 0.0f;
 
 		UAnimSequenceBase* SavedFaceUpAnimation =
 			Fixture.Tuning->GetUpFaceUpAnimation.Get();

@@ -4,21 +4,22 @@
 
 ## 当前焦点
 
-HeavyImpact 技术实现和资产装配保持完成状态；当前只做真实机关命中画面、墙角/堵塞/二次受撞边界与 Recast 追逐恢复的同场验收，不扩展新受击或机关框架。
+HeavyImpact 提前 Snapshot 单一混合已完成技术实现；当前只做玩家/AI 真实摆锤命中画面、墙角/堵塞/二次受撞和 Recast 追逐恢复验收，不扩展新受击或机关框架。
 
 ## 已确认
 
-- 2026-08-10 夜间前没有新提交、工作区改动或未跟踪文件；本轮没有新增构建、自动化或 PIE 证据。
-- 玩家与 AI AnimBP 父类均为项目的 `HeavyImpactAnimInstance` 且 UpToDate；Level0、两份 AnimBP、两份 DataAsset/PCA 与 BP_Pursuer 当前均非脏。
-- 两份 HeavyImpact DataAsset 到对应 PCA、BP_Pursuer 到追猎者 HeavyImpact DataAsset 的依赖闭合。
-- 当前 Level0 编辑器世界存在 NavMeshBoundsVolume 与 RecastNavMesh，但最新保存 PIE 日志仍有运行时 Recast 缺失和无地面支撑硬超时；静态 Actor 不能替代运行验证。
+- 正常空间在最短物理模拟后低速且有支撑 0.10 秒即交接；当前物理姿势以 0.22 秒混入已播放的动态起身 Montage。
+- 旧 PreparingPose、Sequence Evaluator、准备时间/控制比例和物理蠕动分支已删除；Blocked Downed 重试不唤醒刚体。
+- 最终起身位置仍要求完整站立 Capsule；墙角可在 60 cm 内沿不穿阻挡几何的路径退让，完全封闭时持续睡眠重试。
+- 玩家/AI AnimBP 引脚回读一致，两个蓝图 warnings-as-errors 编译成功；两份 DataAsset 重启回读一致且相关资产/Level0 非脏。
+- HeavyImpact 自动化 5/5、短 PIE 初始化和最终 Demo 模块构建通过；没有真实命中画面证据。
 
-## Git 阻塞
+## Git
 
-- `origin` 当前为 `git@github.com:LikeThis4747/Demo.git`，不等于内部工蜂地址；2026-08-10 夜间未 add、commit 或 push，报告与记忆更新仍仅在本地。
+- `origin` 已恢复为 `git@git.woa.com:shiqiqiwang/Demo.git`；实施 baseline `3350b78c7708ca170ecb6641d32e240d57077f34` 已推送并远端核验。
 
 ## 当前门槛
 
-1. 用户验收玩家/AI 正躺、趴倒、开阔地、墙边、墙角、堵塞解除、准备中再次受撞，以及起身后控制/追逐恢复。
-2. 在同一正式追逐场景记录 Recast 创建、追猎路径与 HeavyImpact 恢复，并复现无地面支撑硬超时。
+1. 用户验收玩家/AI 正躺、趴倒、开阔地、墙边、墙角、堵塞解除、二次受撞，以及起身后控制/追逐恢复。
+2. 在同一正式追逐场景记录 Recast 创建、追猎路径与 HeavyImpact 恢复，并复现历史无地面支撑硬超时。
 3. HeavyImpact 与追逐通过后，只从摆锤、冲锤、制导机关中选一个已验收原型接入正式一局。

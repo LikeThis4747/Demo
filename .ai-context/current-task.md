@@ -1,8 +1,8 @@
 # Current Task
 
-- 当前任务：HeavyImpact 物理姿势连续过渡已完成实现、构建、自动化与资产装配，等待用户真实机关命中画面、边界和追逐恢复验收；不得标记视觉或可玩验收完成。
-- 当前证据：2026-08-10 夜间无新提交或工作区改动；两个 AnimBP 与 BP_Pursuer 为 UpToDate，Level0、相关 AnimBP/DataAsset/PCA/BP 均非脏，关键资产依赖闭合。
-- 当前边界：本次夜间只读审计未构建、未跑自动化、未启动 PIE、未保存资产。
-- Git 阻塞：`origin` 当前为 `git@github.com:LikeThis4747/Demo.git`，不是内部工蜂；夜间未 add、commit 或 push，本轮允许写入尚未远端备份。
-- 当前风险：最新运行证据仍为 2026-08-08 保存日志中的无地面支撑硬超时与运行时 Recast 缺失；当前编辑器世界静态存在 NavMeshBoundsVolume/RecastNavMesh，不能替代运行时导航证据。
-- 下一步：同场验收玩家/AI 真实命中、正反面、墙边/墙角、堵塞解除、二次受撞、画面连续性、控制/追逐恢复，并记录 Recast 与追猎路径。
+- 当前任务：HeavyImpact 提前 Snapshot 起身交接已完成实现与技术验证，等待用户真实摆锤命中的正反面、开阔地、墙角和恢复控制/追逐画面验收；不得标记视觉或可玩验收完成。
+- 当前实现：正常空间在最短物理模拟后连续低速且有地面支撑 0.10 秒，即保存当前物理姿势、同步启动动态 Montage，并在 0.22 秒内用单一 Alpha 混到原 DefaultSlot；旧可见物理姿势准备/蠕动路线已删除。
+- 空间边界：最终落点必须容纳完整站立 Capsule；骨盆正上方受阻时可在 60 cm 内沿不穿阻挡几何的小范围路径退让。完全封闭时保持 Downed、无 Tick 睡眠并持续重试，不强制穿墙起身。
+- 当前证据：HeavyImpact 自动化 5/5；两个 AnimBP warnings-as-errors 编译、重启回读和短 PIE 初始化通过；最终 DemoEditor `-Module=Demo -NoEngineChanges` 构建成功，未编译引擎。
+- Git：用户已授权恢复内部工蜂 origin；baseline `3350b78c7708ca170ecb6641d32e240d57077f34` 已推送并远端核验。
+- 下一步：用户现场测试玩家/AI 正躺、趴倒和墙角；若只需调观感，优先调整 Snapshot 混合时间或提前交接稳定时间，不恢复旧物理蠕动分支。

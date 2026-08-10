@@ -4,11 +4,12 @@
 
 ## 2026-08-10
 
-- 自 2026-08-09 夜间快照后没有新提交、工作区改动或未跟踪文件；本轮未构建、未跑自动化、未启动 PIE、未保存资产。
-- 双 MCP 在线；Level0 打开且 PIE 停止，两个 HeavyImpact AnimBP 与 BP_Pursuer 均为 UpToDate，Level0、相关 AnimBP/DataAsset/PCA/BP 均非脏，关键资产依赖仍闭合。
-- 当前编辑器世界静态存在 NavMeshBoundsVolume/RecastNavMesh；最新运行证据仍是 2026-08-08 的 Recast 缺失与无地面支撑硬超时，均待同场复现，未判为新代码缺陷。
-- Git 门禁失败：`origin` 实际为 `git@github.com:LikeThis4747/Demo.git`，不是内部工蜂；未 add、commit 或 push，夜报与本轮记忆更新尚未备份。
-- 下一步先由用户恢复/确认 `origin` 为 `git@git.woa.com:shiqiqiwang/Demo.git`，再推进真实机关命中、HeavyImpact 边界与 Recast 追逐的同场验收。
+- 用户否决落地后可见的全物理姿势准备/蠕动路线；实现改为正常空间稳定 0.10 秒后保存当前物理姿势，同步启动起身 Montage，并用单一 Alpha 在 0.22 秒内混入原有 DefaultSlot。
+- 删除 PreparingPose、恢复姿势 Sequence Evaluator、准备时间/控制比例、额外计时器和开发期切换开关；没有保留并行旧路线或失效修复代码。
+- 修正墙角搜索前置死锁：最终位置仍要求完整站立 Capsule 无重叠；骨盆正上方无站立空间时，允许最多 60 cm、且骨盆退让路径不穿墙的小范围找位。完全封闭时保持 Downed 并持续重试。
+- 玩家/AI AnimBP 均简化为 HeavyImpactDownedPose(A) + DefaultSlot(B) + HeavyImpactRecoveryBlendAlpha，warnings-as-errors 编译成功；两份 DataAsset 重启回读为 0.10/0.22 秒与 60/20 cm。
+- HeavyImpact 自动化 5/5、短 PIE 初始化与最终 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过；短 PIE 未自动形成真实摆锤命中，正反面、墙角和最终画面仍待用户现场验收。
+- 用户已授权恢复 `origin`，内部工蜂 baseline `3350b78c7708ca170ecb6641d32e240d57077f34` 已推送并远端核验；本轮最终实现按完整提交收口。
 
 ## 2026-08-09
 

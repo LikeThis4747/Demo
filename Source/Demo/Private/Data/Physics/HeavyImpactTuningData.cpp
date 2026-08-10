@@ -78,6 +78,7 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(StableLinearSpeedCmPerSecond)
 		&& FMath::IsFinite(StableAngularSpeedDegPerSecond)
 		&& FMath::IsFinite(RequiredStableSeconds)
+		&& FMath::IsFinite(RecoveryHandoffStableSeconds)
 		&& FMath::IsFinite(GroundProbeDistance)
 		&& FMath::IsFinite(CapsuleFollowInterpSpeed)
 		&& FMath::IsFinite(FreeFallbackAfterSeconds)
@@ -87,13 +88,11 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(MinimumDownedReimpactImpulse)
 		&& FMath::IsFinite(MaxRecoveryHorizontalAdjustmentCm)
 		&& FMath::IsFinite(RecoverySearchStepCm)
-		&& FMath::IsFinite(RecoveryMontageBlendInSeconds)
+		&& FMath::IsFinite(RecoverySnapshotBlendSeconds)
 		&& FMath::IsFinite(RecoveryMontageBlendOutSeconds)
 		&& FMath::IsFinite(RecoveryPlayRate)
-		&& FMath::IsFinite(RecoveryPosePreparationSeconds)
-		&& FMath::IsFinite(RecoveryPoseInitialControlScale)
-		&& FMath::IsFinite(FaceUpPreparationSampleTimeSeconds)
-		&& FMath::IsFinite(FaceDownPreparationSampleTimeSeconds)
+		&& FMath::IsFinite(FaceUpAnimationStartTimeSeconds)
+		&& FMath::IsFinite(FaceDownAnimationStartTimeSeconds)
 		&& FMath::IsFinite(FaceUpYawOffsetDegrees)
 		&& FMath::IsFinite(FaceDownYawOffsetDegrees);
 	if (!bThresholdsFinite)
@@ -108,6 +107,9 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| StableLinearSpeedCmPerSecond < 0.0f
 		|| StableAngularSpeedDegPerSecond < 0.0f
 		|| RequiredStableSeconds <= 0.0f
+		|| RecoveryHandoffStableSeconds < 0.03f
+		|| RecoveryHandoffStableSeconds > 0.25f
+		|| RecoveryHandoffStableSeconds > RequiredStableSeconds
 		|| GroundProbeDistance <= 0.0f
 		|| CapsuleFollowInterpSpeed <= 0.0f
 		|| FreeFallbackAfterSeconds <= 0.0f
@@ -121,18 +123,14 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| RecoverySearchStepCm > 60.0f
 		|| (MaxRecoveryHorizontalAdjustmentCm > 0.0f
 			&& RecoverySearchStepCm > MaxRecoveryHorizontalAdjustmentCm)
-		|| RecoveryMontageBlendInSeconds < 0.0f
-		|| RecoveryMontageBlendInSeconds > 0.5f
+		|| RecoverySnapshotBlendSeconds < 0.05f
+		|| RecoverySnapshotBlendSeconds > 0.5f
 		|| RecoveryMontageBlendOutSeconds < 0.0f
 		|| RecoveryMontageBlendOutSeconds > 1.0f
 		|| RecoveryPlayRate < 0.1f
 		|| RecoveryPlayRate > 2.0f
-		|| RecoveryPosePreparationSeconds < 0.10f
-		|| RecoveryPosePreparationSeconds > 1.00f
-		|| RecoveryPoseInitialControlScale < 0.05f
-		|| RecoveryPoseInitialControlScale > 1.00f
-		|| FaceUpPreparationSampleTimeSeconds < 0.0f
-		|| FaceDownPreparationSampleTimeSeconds < 0.0f)
+		|| FaceUpAnimationStartTimeSeconds < 0.0f
+		|| FaceDownAnimationStartTimeSeconds < 0.0f)
 	{
 		return Reject(TEXT("HeavyImpact thresholds are outside their safe runtime ranges."));
 	}
@@ -194,10 +192,10 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		return false;
 	}
 
-	if (FaceUpPreparationSampleTimeSeconds > GetUpFaceUpAnimation->GetPlayLength()
-		|| FaceDownPreparationSampleTimeSeconds > GetUpFaceDownAnimation->GetPlayLength())
+	if (FaceUpAnimationStartTimeSeconds > GetUpFaceUpAnimation->GetPlayLength()
+		|| FaceDownAnimationStartTimeSeconds > GetUpFaceDownAnimation->GetPlayLength())
 	{
-		return Reject(TEXT("HeavyImpact recovery preparation sample times must stay within their selected animation lengths."));
+		return Reject(TEXT("HeavyImpact recovery animation start times must stay within their selected animation lengths."));
 	}
 
 	if (!IsValid(PhysicsControlAsset))
