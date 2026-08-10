@@ -2,6 +2,14 @@
 
 > 按日期倒序；只保留完成、验证、决定与遗留，过程细节见任务卡、日报和审计归档。
 
+## 2026-08-10
+
+- 自 2026-08-09 夜间快照后没有新提交、工作区改动或未跟踪文件；本轮未构建、未跑自动化、未启动 PIE、未保存资产。
+- 双 MCP 在线；Level0 打开且 PIE 停止，两个 HeavyImpact AnimBP 与 BP_Pursuer 均为 UpToDate，Level0、相关 AnimBP/DataAsset/PCA/BP 均非脏，关键资产依赖仍闭合。
+- 当前编辑器世界静态存在 NavMeshBoundsVolume/RecastNavMesh；最新运行证据仍是 2026-08-08 的 Recast 缺失与无地面支撑硬超时，均待同场复现，未判为新代码缺陷。
+- Git 门禁失败：`origin` 实际为 `git@github.com:LikeThis4747/Demo.git`，不是内部工蜂；未 add、commit 或 push，夜报与本轮记忆更新尚未备份。
+- 下一步先由用户恢复/确认 `origin` 为 `git@git.woa.com:shiqiqiwang/Demo.git`，再推进真实机关命中、HeavyImpact 边界与 Recast 追逐的同场验收。
+
 ## 2026-08-09
 
 - 上一夜间快照后完成 HeavyImpact 物理姿势准备与起身 Montage 连续交接；另新增壁挂式制导机关稳定性 Review，Review 建议尚未实施。
