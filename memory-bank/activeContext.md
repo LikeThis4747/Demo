@@ -2,25 +2,18 @@
 
 ## 当前焦点
 
-- 统一轻受击响应第一版已完成技术交付，等待用户现场验收。
-- HeavyImpact 已验收且保持不变；Standing Impact 只负责不会击飞/击倒的 None/Slow/Stop。
-- 磁力物与地刺是首轮验证来源；高压气罐和地刺 Heavy 不在本轮预建。
+- 统一轻受击第一版已完成技术交付，等待用户现场验收；HeavyImpact 已完成阶段验收并保持稳定。
+- 预判抛射 Chaos 机关基础机制已验收；后续专项与磁力破碎运行逻辑不自动扩展授权。
+- 最新保存日志仍有 Unable to find RecastNavMesh；需要在同一正式一局建立真实追逐证据。
 
-## 当前实现合同
+## 已验证边界
 
-- 来源决定允许的玩法结果，真实接触数据只决定结果内部的方向与强度；不做全局冲量自动判轻重。
-- 固定优先级：Heavy > Stop > Slow > Inactive。Heavy 真正 Prepared 后先恢复 Light 的速度上限写入，再清 Light；Heavy Busy 不排队。
-- 玩家 Stop 锁移动、跳跃、新抓取和投掷，保留镜头与松手。AI Slow/Stop 都断攻击，只有 Stop 取消 PathFollowing；Stop 结束后立即恢复追击，但不提前结束攻击冷却。
-- Falling Stop 只清 XY，保留 Z、Falling 与重力。
-- AttackProjectileBody：角色 Capsule Block、Mesh Ignore，避免 Light 投掷物持续顶住 Heavy/Downed 身体。
-
-## 当前验证
-
-- Demo-only 正式链接成功；CharacterImpact 2/2 + HeavyImpact 5/5。
-- 四个 Blueprint、四份 DataAsset 与运行时装配经官方 MCP 回读。
-- 短 PIE 无配置错误，但没有替代用户对真实命中画面的验收。
+- Demo 模块构建成功；CharacterImpact 2/2 + HeavyImpact 5/5。
+- 轻受击 Blueprint/DataAsset 与短 PIE 回读来自 2026-08-10 白天记录，本次夜间未重新验证资产。
+- 本次蓝图审计未执行：官方 MCP 未暴露，本地 MCP pong=false。
 
 ## 下一步
 
-- 用户测试磁力物命中追猎者、地刺玩家/AI、空中 Stop 与 Light/Heavy 抢占。
-- 玩家方向动画按既有 GetUp 工作流复制并人工 Replace Skeleton、Persona 检查后再装配。
+1. 用户验收真实磁力命中、地刺玩家/AI、空中 Stop 与 Light/Heavy 抢占。
+2. 在同一正式场景验证 Recast 与真实追猎者跨层追逐。
+3. 将一个已验收机关组合进正式一局；磁力破碎 C++/Blueprint 仍需另行授权。

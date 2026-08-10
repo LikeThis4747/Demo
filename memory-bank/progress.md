@@ -86,3 +86,7 @@
 - 空中 Stop 只清水平速度；AI Slow/Stop 都断攻击，只有 Stop 取消 PathFollowing；Stop 后立即恢复追击但不提前结束攻击冷却；Heavy 真正 Prepared 后原子清 Light。
 - Demo-only 构建成功，CharacterImpact 2/2 + HeavyImpact 5/5，Blueprint/DataAsset/运行时碰撞基线经官方 MCP 回读。
 - 真实磁力命中、地刺手感、Light/Heavy 交叉与不同帧率仍待用户验收；玩家动画待人工重定向。
+
+## 当前夜间优先级
+
+- 先完成统一轻受击真实命中/空中 Stop/Light-Heavy 交叉手感与同场景 Recast 追逐证据；之后只选一个已验收机关组合进正式一局，磁力破碎运行逻辑仍待用户另行授权。

@@ -2,24 +2,15 @@
 
 ## 当前任务
 
-统一轻受击响应第一版已完成代码、配置、DataAsset 与 Blueprint 装配，当前等待用户现场手感验收。实施基线为 `aa00afca171cc4864e742f83f1815a2d9c1a8111`。
+统一轻受击第一版已完成代码、配置、DataAsset 与 Blueprint 装配，等待用户现场手感验收；HeavyImpact 与预判抛射机关基础机制已完成阶段验收。
 
-## 当前实现
+## 当前证据
 
-- 玩家与追猎者共享 Standing Impact 请求、方向/强度、去重与 Heavy 抢占；来源 Profile 分别映射 `None / Slow / Stop`。
-- 磁力投掷物：玩家 None，追猎者 Stop 0.60 秒并播放方向动画。
-- 地刺：玩家 Stop 0.25 秒；追猎者 Slow 0.60 秒、速度倍率 0.45。
-- 空中 Stop 只清水平速度，保留 Z、Falling 与重力。
-- AI Stop 结束后即使旧攻击冷却未结束也恢复追击移动，但冷却仍限制下一次攻击。
-- HeavyImpact 保持唯一击飞、PCA、倒地和起身权威，内部未修改。
+- Demo 模块构建成功；CharacterImpact 2/2 + HeavyImpact 5/5。
+- 白天短 PIE 与官方 MCP 回读未见轻受击配置错误；本次夜间未重新构建、测试或运行 PIE。
+- 本次蓝图审计未执行：官方 MCP 未暴露，本地 MCP pong=false。
+- 最新保存日志仍有 Unable to find RecastNavMesh 警告，需白天在同一正式一局复现并验证追逐。
 
-## 技术验证
+## 下一步
 
-- DemoEditor 只构建 Demo 模块成功，使用 `-Module=Demo -NoEngineChanges`。
-- CharacterImpact 2/2 + HeavyImpact 5/5，合计 7/7 自动化成功。
-- 四个 Blueprint 和四份新 DataAsset 已编译/保存/官方 MCP 回读。
-- 短 PIE 初始化与运行时碰撞基线回读正常，无轻受击配置错误。
-
-## 待用户验收
-
-真实磁力命中、地刺玩家/AI手感、空中 Stop、Light/Heavy 交叉抢占及不同帧率边界。玩家三条方向动画仍待人工 Replace Skeleton 与 Persona 观感确认；当前字段有意留空，不使用绕过。
+先验收真实轻受击与 Light/Heavy 交叉，再建立同场景 Recast 追逐证据；之后只选一个已验收机关组合进正式一局。磁力破碎运行逻辑尚未授权。
