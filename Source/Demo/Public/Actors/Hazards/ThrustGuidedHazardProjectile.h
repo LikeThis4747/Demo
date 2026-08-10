@@ -4,7 +4,7 @@
  * @file ThrustGuidedHazardProjectile.h
  * 职责：拥有一次发射的唯一 Chaos 胶囊刚体、一次质心冲量、接触阶段和可选 HeavyImpact 准备。
  * 边界：不使用 Thruster/ProjectileMovement，不 Tick、不追踪目标、不直接改写速度或 Transform。
- * 状态 Owner：本 Actor 唯一写入 Ballistic/FreePhysics/Sleeping/Disabled、LaunchId 和接触去重状态。
+ * 状态 Owner：本 Actor 唯一写入 Ballistic/FreePhysics/Sleeping/Disabled、LaunchId 和重冲击通知去重状态。
  * 轴约定：胶囊局部 +Z 是弹体长轴；SpawnTransform 会把它对齐发射器实际炮管方向。
  */
 
@@ -167,9 +167,6 @@ private:
 
 	/** ConfigureLaunch 是否在 FinishSpawningActor 前完整注入。 */
 	bool bLaunchConfigured = false;
-
-	/** 本次是否已经出现首个有效阻挡；之后仍完整记录真实重复接触。 */
-	bool bHadMeaningfulBlockingContact = false;
 
 	/** 是否已按 HeavyImpact 开关绑定预测球委托；EndPlay 只清理真实绑定。 */
 	bool bPreparationBindingsActive = false;

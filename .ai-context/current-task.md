@@ -2,23 +2,22 @@
 
 ## 当前任务
 
-壁挂式预判抛射 Chaos 机关的当前基础机制版本已获用户验收。当前权威参数为 `ReferenceRange=900 cm`、`PreferredLaunchAngle=18 deg`、`ProjectileMassKilograms=50 kg`、`ProjectileLifetimeSeconds=8 s`，实际初速约 `1224.97 cm/s`。
+壁挂式预判抛射 Chaos 机关的当前基础机制版本已获用户验收，验收版提交为 `f7ae4f44f427b562ec87cfd4a0ce9a109a873747`。当前权威参数为 `ReferenceRange=900 cm`、`PreferredLaunchAngle=18 deg`、`ProjectileMassKilograms=50 kg`、`ProjectileLifetimeSeconds=8 s`。
 
-## 验收证据
+## 本轮清理
 
-- Demo `-NoLink` 与 `DemoEditor Win64 Development` 正式链接成功，只构建 Demo 模块。
-- 官方 MCP 回读默认 DataAsset 为 900 / 18 / 50 / 8，非 Dirty。
-- 最小 PIE 记录实际初速 1224.97 cm/s、50 kg、8 s；发射后存在，9 秒后 Actor 已清除，PIE 已停止。
-- 用户确认当前基础机关先验收通过；模型更换、表现细节和轻受击接入属于后续独立增量。
+- 删除与 `Ballistic -> FreePhysics` 完全重复的首次阻挡布尔状态，`Phase` 是唯一阶段来源。
+- `ProjectileBody` 关闭无效 Overlap 事件生成；HeavyImpact `PreparationVolume` 仍独立负责可选 Pawn Overlap。
+- 配置或生成失败的禁用弹体增加 1 秒 LifeSpan 回收；正常发射仍使用 DataAsset 的 8 秒 LifeSpan。
+- 正式文档权威统一为 2026-08-10 狭窄走廊 DailyPlan、DailyReport、当前 Source 与默认 DataAsset；旧推进文档保留历史标记。
 
-## 当前门禁
+## 验证
 
-1. 先把当前验收版完整 commit/push，核对内部工蜂远端与 clean status。
-2. 在新干净基线后，只读完成 Level0 和旧实现残留审计。
-3. 向用户展示精确清理预览；未经再次明确授权，不落盘技术债清理。
+- Demo `-NoLink` 编译成功。
+- `DemoEditor Win64 Development` 正式链接成功，只重建 Demo 项目模块。
+- 两轮独立只读复核无 Blocker/High；`git diff --check` 通过。
+- 未修改 Blueprint、DataAsset、Level0、模型或轻受击系统。
 
-## 清理边界
+## 后续边界
 
-- 不把模型更换或轻受击接入混进本次清理。
-- HeavyImpact Preparation 与 Exhaust 表现挂点属于后续接口，不按旧推进残留删除。
-- 旧讨论文档可保留，但必须标明当前 2026-08-10 预判抛射 Chaos 方案与 Source/DataAsset 为权威。
+本轮清理由最终 Git 提交收口；模型更换、表现细节、轻受击接入和边界专项均另行处理。

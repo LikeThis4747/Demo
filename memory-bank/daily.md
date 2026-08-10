@@ -95,3 +95,13 @@
 - 用户验收当前 900 cm / 18 deg / 50 kg / 8 s 预判抛射 Chaos 机关版本。
 - 已明确后续模型、表现细节与轻受击不混入本轮技术债清理。
 - 按门禁先提交验收版，随后只读审计并向用户展示清理预览。
+
+<!-- written by shiqiqiwang at 2026-08-10 12:43 UTC -->
+
+### 2026-08-10 — 机关验收后技术债清理
+
+- 删除与 Ballistic/FreePhysics 阶段完全重复的首次阻挡布尔状态，Phase 成为唯一状态来源。
+- 关闭 ProjectileBody 无效的 Overlap 事件生成；HeavyImpact PreparationVolume 保持独立可选接缝。
+- 配置或生成失败的禁用弹体增加 1 秒 LifeSpan，正常发射仍使用 8 秒 DataAsset 寿命。
+- 当前文档权威统一为 2026-08-10 狭窄走廊 Plan/Report、当前 Source 与默认 DataAsset；旧推进方案保留历史标记。
+- Demo -NoLink 与 DemoEditor 正式链接成功，只构建 Demo 项目模块；未修改 Blueprint、DataAsset、Level0、模型或轻受击。

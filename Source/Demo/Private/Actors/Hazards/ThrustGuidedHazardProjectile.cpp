@@ -34,6 +34,9 @@ namespace ThrustGuidedHazardProjectile
 
 	/** 发射器和弹体各自推导初速时允许的浮点差异，单位 cm/s。 */
 	constexpr float MinimumLaunchSpeedTolerance = 1.0f;
+
+	/** 配置或生成失败后的无碰撞残体保留时间，单位 s。 */
+	constexpr float DisabledProjectileCleanupDelaySeconds = 1.0f;
 }
 
 /** 创建唯一物理胶囊、查询球和两个纯美术挂点。 */
@@ -53,7 +56,7 @@ AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 	ProjectileBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	ProjectileBody->SetCollisionResponseToChannel(ECC_Camera, ECR_Ignore);
-	ProjectileBody->SetGenerateOverlapEvents(true);
+	ProjectileBody->SetGenerateOverlapEvents(false);
 	ProjectileBody->SetNotifyRigidBodyCollision(true);
 	ProjectileBody->SetSimulatePhysics(false);
 	ProjectileBody->SetEnableGravity(true);
@@ -211,7 +214,6 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		bPreparationBindingsActive = true;
 	}
 
-	bHadMeaningfulBlockingContact = false;
 	ContactSequence = 0;
 	PreparationCandidates.Reset();
 	NotifiedReceiversThisLaunch.Reset();
@@ -729,13 +731,11 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 		&& IsValid(ContactOwner)
 		&& ContactOwner != this;
 	if (Phase != EThrustGuidedHazardProjectilePhase::Ballistic
-		|| bHadMeaningfulBlockingContact
 		|| !bBlockingContact)
 	{
 		return;
 	}
 
-	bHadMeaningfulBlockingContact = true;
 	Phase = EThrustGuidedHazardProjectilePhase::FreePhysics;
 	if (IsValid(RuntimeTuningData))
 	{
@@ -839,6 +839,11 @@ void AThrustGuidedHazardProjectile::DisableProjectile(const FString& Reason)
 {
 	StopPreparationMonitoring();
 	Phase = EThrustGuidedHazardProjectilePhase::Disabled;
+	if (IsValid(GetWorld()))
+	{
+		SetLifeSpan(
+			ThrustGuidedHazardProjectile::DisabledProjectileCleanupDelaySeconds);
+	}
 	PreparationCandidates.Reset();
 	NotifiedReceiversThisLaunch.Reset();
 
