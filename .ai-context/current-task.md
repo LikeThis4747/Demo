@@ -1,25 +1,30 @@
 # Current Task
 
-## 当前任务
+## 夜间交接状态（2026-08-12）
 
-完成追猎者物理轻受击“效果原型”的拟实现稿。当前不设计生产接入，不把测试物、磁力投掷或 Heavy 生命周期揉进轻受击效果。
+当前不是功能实施阶段。先处理资产状态分叉与可玩闭环证据，再决定进入哪项方案。
 
-## 当前权威方向
+## 必须先处理
 
-- 第一轮新增 C++ 为 0。
-- 只新增一个独立测试 Physics Control Asset、一个普通 Actor Blueprint 测试目标、一个独立测试关卡。
-- 测试目标仅有追猎者 Mesh、固定 Idle 与独立 PhysicsControl；胸、头、左右手臂在测试碰撞前已受动画目标约束地模拟，spine_01、骨盆、腿和脚保持 Kinematic。
-- 用户可用任意真实模拟物体直接撞击；效果资产不生成、不识别、不控制箱子或机关，也不绑定 Hit、不补角色冲量、不播 Montage。
-- 只先比较 Kinematic 与 Controlled 的 60 FPS 画面，判断外物反作用、部位相关让位、站立稳定和自然回稳。
+- Level0 在 Editor 中 Dirty。
+- `AS_Pursuer_ChargeRun_Work`、其 Driving 资产和一个重名/临时 Driving 对象均 Dirty；前两份磁盘资产已删除。
+- 夜间未保存、恢复或重建。用户必须白天明确这些 Editor 内容保存还是放弃；Git 快照只覆盖磁盘状态。
+- Level0 静态存在 NavMeshBoundsVolume 与 RecastNavMesh，但最新相关保存 PIE 日志仍报告运行时找不到 Recast；需要同场景真实追猎者追逐验证。
 
-## 冻结范围
+## 已有技术证据
 
-- 已验收 HeavyImpact 的 C++、PCA、DataAsset、击飞、倒地、起身和误预测回滚全部不改。
-- 生产玩家、BP_Pursuer、AnimBP、CharacterImpact、磁力、破碎、地刺、PCG、Level0 与 ThrustGuidedHazard 全部不改。
-- 全身常驻、Light/Heavy 大一体化、箱子—角色跨对象 Reserve/Prepare/Commit/Clearing 均为撤销的研究草稿，不得实施。
-- 效果通过前不抽共享组件、不预留生产接口。
+- 真实弹体预装机关已完成 Demo 模块链接和两台 Launcher 短 PIE：同一个 Projectile 依次记录 loaded、started、released loaded projectile。
+- 关键追猎者/机关 Blueprint 为 UpToDate；机关与 HeavyImpact 的 BP -> DA -> PCA 引用闭合。
+- 以上不替代用户对机关画面/机械感的验收。
 
-## 当前阻塞
+## 仍待确认的方案
 
-- 首次写入三个测试资产前，仍须完成完整 Git 基线门禁。
-- 工作区另有不属于本任务的 Level0 与 AS_Pursuer_ChargeRun_Work 改动；不得修改、回退或纳入本任务提交。
+- PCG 机关与物理资源分层 Population：修订讨论稿已形成，未获实现授权；确认后仍需先展示代码预览。
+- 物理轻受击：只允许零 C++ 的独立测试 PCA + Actor Blueprint + 测试关卡；不改生产 Heavy、磁力、玩家、追猎者或 Level0，实施前仍需完整 Git 基线和用户明确授权。
+
+## 建议顺序
+
+1. 处理 Dirty/删除状态归属。
+2. 建立同场景 Recast 真实追逐证据。
+3. 完成预装机关用户画面验收。
+4. 用户选择后再推进 PCG Population 方案或隔离物理轻受击效果原型。

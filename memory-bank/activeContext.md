@@ -2,23 +2,20 @@
 
 ## 当前焦点
 
-- 磁力投掷物碰撞破碎 P0 已由用户验收并归档；其唯一 Hit/CCD/ImpactId 事务继续只归磁力物自身，不与角色身体控制绑定。
-- 2026-08-10 的 Standing Impact 第一版已完成技术装配，但 None/Slow/Stop、攻击打断和 Montage 只属于玩法/动画层；用户已否定其作为“物理轻受击”画面。
-- 全身常驻受控物理、Light/Heavy 大一体化，以及磁力物与角色之间 Reserve/Prepare/Commit/Clearing 均已撤销为非权威研究草稿。
-- 当前只规划来源无关、零 C++ 的追猎者物理轻受击效果原型：独立测试 PCA + 普通 Actor Blueprint + 独立测试关卡。用户用任意真实模拟物体直接碰撞，效果资产不识别或管理来源。
+- 8 月 11 日已完成磁力投掷物碰撞破碎 P0 用户验收归档。
+- 壁挂预判抛射机关已技术实现同一真实弹体的 Loaded 预装生命周期；Demo 模块链接和两台机关短 PIE 日志通过，用户画面验收仍待办。
+- PCG 机关与物理资源分层放置仍是修订讨论稿；保持一个 `AZeroEscapeGameplayPopulator` Owner、独立危险/资源预算与统一 Spawn/回滚事务，尚未授权实现。
+- 物理轻受击仍只允许零 C++ 隔离效果原型；全身常驻、Light/Heavy 大一体化和磁力物—角色跨对象租约均非权威方向。
 
-## 已验证边界
+## 当前阻塞与风险
 
-- HeavyImpact 当前重受击效果是用户已验收基线；原型阶段不修改其 C++、PhysicsControlAsset、DataAsset、碰撞、倒地、起身或误预测回滚。
-- 追猎者 Physics Asset 具备 spine_02/03、head、左右 upperarm/lowerarm/hand 刚体，可组成九个上半身测试 Body；spine_01、pelvis、腿和脚明确排除。
-- 官方 UE5.8 Physics Control API 可在 Blueprint 中按 Physics Control Asset 创建 Controls/Body Modifiers；第一轮不需要新增 C++。
-- “物理轻受击”的最低画面证据是：外物相对 Kinematic 对照明显失速/偏转，命中身体链按部位让位，骨盆/脚稳定，并自然回到 Idle。
-- Stop/Slow/Montage、非零日志或手工补 AddImpulse 都不能替代上述画面证据。
+- Level0 和三项冲撞动画对象在 Editor 中 Dirty；前两份动画磁盘文件已删除。夜间未保存或恢复，需用户白天决定真实归属。
+- Level0 静态存在 Recast Actor，但最新相关 PIE 保存日志仍提示运行时找不到 Recast；真实追猎者同场景追逐尚未证明。
+- 真实弹体预装任务卡的最终提交勾选状态可能落后于 Git；当前远端已包含相关 C++ 提交，后续白天再校准任务记录，不在夜间改卡。
 
 ## 下一步
 
-1. 完成并审计 `claude/docs/2026-08-11-追猎者物理轻受击效果原型拟实现代码.md` 与任务卡。
-2. 协调 Level0 与 AS_Pursuer_ChargeRun_Work 的并行改动，完成完整基线 commit/push。
-3. 用户明确授权后，只创建三个测试资产；若官方 MCP 不能安全写 PCA 嵌套数据或 Blueprint 图，直接请用户按表格在编辑器操作，不写 C++ 绕过。
-4. 先做 60 FPS Kinematic/Controlled 画面对照，最多三组参数；失败即止损。
-5. 只有画面获用户认可，才另立生产接入方案，比较局部常开与通用预激活，并根据真实重复职责判断是否需要共享身体控制组件。
+1. 用户处理 Dirty/删除状态。
+2. 同场景验证 Recast 与真实追猎者追逐。
+3. 用户验收预装机关画面。
+4. 选择 PCG Population 方案或物理轻受击隔离原型；任何实施均重新走讨论、代码预览、明确授权和完整内部工蜂基线门禁。

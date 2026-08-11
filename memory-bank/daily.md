@@ -1,5 +1,14 @@
 # Daily Log — Demo
 
+## 2026-08-12 夜间只读审计
+
+- 白天完成磁力投掷物破碎 P0 验收归档、壁挂机关外观试装与同一真实弹体的 Loaded 预装生命周期；已有 Demo 模块链接和两台机关短 PIE 日志，本次夜间未构建、未跑测试、未启动 PIE。
+- 双 UE MCP 在线：Level0 打开且 PIE 停止；关键追猎者/机关蓝图 UpToDate，机关与 HeavyImpact 的 BP -> DA -> PCA 引用闭合。
+- Level0 在 Editor 中 Dirty；冲撞动画主资产、Driving 资产和一个重名/临时 Driving 对象均 Dirty，而前两份磁盘资产已删除。夜间未保存、恢复或重建；Git 只能备份磁盘状态。
+- Level0 静态存在 NavMeshBoundsVolume/RecastNavMesh，但最新相关保存 PIE 日志仍报告 Unable to find RecastNavMesh；明日先处理 Dirty 归属，再做同场景真实追猎者导航证据。
+- PCG 机关/资源分层放置与零 C++ 物理轻受击效果原型仍待用户确认/授权，不得视为已实施。
+- 新玩法建议：先用一条可选 PCG 支路组合一台已验收机关与少量磁力资源，形成可绕行的风险换资源遭遇。
+
 ## 2026-08-11 磁力投掷物碰撞破碎 P0 验收归档
 
 - 用户否决初版命中 AI 时“停住再自然下落”的表现后，修正版从已推送且干净的 ba630a5 基线实施。
@@ -93,48 +102,3 @@
 - PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow，并形成跨层宏结构 + 逐层二维 WFC 的正式方向。
 - 追猎者 Timer 状态机、locomotion、Physics Control 局部受击、地刺、磁性抓取和玩家生命基础链路形成；当前受击与多层追逐仍需现版本验收。
 - 第三方 SFCorridors 仅只读筛选；任何删除仍需依赖闭包、精确清单与用户授权。
-
-<!-- written by shiqiqiwang at 2026-08-10 11:41 UTC -->
-
-### 2026-08-10 — 机关首次 PIE 触发回归
-
-- 用户报告机关完全不触发；日志确认两个 Launcher 在 BeginPlay 因旧关卡实例 Muzzle 父级错误而 Disabled。
-- 官方 MCP 修正并保存两个 Level0 实例为 Muzzle -> AimPivot；C++ 增加旧实例层级自愈。
-- Demo-only 编译/链接成功；定点 PIE 中两个实例均完成 armed、锁定、0.55 秒预警和 fired，无 disabled/failed。
-- 未完成用户画面与玩法验收，薄墙和连续反弹专项仍开放。
-
-<!-- written by shiqiqiwang at 2026-08-10 12:09 UTC -->
-
-### 2026-08-10 — 机关速度、质量与自动清除
-
-- 用户确认将机关设计初速提高到约 1225 cm/s、弹体质量提高到 50 kg，并新增发射后 8 秒清除。
-- C++ 寿命合同、校验和 Actor LifeSpan 已落盘；DataAsset 回读为 900 cm / 18 deg / 50 kg / 8 s。
-- Demo-only 编译/链接成功；最小 PIE 日志确认实际 1224.97 cm/s、50 kg、8 s，且 9 秒后弹体已清除。
-- 速度、碰撞重量感和物理道具推动强度仍待用户现场验收。
-
-<!-- written by shiqiqiwang at 2026-08-10 12:22 UTC -->
-
-### 2026-08-10 — 机关基础机制验收
-
-- 用户验收当前 900 cm / 18 deg / 50 kg / 8 s 预判抛射 Chaos 机关版本。
-- 已明确后续模型、表现细节与轻受击不混入本轮技术债清理。
-- 按门禁先提交验收版，随后只读审计并向用户展示清理预览。
-
-<!-- written by shiqiqiwang at 2026-08-10 12:43 UTC -->
-
-### 2026-08-10 — 机关验收后技术债清理
-
-- 删除与 Ballistic/FreePhysics 阶段完全重复的首次阻挡布尔状态，Phase 成为唯一状态来源。
-- 关闭 ProjectileBody 无效的 Overlap 事件生成；HeavyImpact PreparationVolume 保持独立可选接缝。
-- 配置或生成失败的禁用弹体增加 1 秒 LifeSpan，正常发射仍使用 8 秒 DataAsset 寿命。
-- 当前文档权威统一为 2026-08-10 狭窄走廊 Plan/Report、当前 Source 与默认 DataAsset；旧推进方案保留历史标记。
-- Demo -NoLink 与 DemoEditor 正式链接成功，只构建 Demo 项目模块；未修改 Blueprint、DataAsset、Level0、模型或轻受击。
-
-<!-- written by shiqiqiwang at 2026-08-11 06:40 UTC -->
-
-## 2026-08-11 — 预判抛射机关外观试装
-
-- 实施前完成文档基线提交并推送 `a91ca2ef227b1b21af16794dac8e233b6cefe365`。
-- 仅修改两个机关 Blueprint：Launcher 使用 UE 基础几何与 `MI_MetalChrome` 形成壁挂支撑；Projectile 使用 `SM_barrel3`/`MI_barrel3`，Scale=`0.78`、Relative Z=`-40.04 cm`，旧 Nose 隐藏。
-- 处理首次新增组件造成的 Level0 空实例缓存：确认关卡无未保存改动后正常重启并恢复本轮自动文件变化；最终 Level0 不在 Git 改动范围。
-- 两个 Blueprint 以 Warning 视为 Error 编译通过；临时 PIE 日志确认 `armed -> warning -> fired` 与弹体正常启动，PIE 已停止。最终画面与机械感由用户验收。

@@ -1,5 +1,12 @@
 # Progress — Demo
 
+## 2026-08-11 真实弹体预装技术交付（待用户画面验收）
+
+- 壁挂预判抛射机关改为同一个 Projectile Actor 从 Loaded 预装到离膛后开启 Chaos；没有预览替身、Projectile Tick 或飞行中追踪。
+- Demo 模块已链接；保存日志证明两台 Launcher 均完成 loaded -> started -> released loaded projectile，关键 Blueprint/DA 当前干净且引用正确。
+- 技术证据不替代用户画面验收；正式一局接入仍需先解决同场景 Recast 追逐风险。
+- 2026-08-12 夜间发现 Level0 与冲撞动画存在 Editor Dirty/磁盘删除分叉，必须由用户白天确认保存或放弃。
+
 ## 2026-08-11 磁力投掷物碰撞破碎 P0 验收归档
 
 - 初版命中 AI 后“停住再下落”的问题已修正：合格 Hit 当帧冻结运动，按真实接触方向和 NormalImpulse / 质量恢复有限法向速度。
