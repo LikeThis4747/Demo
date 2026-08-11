@@ -2,7 +2,7 @@
 
 /**
  * @file ThrustGuidedHazardProjectile.cpp
- * 职责：实现一次质心冲量启动的唯一 Chaos 胶囊刚体、连续接触阶段和可选 HeavyImpact 准备。
+ * 职责：实现从炮架预装到离膛的同一个 Chaos 胶囊刚体、一次质心冲量、连续接触阶段和可选 HeavyImpact 准备。
  * 边界：不使用 Thruster/ProjectileMovement，不 Tick、不追踪目标，不改写飞行中速度或 Transform。
  */
 
@@ -84,37 +84,40 @@ AThrustGuidedHazardProjectile::AThrustGuidedHazardProjectile()
 	ApplyConfiguration(*GetDefault<UThrustGuidedHazardTuningData>());
 }
 
-/** 延迟生成阶段只保存冻结初速度；FinishSpawningActor 后由 BeginPlay 唯一启动物理。 */
-void AThrustGuidedHazardProjectile::ConfigureLaunch(
-	UThrustGuidedHazardTuningData* InTuningData,
-	const FVector& InLaunchVelocity,
-	const FGuid& InLaunchId)
+/** 延迟生成阶段只注入配置；FinishSpawningActor 后保持预装而不启动物理。 */
+void AThrustGuidedHazardProjectile::ConfigureLoaded(
+	UThrustGuidedHazardTuningData* InTuningData)
 {
 	if (HasActorBegunPlay())
 	{
 		UE_LOG(
 			LogThrustGuidedHazardProjectile,
 			Error,
-			TEXT("ConfigureLaunch called after BeginPlay on %s."),
+			TEXT("ConfigureLoaded called after BeginPlay on %s."),
 			*GetNameSafe(this));
 		return;
 	}
 
-	bLaunchConfigured = true;
+	bLoadedConfigured = true;
 	RuntimeTuningData = InTuningData;
-	PendingLaunchVelocity = InLaunchVelocity;
-	LaunchId = InLaunchId;
+	PendingLaunchVelocity = FVector::ZeroVector;
+	LaunchId = FGuid();
 }
 
-/** 校验延迟生成合同并让同一个 Chaos 刚体从真实质心获得一次初始冲量。 */
+bool AThrustGuidedHazardProjectile::IsLoaded() const
+{
+	return Phase == EThrustGuidedHazardProjectilePhase::Loaded;
+}
+
+/** 校验预装合同；真实弹体此时可见，但没有碰撞、重力、物理模拟或寿命倒计时。 */
 void AThrustGuidedHazardProjectile::BeginPlay()
 {
 	Super::BeginPlay();
 	Phase = EThrustGuidedHazardProjectilePhase::Uninitialized;
 
-	if (!bLaunchConfigured)
+	if (!bLoadedConfigured)
 	{
-		DisableProjectile(TEXT("弹体未通过延迟生成调用 ConfigureLaunch。"));
+		DisableProjectile(TEXT("弹体未通过延迟生成调用 ConfigureLoaded。"));
 		return;
 	}
 
@@ -131,12 +134,6 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		return;
 	}
 
-	if (!LaunchId.IsValid())
-	{
-		DisableProjectile(TEXT("LaunchId 无效。"));
-		return;
-	}
-
 	if (!GetActorScale3D().Equals(FVector::OneVector, KINDA_SMALL_NUMBER))
 	{
 		DisableProjectile(TEXT("Projectile Actor Scale 必须保持 (1,1,1)。"));
@@ -150,6 +147,69 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		return;
 	}
 
+	if (!ProjectileBody->GetComponentTransform().IsValid())
+	{
+		DisableProjectile(TEXT("ProjectileBody 预装 Transform 无效。"));
+		return;
+	}
+
+	ApplyConfiguration(*RuntimeTuningData);
+	ProjectileBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ProjectileBody->SetSimulatePhysics(false);
+	ProjectileBody->SetEnableGravity(false);
+	PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ExhaustVisualRoot->SetVisibility(false, true);
+	ContactSequence = 0;
+	PreparationCandidates.Reset();
+	NotifiedReceiversThisLaunch.Reset();
+	Phase = EThrustGuidedHazardProjectilePhase::Loaded;
+
+	UE_LOG(
+		LogThrustGuidedHazardProjectile,
+		Display,
+		TEXT("Projectile %s loaded Data=%s Location=%s."),
+		*GetNameSafe(this),
+		*GetPathNameSafe(RuntimeTuningData),
+		*ProjectileBody->GetComponentLocation().ToCompactString());
+}
+
+/** 炮架解除挂接后，同一个真实弹体才开启 Chaos、寿命和唯一一次质心冲量。 */
+bool AThrustGuidedHazardProjectile::LaunchFromLoaded(
+	const FVector& InLaunchVelocity,
+	const FGuid& InLaunchId,
+	FString& OutError)
+{
+	OutError.Reset();
+	if (!HasActorBegunPlay()
+		|| Phase != EThrustGuidedHazardProjectilePhase::Loaded)
+	{
+		OutError = TEXT("弹体不处于可离膛的 Loaded 阶段。");
+		return false;
+	}
+	if (!IsValid(RuntimeTuningData))
+	{
+		OutError = TEXT("预装弹体没有有效 ThrustGuidedHazardTuningData。");
+		return false;
+	}
+	if (!InLaunchId.IsValid())
+	{
+		OutError = TEXT("LaunchId 无效。");
+		return false;
+	}
+	if (!IsValid(ProjectileBody)
+		|| ProjectileBody->GetAttachParent() != nullptr)
+	{
+		OutError = TEXT("真实弹体必须先从炮架解除挂接，才能开启 Chaos。");
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	if (!IsValid(World))
+	{
+		OutError = TEXT("弹体没有有效 World。");
+		return false;
+	}
+
 	const float GravityMagnitude = FMath::Abs(World->GetGravityZ());
 	const float ReferenceAngleRadians = FMath::DegreesToRadians(
 		RuntimeTuningData->PreferredLaunchAngleDegrees);
@@ -159,17 +219,17 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		|| !FMath::IsFinite(SinDoubleAngle)
 		|| SinDoubleAngle <= KINDA_SMALL_NUMBER)
 	{
-		DisableProjectile(TEXT("World 重力或参考发射角无法推导有限初速。"));
-		return;
+		OutError = TEXT("World 重力或参考发射角无法推导有限初速。");
+		return false;
 	}
 
 	const float ExpectedLaunchSpeed = FMath::Sqrt(
 		GravityMagnitude * RuntimeTuningData->ReferenceRange / SinDoubleAngle);
-	const float PendingLaunchSpeed = PendingLaunchVelocity.Size();
+	const float PendingLaunchSpeed = InLaunchVelocity.Size();
 	const float LaunchSpeedTolerance = FMath::Max(
 		ThrustGuidedHazardProjectile::MinimumLaunchSpeedTolerance,
 		ExpectedLaunchSpeed * 0.001f);
-	if (PendingLaunchVelocity.ContainsNaN()
+	if (InLaunchVelocity.ContainsNaN()
 		|| !FMath::IsFinite(PendingLaunchSpeed)
 		|| PendingLaunchSpeed <= KINDA_SMALL_NUMBER
 		|| !FMath::IsFinite(ExpectedLaunchSpeed)
@@ -178,37 +238,37 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 			ExpectedLaunchSpeed,
 			LaunchSpeedTolerance))
 	{
-		DisableProjectile(FString::Printf(
+		OutError = FString::Printf(
 			TEXT("冻结初速度无效或与设计初速不一致。Pending=%.3f Expected=%.3f。"),
 			PendingLaunchSpeed,
-			ExpectedLaunchSpeed));
-		return;
+			ExpectedLaunchSpeed);
+		return false;
 	}
-
 	if (!ProjectileBody->GetComponentTransform().IsValid())
 	{
-		DisableProjectile(TEXT("ProjectileBody 出生 Transform 无效。"));
-		return;
+		OutError = TEXT("ProjectileBody 离膛 Transform 无效。");
+		return false;
 	}
 
-	ApplyConfiguration(*RuntimeTuningData);
+	PendingLaunchVelocity = InLaunchVelocity;
+	LaunchId = InLaunchId;
 
-	ProjectileBody->OnComponentHit.AddDynamic(
+	ProjectileBody->OnComponentHit.AddUniqueDynamic(
 		this,
 		&AThrustGuidedHazardProjectile::HandleProjectileHit);
-	ProjectileBody->OnComponentWake.AddDynamic(
+	ProjectileBody->OnComponentWake.AddUniqueDynamic(
 		this,
 		&AThrustGuidedHazardProjectile::HandleProjectileWake);
-	ProjectileBody->OnComponentSleep.AddDynamic(
+	ProjectileBody->OnComponentSleep.AddUniqueDynamic(
 		this,
 		&AThrustGuidedHazardProjectile::HandleProjectileSleep);
 
 	if (RuntimeTuningData->bEnableHeavyImpactPreparation)
 	{
-		PreparationVolume->OnComponentBeginOverlap.AddDynamic(
+		PreparationVolume->OnComponentBeginOverlap.AddUniqueDynamic(
 			this,
 			&AThrustGuidedHazardProjectile::HandlePreparationVolumeBeginOverlap);
-		PreparationVolume->OnComponentEndOverlap.AddDynamic(
+		PreparationVolume->OnComponentEndOverlap.AddUniqueDynamic(
 			this,
 			&AThrustGuidedHazardProjectile::HandlePreparationVolumeEndOverlap);
 		bPreparationBindingsActive = true;
@@ -234,8 +294,9 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 	const float ActualMass = ProjectileBody->GetMass();
 	if (!FMath::IsFinite(ActualMass) || ActualMass <= KINDA_SMALL_NUMBER)
 	{
-		DisableProjectile(TEXT("ProjectileBody 无法得到有限正质量。"));
-		return;
+		OutError = TEXT("ProjectileBody 无法得到有限正质量。");
+		DisableProjectile(OutError);
+		return false;
 	}
 
 	Phase = EThrustGuidedHazardProjectilePhase::Ballistic;
@@ -264,6 +325,7 @@ void AThrustGuidedHazardProjectile::BeginPlay()
 		*PendingLaunchVelocity.ToCompactString(),
 		RuntimeTuningData->bEnableHeavyImpactPreparation ? TEXT("true") : TEXT("false"),
 		*ProjectileBody->GetComponentLocation().ToCompactString());
+	return true;
 }
 
 /** 清理所有真实绑定、Timer 和运行时集合；不依赖 Actor Tick。 */

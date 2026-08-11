@@ -2,7 +2,7 @@
 
 /**
  * @file ThrustGuidedHazardLauncher.cpp
- * 职责：锁定第一个角色，在预警期预测移动目标并转动机械炮管，随后生成一次真实 Chaos 弹体。
+ * 职责：预装一个真实弹体，锁定第一个角色，在预警期预测并转动机械炮管，随后释放同一个 Chaos 刚体。
  * 边界：发射器只决定初始速度；弹体离膛后不追踪、不修正速度，也不依赖关卡或 Actor 名称。
  * 轴约定：Muzzle/ProjectileSpawnPoint 局部 +X 是炮管方向；弹体局部 +Z 与该方向对齐。
  */
@@ -202,6 +202,11 @@ void AThrustGuidedHazardLauncher::BeginPlay()
 			*GetNameSafe(this),
 			*NeutralCheck.Reason);
 	}
+	if (!SpawnAndAttachLoadedProjectile(NeutralSpawn, Error))
+	{
+		DisableHazard(Error);
+		return;
+	}
 
 	TriggerVolume->OnComponentBeginOverlap.AddDynamic(
 		this,
@@ -213,8 +218,9 @@ void AThrustGuidedHazardLauncher::BeginPlay()
 	UE_LOG(
 		LogThrustGuidedHazardLauncher,
 		Display,
-		TEXT("Launcher %s armed. DerivedSpeed=%.2f NeutralDirection=%s Spawn=%s."),
+		TEXT("Launcher %s armed with real loaded projectile %s. DerivedSpeed=%.2f NeutralDirection=%s Spawn=%s."),
 		*GetNameSafe(this),
+		*GetNameSafe(LoadedProjectile),
 		CalculateDerivedLaunchSpeed(),
 		*NeutralAimDirection.ToCompactString(),
 		*ProjectileSpawnPoint->GetComponentLocation().ToCompactString());
@@ -224,6 +230,7 @@ void AThrustGuidedHazardLauncher::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
 	ClearWarningState();
+	DestroyOwnedLoadedProjectile();
 	if (IsValid(TriggerVolume))
 	{
 		TriggerVolume->OnComponentBeginOverlap.RemoveDynamic(
@@ -231,6 +238,71 @@ void AThrustGuidedHazardLauncher::EndPlay(
 			&AThrustGuidedHazardLauncher::HandleTriggerBeginOverlap);
 	}
 	Super::EndPlay(EndPlayReason);
+}
+
+bool AThrustGuidedHazardLauncher::SpawnAndAttachLoadedProjectile(
+	const FTransform& SpawnTransform,
+	FString& OutError)
+{
+	OutError.Reset();
+	UWorld* World = GetWorld();
+	if (!IsValid(World))
+	{
+		OutError = TEXT("预装弹体时 World 无效。");
+		return false;
+	}
+
+	AThrustGuidedHazardProjectile* DeferredProjectile =
+		World->SpawnActorDeferred<AThrustGuidedHazardProjectile>(
+			ProjectileClass,
+			SpawnTransform,
+			this,
+			nullptr,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn,
+			ESpawnActorScaleMethod::OverrideRootScale);
+	if (!IsValid(DeferredProjectile))
+	{
+		OutError = TEXT("SpawnActorDeferred 未能创建预装弹体。");
+		return false;
+	}
+
+	DeferredProjectile->ConfigureLoaded(TuningData);
+	AThrustGuidedHazardProjectile* FinishedProjectile =
+		Cast<AThrustGuidedHazardProjectile>(UGameplayStatics::FinishSpawningActor(
+			DeferredProjectile,
+			SpawnTransform,
+			ESpawnActorScaleMethod::OverrideRootScale));
+	if (!IsValid(FinishedProjectile) || !FinishedProjectile->IsLoaded())
+	{
+		if (IsValid(FinishedProjectile))
+		{
+			FinishedProjectile->Destroy();
+		}
+		OutError = TEXT("FinishSpawningActor 未能完成真实弹体预装。");
+		return false;
+	}
+
+	if (!FinishedProjectile->AttachToComponent(
+			ProjectileSpawnPoint,
+			FAttachmentTransformRules::KeepWorldTransform))
+	{
+		FinishedProjectile->Destroy();
+		OutError = TEXT("真实弹体无法挂接到 ProjectileSpawnPoint。");
+		return false;
+	}
+
+	LoadedProjectile = FinishedProjectile;
+	return true;
+}
+
+void AThrustGuidedHazardLauncher::DestroyOwnedLoadedProjectile()
+{
+	if (IsValid(LoadedProjectile))
+	{
+		LoadedProjectile->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		LoadedProjectile->Destroy();
+	}
+	LoadedProjectile = nullptr;
 }
 
 void AThrustGuidedHazardLauncher::ApplyTriggerGeometry(
@@ -1090,47 +1162,41 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 		return;
 	}
 
-	UWorld* World = GetWorld();
-	if (!IsValid(World))
+	AThrustGuidedHazardProjectile* Projectile = LoadedProjectile;
+	if (!IsValid(Projectile) || !Projectile->IsLoaded())
 	{
-		DisableHazard(TEXT("发射时 World 无效。"));
+		DisableHazard(TEXT("发射时真实预装弹体已失效或不再处于 Loaded 阶段。"));
 		return;
 	}
-
-	const FGuid LaunchId = FGuid::NewGuid();
-	AThrustGuidedHazardProjectile* Projectile =
-		World->SpawnActorDeferred<AThrustGuidedHazardProjectile>(
-			ProjectileClass,
+	if (!Projectile->SetActorTransform(
 			SpawnTransform,
-			this,
+			false,
 			nullptr,
-			ESpawnActorCollisionHandlingMethod::AlwaysSpawn,
-			ESpawnActorScaleMethod::OverrideRootScale);
-	if (!IsValid(Projectile))
+			ETeleportType::TeleportPhysics))
 	{
-		DisableHazard(TEXT("SpawnActorDeferred 未能创建弹体。"));
+		DisableHazard(TEXT("无法把真实预装弹体同步到最终炮口姿态。"));
 		return;
 	}
 
-	Projectile->ConfigureLaunch(TuningData, LaunchVelocity, LaunchId);
-	AThrustGuidedHazardProjectile* FinishedProjectile = Cast<AThrustGuidedHazardProjectile>(
-		UGameplayStatics::FinishSpawningActor(
-			Projectile,
-			SpawnTransform,
-			ESpawnActorScaleMethod::OverrideRootScale));
-	if (!IsValid(FinishedProjectile))
+	Projectile->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	const FGuid LaunchId = FGuid::NewGuid();
+	if (!Projectile->LaunchFromLoaded(LaunchVelocity, LaunchId, Error))
 	{
-		DisableHazard(TEXT("FinishSpawningActor 未能完成弹体生成。"));
+		DisableHazard(FString::Printf(
+			TEXT("真实预装弹体离膛失败：%s"),
+			*Error));
 		return;
 	}
+	LoadedProjectile = nullptr;
 	Phase = EThrustGuidedHazardLauncherPhase::Spent;
 	WarningVisualRoot->SetVisibility(false, true);
 
 	UE_LOG(
 		LogThrustGuidedHazardLauncher,
 		Display,
-		TEXT("Launcher %s fired LaunchId=%s Source=%s Spawn=%s Velocity=%s Limits(yaw=%d pitch=%d slew=%d)."),
+		TEXT("Launcher %s released loaded projectile %s LaunchId=%s Source=%s Spawn=%s Velocity=%s Limits(yaw=%d pitch=%d slew=%d)."),
 		*GetNameSafe(this),
+		*GetNameSafe(Projectile),
 		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 		ThrustGuidedHazardLauncher::AimSourceToString(LastAimSolution.Source),
 		*SpawnTransform.GetLocation().ToCompactString(),
@@ -1142,7 +1208,7 @@ void AThrustGuidedHazardLauncher::FireLockedTarget()
 	LockedTargetActor.Reset();
 	bHasLastValidTargetState = false;
 	// 表现回调放在 C++ 状态收口之后；Blueprint 即使销毁 Launcher，也不会留下半完成状态。
-	ReceiveProjectileFired(FinishedProjectile);
+	ReceiveProjectileFired(Projectile);
 }
 
 void AThrustGuidedHazardLauncher::ClearWarningState()
@@ -1166,7 +1232,7 @@ void AThrustGuidedHazardLauncher::CompleteBlockedDischarge(
 	UE_LOG(
 		LogThrustGuidedHazardLauncher,
 		Warning,
-		TEXT("Launcher %s consumed its shot because the muzzle was blocked by %s at %s: %s"),
+		TEXT("Launcher %s consumed its shot and retained the loaded projectile because the muzzle was blocked by %s at %s: %s"),
 		*GetNameSafe(this),
 		*GetNameSafe(CheckResult.BlockingComponent.Get()),
 		*CheckResult.ApproximateContactPoint.ToCompactString(),
@@ -1199,6 +1265,7 @@ void AThrustGuidedHazardLauncher::DisableHazard(const FString& Reason)
 {
 	ClearWarningState();
 	Phase = EThrustGuidedHazardLauncherPhase::Disabled;
+	DestroyOwnedLoadedProjectile();
 	if (IsValid(TriggerVolume))
 	{
 		TriggerVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);

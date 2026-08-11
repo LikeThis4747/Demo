@@ -2,7 +2,7 @@
 
 /**
  * @file ThrustGuidedHazardLauncher.h
- * 职责：拥有壁挂机关的首个角色锁定、预警期移动目标预测、机械炮管瞄准和一次性弹体生成。
+ * 职责：拥有壁挂机关的首个角色锁定、真实弹体预装、预警期移动目标预测、机械炮管瞄准和一次性释放。
  * 边界：不模拟弹体、不在离膛后追踪、不判断受击，不依赖关卡名、Actor 名或组件名查找。
  * 状态 Owner：本 Actor 唯一写入 Armed/Warning/Spent/Disabled、目标快照、弹道解和两个 Timer。
  * 轴约定：Muzzle/ProjectileSpawnPoint 局部 +X 是炮管方向；弹体局部 +Z 对齐最终世界方向。
@@ -104,11 +104,11 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "机关|预判抛射|表现")
 	void ReceiveWarningStarted(ACharacter* TargetCharacter);
 
-	/** Blueprint 可在成功生成后播放炮口闪光、发射声和后坐；C++ 调用不依赖实现。 */
+	/** Blueprint 可在真实弹体成功离膛后播放炮口闪光、发射声和后坐；C++ 调用不依赖实现。 */
 	UFUNCTION(BlueprintImplementableEvent, Category = "机关|预判抛射|表现")
 	void ReceiveProjectileFired(AThrustGuidedHazardProjectile* Projectile);
 
-	/** Blueprint 可在出生体积被动态物体堵塞时播放明确卡膛反馈；不会生成弹体或伪造冲量。 */
+	/** Blueprint 可在出生体积被动态物体堵塞时播放明确卡膛反馈；预装弹体不会离膛或伪造冲量。 */
 	UFUNCTION(BlueprintImplementableEvent, Category = "机关|预判抛射|表现")
 	void ReceiveBlockedDischarge(
 		UPrimitiveComponent* BlockingComponent,
@@ -133,8 +133,16 @@ private:
 	/** 计算候选弹道并按真实经过时间推进 AimPivot；只在 Warning 阶段运行。 */
 	void UpdateWarningAim();
 
-	/** 预警结束同步采样，沿实际炮管方向检查出生并延迟生成一个弹体。 */
+	/** 预警结束同步采样，沿实际炮管方向检查净空并释放预装的同一个弹体。 */
 	void FireLockedTarget();
+
+	/** BeginPlay 延迟生成真实弹体并以 KeepWorld 方式挂到质心点，使其随 AimPivot 一起转。 */
+	bool SpawnAndAttachLoadedProjectile(
+		const FTransform& SpawnTransform,
+		FString& OutError);
+
+	/** 只回收仍由 Launcher 持有的预装弹体；成功离膛后指针会先清空。 */
+	void DestroyOwnedLoadedProjectile();
 
 	/** 清理 Warning/Aim Timer、目标和预警显隐；不隐式改写当前阶段。 */
 	void ClearWarningState();
@@ -254,10 +262,14 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UThrustGuidedHazardTuningData> TuningData;
 
-	/** 延迟生成的弹体 Blueprint/C++ 类。 */
+	/** BeginPlay 预装的真实弹体 Blueprint/C++ 类。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "机关|预判抛射|配置",
 		meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<AThrustGuidedHazardProjectile> ProjectileClass;
+
+	/** 发射前可见并随 AimPivot 转动的真实弹体；成功离膛后立即清空，避免 Launcher 误销毁它。 */
+	UPROPERTY(Transient)
+	TObjectPtr<AThrustGuidedHazardProjectile> LoadedProjectile;
 
 	/** 当前一次性阶段，只由本 Actor 的阶段函数写入。 */
 	EThrustGuidedHazardLauncherPhase Phase =

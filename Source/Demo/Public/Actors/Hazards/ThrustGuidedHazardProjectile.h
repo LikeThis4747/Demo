@@ -2,9 +2,9 @@
 
 /**
  * @file ThrustGuidedHazardProjectile.h
- * 职责：拥有一次发射的唯一 Chaos 胶囊刚体、一次质心冲量、接触阶段和可选 HeavyImpact 准备。
+ * 职责：拥有从炮架预装到离膛的同一个 Chaos 胶囊刚体、一次质心冲量、接触阶段和可选 HeavyImpact 准备。
  * 边界：不使用 Thruster/ProjectileMovement，不 Tick、不追踪目标、不直接改写速度或 Transform。
- * 状态 Owner：本 Actor 唯一写入 Ballistic/FreePhysics/Sleeping/Disabled、LaunchId 和重冲击通知去重状态。
+ * 状态 Owner：本 Actor 唯一写入 Loaded/Ballistic/FreePhysics/Sleeping/Disabled、LaunchId 和重冲击通知去重状态。
  * 轴约定：胶囊局部 +Z 是弹体长轴；SpawnTransform 会把它对齐发射器实际炮管方向。
  */
 
@@ -27,6 +27,7 @@ struct FHeavyImpactPreparationRequest;
 enum class EThrustGuidedHazardProjectilePhase : uint8
 {
 	Uninitialized,
+	Loaded,
 	Ballistic,
 	FreePhysics,
 	Sleeping,
@@ -43,14 +44,20 @@ public:
 	/** 装配唯一物理胶囊、查询球和纯美术挂点；本 Actor 永不 Tick。 */
 	AThrustGuidedHazardProjectile();
 
-	/** 延迟生成期间注入唯一配置、最终初速度和 LaunchId；BeginPlay 才统一启动物理。 */
-	void ConfigureLaunch(
-		UThrustGuidedHazardTuningData* InTuningData,
+	/** 延迟生成期间注入唯一配置；BeginPlay 进入可见但无碰撞、无模拟的 Loaded 阶段。 */
+	void ConfigureLoaded(UThrustGuidedHazardTuningData* InTuningData);
+
+	/** 炮架解除挂接后调用；同一个 Actor 开启 Chaos 并获得唯一一次质心冲量。 */
+	bool LaunchFromLoaded(
 		const FVector& InLaunchVelocity,
-		const FGuid& InLaunchId);
+		const FGuid& InLaunchId,
+		FString& OutError);
+
+	/** 供拥有它的 Launcher 校验预装生命周期，不暴露内部物理阶段写入口。 */
+	bool IsLoaded() const;
 
 protected:
-	/** 校验延迟生成合同，配置同一个刚体并施加一次质心冲量。 */
+	/** 校验预装合同，保持同一个真实弹体可见但不参与碰撞或物理模拟。 */
 	virtual void BeginPlay() override;
 
 	/** 清理碰撞/休眠/可选重冲击委托、Timer 和候选集合。 */
@@ -151,11 +158,11 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> PreparationVolume;
 
-	/** 延迟生成注入并在整个弹体生命周期持有的唯一配置资产。 */
+	/** 预装生成注入并在整个弹体生命周期持有的唯一配置资产。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UThrustGuidedHazardTuningData> RuntimeTuningData;
 
-	/** 发射器冻结的最终世界初速度；BeginPlay 施加一次后不再由代码修改。 */
+	/** 发射器冻结的最终世界初速度；LaunchFromLoaded 施加一次后不再由代码修改。 */
 	FVector PendingLaunchVelocity = FVector::ZeroVector;
 
 	/** 本次发射稳定 ID，用于日志和可选 HeavyImpact 接收者去重。 */
@@ -165,8 +172,8 @@ private:
 	EThrustGuidedHazardProjectilePhase Phase =
 		EThrustGuidedHazardProjectilePhase::Uninitialized;
 
-	/** ConfigureLaunch 是否在 FinishSpawningActor 前完整注入。 */
-	bool bLaunchConfigured = false;
+	/** ConfigureLoaded 是否在 FinishSpawningActor 前完整注入。 */
+	bool bLoadedConfigured = false;
 
 	/** 是否已按 HeavyImpact 开关绑定预测球委托；EndPlay 只清理真实绑定。 */
 	bool bPreparationBindingsActive = false;
