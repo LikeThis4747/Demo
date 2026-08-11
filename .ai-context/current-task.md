@@ -2,15 +2,24 @@
 
 ## 当前任务
 
-磁力投掷物碰撞破碎 P0 冲击感修正版已由用户验收并完成文档归档，当前无未完成的磁力 P0 写入。预判抛射机关外观试装与真实物理 Light 研究由各自独立任务继续，不由本任务代为收口。
+完成追猎者物理轻受击“效果原型”的拟实现稿。当前不设计生产接入，不把测试物、磁力投掷或 Heavy 生命周期揉进轻受击效果。
 
-## 当前证据
+## 当前权威方向
 
-- 当前磁力 P0 参数：5000 kg·cm/s 门槛、0.6 法向速度保留、5000 cm/s 继承上限、350 cm/s 碎片分离、1.25 半径倍率。
-- DemoEditor 构建、官方 UE5.8 MCP 属性回读、两个 Blueprint 编译、隔离 PIE 和用户 Level0 核心力量感验收通过。
-- Review、DailyPlan 与任务卡已按约定归档；权威交付记录为 DOC/DailyReport/2026-08-11-磁力投掷物破碎冲击感修正.md。
-- 旧的破碎侧独立 Hit/CCD、旧 DeferredDisarm 和 next-tick 重读速度路径均未保留。
+- 第一轮新增 C++ 为 0。
+- 只新增一个独立测试 Physics Control Asset、一个普通 Actor Blueprint 测试目标、一个独立测试关卡。
+- 测试目标仅有追猎者 Mesh、固定 Idle 与独立 PhysicsControl；胸、头、左右手臂在测试碰撞前已受动画目标约束地模拟，spine_01、骨盆、腿和脚保持 Kinematic。
+- 用户可用任意真实模拟物体直接撞击；效果资产不生成、不识别、不控制箱子或机关，也不绑定 Hit、不补角色冲量、不播 Montage。
+- 只先比较 Kinematic 与 Controlled 的 60 FPS 画面，判断外物反作用、部位相关让位、站立稳定和自然回稳。
 
-## 后续
+## 冻结范围
 
-P1“大物体破碎后保留一块可再次投掷的小磁力物”必须另立任务并重新授权。薄墙、角落与多物体竞态作为回归清单，出现明确问题时另立缺陷。
+- 已验收 HeavyImpact 的 C++、PCA、DataAsset、击飞、倒地、起身和误预测回滚全部不改。
+- 生产玩家、BP_Pursuer、AnimBP、CharacterImpact、磁力、破碎、地刺、PCG、Level0 与 ThrustGuidedHazard 全部不改。
+- 全身常驻、Light/Heavy 大一体化、箱子—角色跨对象 Reserve/Prepare/Commit/Clearing 均为撤销的研究草稿，不得实施。
+- 效果通过前不抽共享组件、不预留生产接口。
+
+## 当前阻塞
+
+- 首次写入三个测试资产前，仍须完成完整 Git 基线门禁。
+- 工作区另有不属于本任务的 Level0 与 AS_Pursuer_ChargeRun_Work 改动；不得修改、回退或纳入本任务提交。

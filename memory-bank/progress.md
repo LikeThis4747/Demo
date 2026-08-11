@@ -105,3 +105,21 @@
 - 完成 `BP_ThrustGuidedHazardLauncher` 的墙板、轴承、随动 U 形托架、灯座/灯罩纯视觉装配；全部为 `NoCollision`。
 - 完成 `BP_ThrustGuidedHazardProjectile` 的 `SM_barrel3` 视觉替换与胶囊内居中，未改变发射、质量、弹道或 Chaos 碰撞合同。
 - 两个 Blueprint 编译零 Warning/Error；Level0 未纳入最终改动；临时 PIE 确认机关仍能锁定并发射。用户画面验收待办。
+
+<!-- written by shiqiqiwang at 2026-08-11 09:29 UTC -->
+
+## 2026-08-11 — 物理轻受击状态纠正
+
+- 2026-08-10 的 Standing Impact 第一版技术交付事实保留，但其 `None/Slow/Stop`、攻击打断与 Montage 只属于玩法/动画层；用户已现场否定它作为“物理轻受击”画面，不能再描述为只待普通手感验收。
+- 全身常驻受控物理、Light/Heavy 大一体化，以及磁力物—角色 `Reserve/Prepare/Commit/Clearing` 跨对象租约均非权威方案，不得据此实施。
+- 当前唯一授权方向是隔离追猎者效果探针：固定 Capsule 与 Idle、碰撞前已模拟的上半身、独立普通 Chaos 箱子；生产 Heavy、磁力、玩家和 ABP 保持不变。
+- 探针先以 60 FPS 画面判断箱子失速/偏转、命中身体链让位、骨盆/脚稳定与自然恢复。画面未通过前不抽共享生产组件，也不实现预测、租约或兼容状态机。
+
+<!-- written by shiqiqiwang at 2026-08-11 12:07 UTC -->
+
+## 2026-08-11 — 物理轻受击效果原型进一步收敛
+
+- 上一条“隔离探针 + 独立 Chaos 箱子/固定 Capsule”描述已被本条覆盖：当前原型不生成、不绑定、不识别任何箱子，也没有 Capsule。
+- 第一轮新增 C++ 为 0，只创建独立测试 Physics Control Asset、普通 Actor Blueprint 测试目标和独立关卡；用户可用任意现有真实模拟物体直接撞击。
+- 目标只验证九个追猎者上半身刚体受动画约束时的真实双向碰撞、部位相关让位、站立稳定与自然回稳；生产 Heavy、磁力、玩家、追猎者和 Level0 全部冻结。
+- 画面通过前不抽共享组件、不预留来源接口；最多三组参数仍无明显改善即止损。

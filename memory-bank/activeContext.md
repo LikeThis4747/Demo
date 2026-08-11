@@ -2,28 +2,23 @@
 
 ## 当前焦点
 
-- 磁力投掷物碰撞破碎 P0 冲击感修正版已由用户验收并归档；当前不再占用磁力/Light 共享文件写入窗口。
-- 统一轻受击第一版已完成技术交付，但用户否决了纯动画观感；新的真实物理 Light / Heavy 共享身体结论仍处于暂停比较研究，尚无权威实现授权。
-- 最新保存日志曾有 Unable to find RecastNavMesh；仍需在同一正式一局建立真实追逐证据。
+- 磁力投掷物碰撞破碎 P0 已由用户验收并归档；其唯一 Hit/CCD/ImpactId 事务继续只归磁力物自身，不与角色身体控制绑定。
+- 2026-08-10 的 Standing Impact 第一版已完成技术装配，但 None/Slow/Stop、攻击打断和 Montage 只属于玩法/动画层；用户已否定其作为“物理轻受击”画面。
+- 全身常驻受控物理、Light/Heavy 大一体化，以及磁力物与角色之间 Reserve/Prepare/Commit/Clearing 均已撤销为非权威研究草稿。
+- 当前只规划来源无关、零 C++ 的追猎者物理轻受击效果原型：独立测试 PCA + 普通 Actor Blueprint + 独立测试关卡。用户用任意真实模拟物体直接碰撞，效果资产不识别或管理来源。
 
 ## 已验证边界
 
-- 磁力破碎稳定基线：门槛 5000 kg·cm/s、速度保留 0.6、继承上限 5000 cm/s、碎片分离 350 cm/s、半径倍率 1.25。
-- DemoEditor 构建、官方 Blueprint/属性回读、隔离 PIE 碎片散开/清理和用户 Level0 核心力量感验收均已通过。
-- 破碎碎片不参与抓取、Light/Heavy、Pawn/Camera/PhysicsBody 二次碰撞或导航；6 秒 Actor LifeSpan 只作异常兜底。
-- 破碎只消费 MagneticObject 的共享正式投掷 Hit，没有第二套 Hit/CCD/碰撞快照；运动在 Hit 当帧冻结，next-tick 只做安全替换。
-- 薄墙、角落与多物体竞态保留为回归清单，不扩大解释为用户逐项现场确认。
+- HeavyImpact 当前重受击效果是用户已验收基线；原型阶段不修改其 C++、PhysicsControlAsset、DataAsset、碰撞、倒地、起身或误预测回滚。
+- 追猎者 Physics Asset 具备 spine_02/03、head、左右 upperarm/lowerarm/hand 刚体，可组成九个上半身测试 Body；spine_01、pelvis、腿和脚明确排除。
+- 官方 UE5.8 Physics Control API 可在 Blueprint 中按 Physics Control Asset 创建 Controls/Body Modifiers；第一轮不需要新增 C++。
+- “物理轻受击”的最低画面证据是：外物相对 Kinematic 对照明显失速/偏转，命中身体链按部位让位，骨盆/脚稳定，并自然回到 Idle。
+- Stop/Slow/Montage、非零日志或手工补 AddImpulse 都不能替代上述画面证据。
 
-## 后续
+## 下一步
 
-1. P1“大物体破碎后保留一块可再次投掷的小磁力物”必须另立任务并重新授权。
-2. Light/Heavy 研究和 Recast 追逐按各自任务继续，不与已归档磁力 P0 混写。
-
-<!-- written by shiqiqiwang at 2026-08-11 06:40 UTC -->
-
-## 2026-08-11 预判抛射机关第一版外观试装
-
-- 基础机制参数仍为 `900 cm / 18° / 50 kg / 8 s`，本次未改 C++、DataAsset 或 Level0。
-- Launcher Blueprint 已用 UE 基础几何增加固定墙板、轴承、随 `AimPivot` 转动的 U 形托架和警示灯罩；新增视觉网格均 `NoCollision`，引用 SFCorridors 现成材质但未修改第三方资产。
-- Projectile Blueprint 的 `BodyMesh` 已换为 `SM_barrel3`，Scale=`0.78`、Relative Z=`-40.04 cm`；旧 `NoseMesh` 隐藏，唯一物理碰撞仍为 `ProjectileBody` 胶囊。
-- 两个 Blueprint 以 Warning 视为 Error 编译通过；重启后 Level0 实例正确继承，临时 PIE 覆盖 Warning/Fire，最终造型与机械感待用户画面验收。
+1. 完成并审计 `claude/docs/2026-08-11-追猎者物理轻受击效果原型拟实现代码.md` 与任务卡。
+2. 协调 Level0 与 AS_Pursuer_ChargeRun_Work 的并行改动，完成完整基线 commit/push。
+3. 用户明确授权后，只创建三个测试资产；若官方 MCP 不能安全写 PCA 嵌套数据或 Blueprint 图，直接请用户按表格在编辑器操作，不写 C++ 绕过。
+4. 先做 60 FPS Kinematic/Controlled 画面对照，最多三组参数；失败即止损。
+5. 只有画面获用户认可，才另立生产接入方案，比较局部常开与通用预激活，并根据真实重复职责判断是否需要共享身体控制组件。
