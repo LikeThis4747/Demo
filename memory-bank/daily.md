@@ -129,3 +129,12 @@
 - 配置或生成失败的禁用弹体增加 1 秒 LifeSpan，正常发射仍使用 8 秒 DataAsset 寿命。
 - 当前文档权威统一为 2026-08-10 狭窄走廊 Plan/Report、当前 Source 与默认 DataAsset；旧推进方案保留历史标记。
 - Demo -NoLink 与 DemoEditor 正式链接成功，只构建 Demo 项目模块；未修改 Blueprint、DataAsset、Level0、模型或轻受击。
+
+<!-- written by shiqiqiwang at 2026-08-11 06:40 UTC -->
+
+## 2026-08-11 — 预判抛射机关外观试装
+
+- 实施前完成文档基线提交并推送 `a91ca2ef227b1b21af16794dac8e233b6cefe365`。
+- 仅修改两个机关 Blueprint：Launcher 使用 UE 基础几何与 `MI_MetalChrome` 形成壁挂支撑；Projectile 使用 `SM_barrel3`/`MI_barrel3`，Scale=`0.78`、Relative Z=`-40.04 cm`，旧 Nose 隐藏。
+- 处理首次新增组件造成的 Level0 空实例缓存：确认关卡无未保存改动后正常重启并恢复本轮自动文件变化；最终 Level0 不在 Git 改动范围。
+- 两个 Blueprint 以 Warning 视为 Error 编译通过；临时 PIE 日志确认 `armed -> warning -> fired` 与弹体正常启动，PIE 已停止。最终画面与机械感由用户验收。

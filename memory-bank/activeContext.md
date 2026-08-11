@@ -20,3 +20,12 @@
 2. 补验低冲量、薄墙/角落、角色命中和多物体竞态。
 3. 验收通过后归档磁力 Review、DailyPlan 与任务卡；P1 可再次投掷碎片另立任务。
 4. 统一轻受击、Light/Heavy 研究和 Recast 追逐按各自任务继续，不与磁力破碎收口混写。
+
+<!-- written by shiqiqiwang at 2026-08-11 06:40 UTC -->
+
+## 2026-08-11 预判抛射机关第一版外观试装
+
+- 基础机制参数仍为 `900 cm / 18° / 50 kg / 8 s`，本次未改 C++、DataAsset 或 Level0。
+- Launcher Blueprint 已用 UE 基础几何增加固定墙板、轴承、随 `AimPivot` 转动的 U 形托架和警示灯罩；新增视觉网格均 `NoCollision`，引用 SFCorridors 现成材质但未修改第三方资产。
+- Projectile Blueprint 的 `BodyMesh` 已换为 `SM_barrel3`，Scale=`0.78`、Relative Z=`-40.04 cm`；旧 `NoseMesh` 隐藏，唯一物理碰撞仍为 `ProjectileBody` 胶囊。
+- 两个 Blueprint 以 Warning 视为 Error 编译通过；重启后 Level0 实例正确继承，临时 PIE 覆盖 Warning/Fire，最终造型与机械感待用户画面验收。

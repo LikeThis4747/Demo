@@ -98,3 +98,11 @@
 ## 当前夜间优先级
 
 - 先完成统一轻受击真实命中/空中 Stop/Light-Heavy 交叉手感与同场景 Recast 追逐证据；之后只选一个已验收机关组合进正式一局，磁力破碎运行逻辑仍待用户另行授权。
+
+<!-- written by shiqiqiwang at 2026-08-11 06:40 UTC -->
+
+## 2026-08-11 — 预判抛射机关外观试装
+
+- 完成 `BP_ThrustGuidedHazardLauncher` 的墙板、轴承、随动 U 形托架、灯座/灯罩纯视觉装配；全部为 `NoCollision`。
+- 完成 `BP_ThrustGuidedHazardProjectile` 的 `SM_barrel3` 视觉替换与胶囊内居中，未改变发射、质量、弹道或 Chaos 碰撞合同。
+- 两个 Blueprint 编译零 Warning/Error；Level0 未纳入最终改动；临时 PIE 确认机关仍能锁定并发射。用户画面验收待办。
