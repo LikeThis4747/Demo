@@ -1,12 +1,12 @@
 # Daily Log — Demo
 
-## 2026-08-11 磁力投掷物碰撞破碎 P0
+## 2026-08-11 磁力投掷物碰撞破碎 P0 冲击感修正
 
-- 实施前完整基线 5988854 已提交、推送并与内部工蜂 origin/main 对齐；随后落地磁力正式投掷碰撞破碎 P0。
-- C++ 新增 MagneticThrowBreakComponent 与 MagneticFractureActor，并把 MagneticObjectComponent 扩为 Light/破碎共享命中事务的唯一碰撞状态 Owner；旧双 Hit/CCD 路线未保留。
-- 新增 BP_MagneticFracture_P0，BP_MagneticProp 完成类引用；官方 MCP 编译、保存和属性回读通过，DemoEditor Win64 Development 构建成功。
-- 隔离 Simulate 确认 CrumbleActiveClusters 执行，替身约 2.06 秒后随 Remove On Break 清空；6 秒 LifeSpan 仅为异常兜底。
-- 无头环境无法可靠驱动鼠标输入，Level0 玩家完整投掷链、边界矩阵和手感仍待用户验收；未把这些项目标为通过。
+- 用户否决初版命中 AI 时“停住再自然下落”的表现；修正版从已推送且干净的 ba630a5 基线开始。
+- 合格 Hit 当帧冻结修正后的继承运动：最小破碎冲量 5000 kg·cm/s，损失法向速度保留 0.6，最大继承线速度 5000 cm/s。
+- Geometry Collection 解簇后获得 350 cm/s、包围球半径 1.25 倍的受控叶子分离速度；整体冲击方向仍来自原投掷命中。
+- DemoEditor 构建、官方属性回读、两个 Blueprint 编译和隔离 PIE 碎片散开/Remove On Break 清理通过；临时 Actor 与 Level0 测试写盘变化已清理。
+- 运行时未恢复独立 Hit/CCD、旧 DeferredDisarm 或 next-tick 重读速度路径；真实玩家投掷命中 AI 的力量感和边界仍待用户验收。
 
 
 ## 2026-08-11 夜间只读审计

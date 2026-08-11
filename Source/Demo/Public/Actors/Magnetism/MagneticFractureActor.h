@@ -47,4 +47,18 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "6.0", UIMin = "6.0", Units = "s"))
 	float SafetyLifetimeSeconds = 6.0f;
+
+	/**
+	 * 解簇后附加给碎片的径向速度改变量，单位 cm/s；初始值 350。
+	 * 该值只负责把相邻碎片推开，整体前进速度仍来自命中当帧冻结的继承运动。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
+	float FragmentSeparationSpeed = 350.0f;
+
+	/**
+	 * 径向速度场半径相对 Geometry Collection 包围球的倍率；初始值 1.25。
+	 * 大于 1 可覆盖边缘碎片，线性衰减仍会让中心附近碎片获得更明显的分离速度。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", UIMin = "1.0"))
+	float FragmentSeparationRadiusScale = 1.25f;
 };

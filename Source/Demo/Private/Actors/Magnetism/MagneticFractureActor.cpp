@@ -92,11 +92,41 @@ void AMagneticFractureActor::BeginPlay()
 		Destroy();
 		return;
 	}
+	if (!FMath::IsFinite(FragmentSeparationSpeed)
+		|| FragmentSeparationSpeed < 0.0f
+		|| !FMath::IsFinite(FragmentSeparationRadiusScale)
+		|| FragmentSeparationRadiusScale < 1.0f)
+	{
+		UE_LOG(LogMagneticFractureActor, Error,
+			TEXT("%s has invalid fragment separation speed %.2f or radius scale %.2f."),
+			*GetNameSafe(this),
+			FragmentSeparationSpeed,
+			FragmentSeparationRadiusScale);
+		Destroy();
+		return;
+	}
 
 	SetLifeSpan(FMath::Max(SafetyLifetimeSeconds, 6.0f));
 	GeometryCollection->CrumbleActiveClusters();
-	UE_LOG(LogMagneticFractureActor, Verbose,
-		TEXT("%s crumbled active clusters with %.2fs safety lifetime."),
+
+	// bVelChange=true 让每块碎片得到相同量纲的速度改变量，不会因 Voronoi 碎片质量差异导致小块异常爆飞。
+	const float SeparationRadius = FMath::Max(
+		GeometryCollection->Bounds.SphereRadius * FragmentSeparationRadiusScale,
+		1.0f);
+	if (FragmentSeparationSpeed > 0.0f)
+	{
+		GeometryCollection->AddRadialImpulse(
+			GeometryCollection->Bounds.Origin,
+			SeparationRadius,
+			FragmentSeparationSpeed,
+			ERadialImpulseFalloff::RIF_Linear,
+			true);
+	}
+
+	UE_LOG(LogMagneticFractureActor, Log,
+		TEXT("%s crumbled active clusters with %.1fcm/s separation over %.1fcm and %.2fs safety lifetime."),
 		*GetNameSafe(this),
+		FragmentSeparationSpeed,
+		SeparationRadius,
 		GetLifeSpan());
 }

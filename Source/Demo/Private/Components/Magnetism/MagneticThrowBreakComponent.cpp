@@ -21,6 +21,53 @@ DEFINE_LOG_CATEGORY_STATIC(LogMagneticThrowBreak, Log, All);
 
 namespace UE::ZeroEscape::Magnetism
 {
+	/** 检查来自 Chaos 的速度是否可以安全写回另一套刚体代理。 */
+	bool IsFiniteMotionVector(const FVector& Value)
+	{
+		return FMath::IsFinite(Value.X)
+			&& FMath::IsFinite(Value.Y)
+			&& FMath::IsFinite(Value.Z);
+	}
+
+	/**
+	 * 从真实接触法线求出由投掷物指向命中对象的方向。
+	 * ImpactNormal 不可用时退回 NormalImpulse，并用实际接触点消除 Chaos 回调两侧法线方向差异。
+	 */
+	FVector ResolveImpactDirectionTowardTarget(
+		const UPrimitiveComponent* HitComponent,
+		const AActor* OtherActor,
+		const UPrimitiveComponent* OtherComponent,
+		const FVector& NormalImpulse,
+		const FHitResult& Hit)
+	{
+		FVector ImpactDirection = (-Hit.ImpactNormal).GetSafeNormal();
+		if (ImpactDirection.IsNearlyZero())
+		{
+			ImpactDirection = (-NormalImpulse).GetSafeNormal();
+		}
+
+		// 实际接触点比 Actor 枢轴更可靠；复合 Actor 的枢轴可能离被命中组件很远。
+		FVector TowardTarget = IsValid(HitComponent)
+			? (Hit.ImpactPoint - HitComponent->Bounds.Origin).GetSafeNormal()
+			: FVector::ZeroVector;
+		if (TowardTarget.IsNearlyZero() && IsValid(HitComponent) && IsValid(OtherComponent))
+		{
+			TowardTarget = (OtherComponent->Bounds.Origin - HitComponent->Bounds.Origin).GetSafeNormal();
+		}
+		if (TowardTarget.IsNearlyZero() && IsValid(HitComponent) && IsValid(OtherActor))
+		{
+			TowardTarget =
+				(OtherActor->GetActorLocation() - HitComponent->GetComponentLocation()).GetSafeNormal();
+		}
+		if (!TowardTarget.IsNearlyZero()
+			&& FVector::DotProduct(ImpactDirection, TowardTarget) < 0.0f)
+		{
+			ImpactDirection *= -1.0f;
+		}
+
+		return ImpactDirection;
+	}
+
 	/** 返回项目内部破碎状态的稳定日志名称。 */
 	const TCHAR* BreakStateToString(const EMagneticThrowBreakState State)
 	{
@@ -81,13 +128,20 @@ void UMagneticThrowBreakComponent::BeginPlay()
 
 	if (!FMath::IsFinite(MinimumBreakNormalImpulse)
 		|| MinimumBreakNormalImpulse < 0.0f
+		|| !FMath::IsFinite(ImpactVelocityRetention)
+		|| ImpactVelocityRetention < 0.0f
+		|| ImpactVelocityRetention > 1.0f
+		|| !FMath::IsFinite(MaximumInheritedLinearSpeed)
+		|| MaximumInheritedLinearSpeed <= 0.0f
 		|| !FMath::IsFinite(MaximumMonitoringSeconds)
 		|| MaximumMonitoringSeconds <= 0.0f)
 	{
 		UE_LOG(LogMagneticThrowBreak, Warning,
-			TEXT("%s disabled magnetic fracture because impulse %.3f or duration %.3f is invalid."),
+			TEXT("%s disabled magnetic fracture because impulse %.3f, retention %.3f, max speed %.3f or duration %.3f is invalid."),
 			*GetNameSafe(OwnerActor),
 			MinimumBreakNormalImpulse,
+			ImpactVelocityRetention,
+			MaximumInheritedLinearSpeed,
 			MaximumMonitoringSeconds);
 		return;
 	}
@@ -111,7 +165,7 @@ void UMagneticThrowBreakComponent::EndPlay(const EEndPlayReason::Type EndPlayRea
 		MagneticComponent->OnThrownBlockingHit().Remove(ThrownHitDelegateHandle);
 	}
 	ThrownHitDelegateHandle.Reset();
-	PendingBody.Reset();
+	ResetPendingBreakData();
 
 	Super::EndPlay(EndPlayReason);
 }
@@ -163,7 +217,7 @@ bool UMagneticThrowBreakComponent::CanBeginGrab(const UPrimitiveComponent* Candi
 void UMagneticThrowBreakComponent::HandleThrownBlockingHit(
 	UPrimitiveComponent* HitComponent,
 	AActor* OtherActor,
-	UPrimitiveComponent* /*OtherComponent*/,
+	UPrimitiveComponent* OtherComponent,
 	const FVector& NormalImpulse,
 	const FHitResult& Hit)
 {
@@ -181,13 +235,51 @@ void UMagneticThrowBreakComponent::HandleThrownBlockingHit(
 		return;
 	}
 
+	const float BodyMassKilograms = HitComponent->GetMass();
+	const FVector ImpactDirection =
+		UE::ZeroEscape::Magnetism::ResolveImpactDirectionTowardTarget(
+			HitComponent,
+			OtherActor,
+			OtherComponent,
+			NormalImpulse,
+			Hit);
+	const FVector PostSolveVelocity = HitComponent->GetPhysicsLinearVelocity();
+	const FVector AngularVelocityRadians = HitComponent->GetPhysicsAngularVelocityInRadians();
+	if (!FMath::IsFinite(BodyMassKilograms)
+		|| BodyMassKilograms <= UE_SMALL_NUMBER
+		|| ImpactDirection.IsNearlyZero()
+		|| !UE::ZeroEscape::Magnetism::IsFiniteMotionVector(PostSolveVelocity)
+		|| !UE::ZeroEscape::Magnetism::IsFiniteMotionVector(AngularVelocityRadians))
+	{
+		UE_LOG(LogMagneticThrowBreak, Warning,
+			TEXT("%s ignored a qualifying fracture hit because its mass, direction or motion was invalid."),
+			*GetNameSafe(GetOwner()));
+		return;
+	}
+
+	// OnComponentHit 已处于碰撞求解之后；用冲量/质量还原损失的法向速度，避免替身在目标表面凭空停住。
+	const float LostNormalSpeed = ImpulseMagnitude / BodyMassKilograms;
+	const float DesiredForwardSpeed = FMath::Min(
+		LostNormalSpeed * ImpactVelocityRetention,
+		MaximumInheritedLinearSpeed);
+	const float ExistingForwardSpeed = FVector::DotProduct(PostSolveVelocity, ImpactDirection);
+	const float MissingForwardSpeed = FMath::Max(DesiredForwardSpeed - ExistingForwardSpeed, 0.0f);
+	const FVector CorrectedVelocity =
+		(PostSolveVelocity + ImpactDirection * MissingForwardSpeed)
+		.GetClampedToMaxSize(MaximumInheritedLinearSpeed);
+
 	PendingBody = HitComponent;
+	PendingLinearVelocity = CorrectedVelocity;
+	PendingAngularVelocityRadians = AngularVelocityRadians;
 	SetState(EMagneticThrowBreakState::BreakQueued, TEXT("first qualifying blocking hit"));
-	UE_LOG(LogMagneticThrowBreak, Verbose,
-		TEXT("%s queued fracture after hitting %s with impulse %.1f."),
+	UE_LOG(LogMagneticThrowBreak, Log,
+		TEXT("%s queued fracture after hitting %s: impulse %.1f, mass %.1fkg, post-solve %.1fcm/s, inherited %.1fcm/s."),
 		*GetNameSafe(GetOwner()),
 		*GetNameSafe(OtherActor),
-		ImpulseMagnitude);
+		ImpulseMagnitude,
+		BodyMassKilograms,
+		PostSolveVelocity.Size(),
+		CorrectedVelocity.Size());
 
 	DeferredBreakTimerHandle = GetWorld()->GetTimerManager().SetTimerForNextTick(
 		this, &UMagneticThrowBreakComponent::ProcessQueuedBreak);
@@ -214,8 +306,14 @@ void UMagneticThrowBreakComponent::ProcessQueuedBreak()
 	}
 
 	const FTransform SpawnTransform = Body->GetComponentTransform();
-	const FVector LinearVelocity = Body->GetPhysicsLinearVelocity();
-	const FVector AngularVelocityRadians = Body->GetPhysicsAngularVelocityInRadians();
+	const FVector LinearVelocity = PendingLinearVelocity;
+	const FVector AngularVelocityRadians = PendingAngularVelocityRadians;
+	if (!UE::ZeroEscape::Magnetism::IsFiniteMotionVector(LinearVelocity)
+		|| !UE::ZeroEscape::Magnetism::IsFiniteMotionVector(AngularVelocityRadians))
+	{
+		FailAndPreserveOriginal(TEXT("captured inherited motion became invalid"));
+		return;
+	}
 
 	AMagneticFractureActor* Fracture = World->SpawnActorDeferred<AMagneticFractureActor>(
 		FractureActorClass,
@@ -242,7 +340,7 @@ void UMagneticThrowBreakComponent::ProcessQueuedBreak()
 		return;
 	}
 
-	PendingBody.Reset();
+	ResetPendingBreakData();
 	SetState(EMagneticThrowBreakState::Consumed, TEXT("fracture actor spawned"));
 	if (!OwnerActor->Destroy())
 	{
@@ -251,10 +349,18 @@ void UMagneticThrowBreakComponent::ProcessQueuedBreak()
 	}
 }
 
+/** 清除待处理命中的弱引用和速度快照；不改变替换状态。 */
+void UMagneticThrowBreakComponent::ResetPendingBreakData()
+{
+	PendingBody.Reset();
+	PendingLinearVelocity = FVector::ZeroVector;
+	PendingAngularVelocityRadians = FVector::ZeroVector;
+}
+
 /** 替换失败时只降级本实例，不让配置错误删除玩家资源或每次碰撞循环报错。 */
 void UMagneticThrowBreakComponent::FailAndPreserveOriginal(const TCHAR* Reason)
 {
-	PendingBody.Reset();
+	ResetPendingBreakData();
 	SetState(EMagneticThrowBreakState::BreakFailed, Reason);
 	if (UMagneticObjectComponent* MagneticComponent = MagneticObject.Get(); IsValid(MagneticComponent))
 	{

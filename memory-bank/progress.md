@@ -1,11 +1,12 @@
 # Progress — Demo
 
-## 2026-08-11 磁力投掷物碰撞破碎 P0 技术落地
+## 2026-08-11 磁力投掷物碰撞破碎 P0 冲击感修正
 
-- 已新增共享正式投掷命中事务的破碎消费者与 Geometry Collection 替身 Actor；破碎侧不再独立绑定 Hit、保存碰撞快照或控制 CCD。
-- 新增 BP_MagneticFracture_P0，并把 BP_MagneticProp 的破碎类接线到该替身；碎片只碰撞 WorldStatic/WorldDynamic，不参与抓取、Light/Heavy、Pawn/Camera 或导航。
-- DemoEditor Win64 Development 构建成功；官方 UE5.8 MCP 编译/保存/回读通过；隔离运行时确认显式解簇并约 2.06 秒后由 Remove On Break 清空。
-- 当前仍待用户在 Level0 验收真实抓取到正式投掷、低冲量、薄墙/角落、角色命中、多物体竞态和最终手感；验收前任务与 Review 保持 active。
+- 初版命中 AI 后出现“停住再下落”的力量感问题；原因是 next-tick 重读了受 Chaos 接触约束继续衰减的速度，且解簇叶子没有分离速度。
+- 修正版在合格 Hit 当帧冻结运动，以真实接触方向和 NormalImpulse / 质量估算损失法向速度，默认保留 0.6，最大继承线速度 5000 cm/s；最小破碎冲量调整为 5000 kg·cm/s。
+- Geometry Collection 解簇后对自身叶子施加 350 cm/s、包围球半径 1.25 倍的受控径向速度；它只分开碎片，不向命中目标重复提交 Light/Heavy 或伤害。
+- DemoEditor Win64 Development 构建、官方 UE5.8 MCP 属性回读、两个 Blueprint warnings-as-errors 编译和隔离 PIE 碎片散开/清理通过。
+- 当前仍待用户在 Level0 验收真实投掷命中 AI 的力量感、低冲量、薄墙/角落和竞态；验收前任务与 Review 保持 active。
 
 ## M0 基础设施与 UE5.8
 

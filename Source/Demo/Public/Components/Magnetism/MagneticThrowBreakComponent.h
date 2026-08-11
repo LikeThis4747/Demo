@@ -69,6 +69,9 @@ private:
 	/** 在 Hit 后 next-tick 继承运动、生成替身，并仅在成功后销毁完整 Actor。 */
 	void ProcessQueuedBreak();
 
+	/** 清空只属于当前待处理命中的瞬时刚体数据，防止失败或 EndPlay 后误复用。 */
+	void ResetPendingBreakData();
+
 	/** 记录可定位错误、保留完整 Actor、结束共享投掷事务并禁止本实例重复失败。 */
 	void FailAndPreserveOriginal(const TCHAR* Reason);
 
@@ -84,10 +87,24 @@ private:
 
 	/**
 	 * 首次合格 Blocking Hit 的最小 NormalImpulse 大小，单位 kg*cm/s。
-	 * 初始值 1000；调高减少轻擦误碎，调低让弱投掷更容易消耗。
+	 * 初始值 5000；调高减少轻擦误碎，调低让弱投掷更容易消耗。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", UIMin = "0.0"))
-	float MinimumBreakNormalImpulse = 1000.0f;
+	float MinimumBreakNormalImpulse = 5000.0f;
+
+	/**
+	 * 将 NormalImpulse / 质量反推的碰撞法向速度保留比例；初始值 0.6。
+	 * 该速度在真实 Hit 回调中冻结，避免 next-tick 读取到已被 Chaos 阻挡归零的速度。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	float ImpactVelocityRetention = 0.6f;
+
+	/**
+	 * 替身可继承的最大线速度，单位 cm/s；初始值 5000。
+	 * 只作为异常冲量兜底，不会主动把正常投掷加速到该值。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "100.0", UIMin = "100.0", Units = "cm/s"))
+	float MaximumInheritedLinearSpeed = 5000.0f;
 
 	/**
 	 * 从正式出手开始计算的破碎监听硬上限，单位 s；初始值 8。
@@ -104,6 +121,12 @@ private:
 
 	/** BreakQueued 后保留到 next-tick 的精确刚体弱引用。 */
 	TWeakObjectPtr<UPrimitiveComponent> PendingBody;
+
+	/** 首次合格 Hit 当帧冻结的替身线速度；只由 HandleThrownBlockingHit 写入并由替换事务消费。 */
+	FVector PendingLinearVelocity = FVector::ZeroVector;
+
+	/** 首次合格 Hit 当帧冻结的弧度制角速度；只由 HandleThrownBlockingHit 写入并由替换事务消费。 */
+	FVector PendingAngularVelocityRadians = FVector::ZeroVector;
 
 	/** 注册到 MagneticObject 原生委托的句柄；EndPlay 精确移除。 */
 	FDelegateHandle ThrownHitDelegateHandle;
