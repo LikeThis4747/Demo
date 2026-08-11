@@ -1,12 +1,12 @@
 # Daily Log — Demo
 
-## 2026-08-11 磁力投掷物碰撞破碎 P0 冲击感修正
+## 2026-08-11 磁力投掷物碰撞破碎 P0 验收归档
 
-- 用户否决初版命中 AI 时“停住再自然下落”的表现；修正版从已推送且干净的 ba630a5 基线开始。
-- 合格 Hit 当帧冻结修正后的继承运动：最小破碎冲量 5000 kg·cm/s，损失法向速度保留 0.6，最大继承线速度 5000 cm/s。
-- Geometry Collection 解簇后获得 350 cm/s、包围球半径 1.25 倍的受控叶子分离速度；整体冲击方向仍来自原投掷命中。
+- 用户否决初版命中 AI 时“停住再自然下落”的表现后，修正版从已推送且干净的 ba630a5 基线实施。
+- 合格 Hit 当帧冻结修正后的继承运动；当前参数为 5000 kg·cm/s、0.6、5000 cm/s、350 cm/s、1.25。
 - DemoEditor 构建、官方属性回读、两个 Blueprint 编译和隔离 PIE 碎片散开/Remove On Break 清理通过；临时 Actor 与 Level0 测试写盘变化已清理。
-- 运行时未恢复独立 Hit/CCD、旧 DeferredDisarm 或 next-tick 重读速度路径；真实玩家投掷命中 AI 的力量感和边界仍待用户验收。
+- 用户随后在 Level0 验收当前核心投掷命中 AI 与碎片力量感并明确确认通过。
+- Review、DailyPlan 与任务卡已归档；薄墙、角落、多物体竞态保留为回归清单，P1 另立任务。
 
 
 ## 2026-08-11 夜间只读审计
@@ -31,7 +31,7 @@
 - 用户确认当前全部工作区改动保留并授权完整基线 commit/push；基线通过后可在 Level0 测试区手工制作首个 Geometry Collection，C++/Blueprint 运行逻辑仍需另行授权。
 - 磁力投掷物 P0 方案成文：只有正式 `ThrowHeldObject()` 后的第一次 Blocking Hit 才破碎；拉取、持有、普通放下和命中前重新抓取均不破碎，所有碎片经 Remove On Break 清空。
 - 官方 UE MCP 回读 `BP_MagneticProp` 为 20 kg 模拟物理静态网格刚体，使用第三方 `SM_crate4`；Blueprint 与源网格均非 Dirty。UE5.8 引擎接口确认初始速度、显式解簇和 Remove On Break 路径可用。
-- 新增 `DOC/DailyPlan/2026-08-10-磁力投掷物碰撞破碎实施计划.md` 和对应任务卡；本轮未修改 C++/UE 资产、未构建、未运行 PIE，功能实施仍待用户明确授权和完整 Git 基线门禁。
+- 新增 `DOC/DailyPlan/archive/Done-2026-08-10-磁力投掷物碰撞破碎实施计划.md` 和对应任务卡；本轮未修改 C++/UE 资产、未构建、未运行 PIE，功能实施仍待用户明确授权和完整 Git 基线门禁。
 - 用户否决旧“短时推进、飞行中制导”表现后，壁挂式机关重构为预警期预测移动交点、炮管机械转向、一次质心冲量和发射后全程 Chaos；保留旧类名仅为资产兼容。
 - 默认机关更新为约 1000 cm/s、25 kg、22/45 cm 胶囊、0.55 秒预警、30/18 度机械限角，HeavyImpact 准备关闭；无 Thruster、ProjectileMovement、Actor Tick 或 Powered 控制。
 - Launcher/Projectile Blueprint 以警告视为错误编译保存，DataAsset 与组件树逐项回读；Level0 西端新增南半幅端墙并保留北侧通路，转角 Launcher 朝东正面迎击，出口灯移出默认弹道。
