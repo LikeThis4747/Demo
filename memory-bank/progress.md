@@ -1,5 +1,12 @@
 # Progress — Demo
 
+## 2026-08-11 磁力投掷物碰撞破碎 P0 技术落地
+
+- 已新增共享正式投掷命中事务的破碎消费者与 Geometry Collection 替身 Actor；破碎侧不再独立绑定 Hit、保存碰撞快照或控制 CCD。
+- 新增 BP_MagneticFracture_P0，并把 BP_MagneticProp 的破碎类接线到该替身；碎片只碰撞 WorldStatic/WorldDynamic，不参与抓取、Light/Heavy、Pawn/Camera 或导航。
+- DemoEditor Win64 Development 构建成功；官方 UE5.8 MCP 编译/保存/回读通过；隔离运行时确认显式解簇并约 2.06 秒后由 Remove On Break 清空。
+- 当前仍待用户在 Level0 验收真实抓取到正式投掷、低冲量、薄墙/角落、角色命中、多物体竞态和最终手感；验收前任务与 Review 保持 active。
+
 ## M0 基础设施与 UE5.8
 
 - [x] C++ 优先单机 Demo、Project Memory MCP、内部工蜂 Git/LFS 与夜间只读维护。

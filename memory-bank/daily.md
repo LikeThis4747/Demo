@@ -1,5 +1,13 @@
 # Daily Log — Demo
 
+## 2026-08-11 磁力投掷物碰撞破碎 P0
+
+- 实施前完整基线 5988854 已提交、推送并与内部工蜂 origin/main 对齐；随后落地磁力正式投掷碰撞破碎 P0。
+- C++ 新增 MagneticThrowBreakComponent 与 MagneticFractureActor，并把 MagneticObjectComponent 扩为 Light/破碎共享命中事务的唯一碰撞状态 Owner；旧双 Hit/CCD 路线未保留。
+- 新增 BP_MagneticFracture_P0，BP_MagneticProp 完成类引用；官方 MCP 编译、保存和属性回读通过，DemoEditor Win64 Development 构建成功。
+- 隔离 Simulate 确认 CrumbleActiveClusters 执行，替身约 2.06 秒后随 Remove On Break 清空；6 秒 LifeSpan 仅为异常兜底。
+- 无头环境无法可靠驱动鼠标输入，Level0 玩家完整投掷链、边界矩阵和手感仍待用户验收；未把这些项目标为通过。
+
 
 ## 2026-08-11 夜间只读审计
 

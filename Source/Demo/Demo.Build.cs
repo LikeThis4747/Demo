@@ -11,7 +11,7 @@ public class Demo : ModuleRules
 		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "EnhancedInput", "AIModule", "NavigationSystem", "GameplayTasks", "UMG" });
 
 		// UMG 委托签名使用 ETextCommit 等 SlateCore 反射类型。
-		PrivateDependencyModuleNames.AddRange(new string[] { "PhysicsControl", "Slate", "SlateCore" });
+		PrivateDependencyModuleNames.AddRange(new string[] { "PhysicsControl", "Slate", "SlateCore", "GeometryCollectionEngine" });
 
 		// 使用 Slate UI 时取消下一行注释。
 		// PrivateDependencyModuleNames.AddRange(new string[] { "Slate", "SlateCore" });

@@ -3,14 +3,16 @@
 /**
  * @file ElectromagneticGrabComponent.cpp
  * 职责：执行有界屏幕选取、确定性曲线吸取与 UE Physics Handle 持有，并在所有退出路径恢复临时设置。
- * 边界：Chaos 负责碰撞、旋转和积分；外部重冲击只能调用受控中断入口，不能改写内部状态。
+ * 边界：Chaos 负责碰撞、旋转和积分；正式投掷碰撞事务属于 MagneticObject，破碎组件只提供监听时长与抓取守卫。
  * 状态 Owner：本组件独占当前持有引用、吸取阶段、临时覆盖、释放锁和安全计时；不存在组件内参数兜底。
+ * 接口约束：任何未来新增抓取入口都必须先检查破碎守卫，再在保存抓取快照前完整 DisarmThrownImpact。
  */
 
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
 
 #include "Camera/CameraComponent.h"
 #include "Components/Magnetism/MagneticObjectComponent.h"
+#include "Components/Magnetism/MagneticThrowBreakComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Data/Magnetism/MagneticGrabTuningData.h"
 #include "Engine/OverlapResult.h"
@@ -139,6 +141,12 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 	}
 
 	UMagneticObjectComponent* MagneticObject = HeldMagneticObject.Get();
+	UMagneticThrowBreakComponent* BreakComponent = IsValid(ComponentToThrow->GetOwner())
+		? ComponentToThrow->GetOwner()->FindComponentByClass<UMagneticThrowBreakComponent>()
+		: nullptr;
+	const float BreakMonitoringSeconds = IsValid(BreakComponent)
+		? BreakComponent->GetFormalThrowMonitoringSeconds(ComponentToThrow)
+		: 0.0f;
 	const float SpeedMultiplier = IsValid(MagneticObject) ? MagneticObject->ThrowSpeedMultiplier : 1.0f;
 	const FVector CenterOfMass = ComponentToThrow->GetCenterOfMass();
 	const FVector ThrowDirection = (CalculateAimPoint() - CenterOfMass).GetSafeNormal();
@@ -154,7 +162,8 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 			MagneticObject->ArmThrownImpact(
 				ComponentToThrow,
 				GetOwner(),
-				TuningData->ThrownWeaponActiveDuration);
+				TuningData->ThrownWeaponActiveDuration,
+				BreakMonitoringSeconds);
 		}
 
 		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
@@ -385,7 +394,17 @@ void UElectromagneticGrabComponent::GrabCandidate(
 		return;
 	}
 
-	// 先结束正式投掷事务，再快照抓取基线；否则会把攻击通道/CCD/通知误当成原始值。
+	if (UMagneticThrowBreakComponent* BreakComponent =
+			CandidateComponent->GetOwner()->FindComponentByClass<UMagneticThrowBreakComponent>();
+		IsValid(BreakComponent) && !BreakComponent->CanBeginGrab(CandidateComponent))
+	{
+		UE_LOG(LogZeroEscapeMagneticGrab, Verbose,
+			TEXT("Rejected grab of %s because fracture replacement is already queued."),
+			*GetNameSafe(CandidateComponent->GetOwner()));
+		return;
+	}
+
+	// 先通过破碎守卫并结束共享投掷事务，再快照抓取基线；否则会把攻击通道/CCD/通知误当成原始值。
 	MagneticObject->DisarmThrownImpact();
 
 	HeldComponent = CandidateComponent;

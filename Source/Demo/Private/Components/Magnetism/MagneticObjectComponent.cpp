@@ -2,9 +2,9 @@
 
 /**
  * @file MagneticObjectComponent.cpp
- * 职责：实现磁性资格，并管理正式投掷期间的临时碰撞身份与一次真实角色命中。
- * 边界：Chaos 产生运动和 NormalImpulse；本组件只路由 Light 请求并精确恢复自身改写。
- * 状态 Owner：本组件独占 ArmedPrimitive、快照、ImpactId、Tag、Delegate 与两个 Timer。
+ * 职责：实现磁性资格，并管理正式投掷期间的唯一临时碰撞身份、Hit、Light 窗口与破碎监听窗口。
+ * 边界：Chaos 产生运动和 NormalImpulse；Light 与破碎消费者只读取本组件广播的同一次真实 Hit。
+ * 状态 Owner：本组件独占 ArmedPrimitive、快照、ImpactId、Tag、Delegate 绑定与全部投掷 Timer。
  */
 
 #include "Components/Magnetism/MagneticObjectComponent.h"
@@ -35,10 +35,12 @@ bool UMagneticObjectComponent::CanGrab(const UPrimitiveComponent* CandidateCompo
 		&& CandidateComponent->GetMass() <= MaxAllowedMass;
 }
 
+/** 保存一次精确碰撞基线并建立 Light/破碎共享的正式投掷命中事务。 */
 bool UMagneticObjectComponent::ArmThrownImpact(
 	UPrimitiveComponent* ThrownPrimitive,
 	AActor* Thrower,
-	const float ActiveDurationSeconds)
+	const float LightActiveDurationSeconds,
+	const float MaximumBreakMonitoringSeconds)
 {
 	DisarmThrownImpact();
 
@@ -53,15 +55,32 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 		|| !IsValid(Thrower)
 		|| !IsValid(StandingImpactSourceProfile)
 		|| !StandingImpactSourceProfile->IsConfigured(ConfigurationError)
-		|| !FMath::IsFinite(ActiveDurationSeconds)
-		|| ActiveDurationSeconds <= 0.0f
+		|| !FMath::IsFinite(LightActiveDurationSeconds)
+		|| LightActiveDurationSeconds <= 0.0f
 		|| !IsValid(GetWorld()))
 	{
 		UE_LOG(LogMagneticObjectImpact, Warning,
-			TEXT("%s could not arm thrown Light impact: %s"),
+			TEXT("%s could not arm thrown impact: %s"),
 			*GetNameSafe(GetOwner()),
-			ConfigurationError.IsEmpty() ? TEXT("invalid primitive, thrower, duration, physics state or source profile") : *ConfigurationError);
+			ConfigurationError.IsEmpty()
+				? TEXT("invalid primitive, thrower, duration, physics state or source profile")
+				: *ConfigurationError);
 		return false;
+	}
+
+	bool bEnableBreakMonitoring = false;
+	if (!FMath::IsNearlyZero(MaximumBreakMonitoringSeconds))
+	{
+		bEnableBreakMonitoring = FMath::IsFinite(MaximumBreakMonitoringSeconds)
+			&& MaximumBreakMonitoringSeconds > LightActiveDurationSeconds;
+		if (!bEnableBreakMonitoring)
+		{
+			UE_LOG(LogMagneticObjectImpact, Warning,
+				TEXT("%s ignored invalid break monitoring duration %.3f; it must be finite and greater than Light duration %.3f."),
+				*GetNameSafe(GetOwner()),
+				MaximumBreakMonitoringSeconds,
+				LightActiveDurationSeconds);
+		}
 	}
 
 	CollisionSnapshot.CollisionProfileName = ThrownPrimitive->GetCollisionProfileName();
@@ -76,6 +95,8 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	ArmedPrimitive = ThrownPrimitive;
 	ActiveThrower = Thrower;
 	ActiveImpactId = FGuid::NewGuid();
+	bLightImpactWindowActive = true;
+	bKeepMonitoringForBreak = bEnableBreakMonitoring;
 	bImpactConsumed = false;
 
 	ThrownPrimitive->SetCollisionObjectType(Demo::CollisionChannels::AttackProjectileBody);
@@ -86,21 +107,40 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 		this, &UMagneticObjectComponent::HandleArmedPrimitiveHit);
 	GetOwner()->Tags.AddUnique(DemoHitTags::AttackProjectile());
 
-	GetWorld()->GetTimerManager().SetTimer(
+	FTimerManager& TimerManager = GetWorld()->GetTimerManager();
+	TimerManager.SetTimer(
 		ActiveDurationTimerHandle,
 		this,
-		&UMagneticObjectComponent::DisarmThrownImpact,
-		ActiveDurationSeconds,
+		&UMagneticObjectComponent::HandleLightWindowExpired,
+		LightActiveDurationSeconds,
 		false);
+	if (bKeepMonitoringForBreak)
+	{
+		TimerManager.SetTimer(
+			MaximumMonitoringTimerHandle,
+			this,
+			&UMagneticObjectComponent::HandleMaximumMonitoringExpired,
+			MaximumBreakMonitoringSeconds,
+			false);
+	}
+
+	UE_LOG(LogMagneticObjectImpact, Verbose,
+		TEXT("%s armed thrown impact (Light %.2fs, break monitor %.2fs)."),
+		*GetNameSafe(GetOwner()),
+		LightActiveDurationSeconds,
+		bKeepMonitoringForBreak ? MaximumBreakMonitoringSeconds : 0.0f);
 	return true;
 }
 
+/** 清除全部异步入口、解绑唯一 Hit，并严格恢复正式投掷前的碰撞和 Tag。 */
 void UMagneticObjectComponent::DisarmThrownImpact()
 {
 	if (UWorld* World = GetWorld())
 	{
-		World->GetTimerManager().ClearTimer(ActiveDurationTimerHandle);
-		World->GetTimerManager().ClearTimer(DeferredDisarmTimerHandle);
+		FTimerManager& TimerManager = World->GetTimerManager();
+		TimerManager.ClearTimer(ActiveDurationTimerHandle);
+		TimerManager.ClearTimer(DeferredLightResolutionTimerHandle);
+		TimerManager.ClearTimer(MaximumMonitoringTimerHandle);
 	}
 
 	UPrimitiveComponent* Primitive = ArmedPrimitive.Get();
@@ -130,26 +170,43 @@ void UMagneticObjectComponent::DisarmThrownImpact()
 	ActiveThrower.Reset();
 	ActiveImpactId.Invalidate();
 	CollisionSnapshot.Reset();
+	bLightImpactWindowActive = false;
+	bKeepMonitoringForBreak = false;
 	bImpactConsumed = false;
 }
 
+/** Owner 生命周期结束时先撤销所有外部回调，再交给父类完成销毁。 */
 void UMagneticObjectComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	DisarmThrownImpact();
 	Super::EndPlay(EndPlayReason);
 }
 
+/** 先广播已过滤的真实阻挡命中，再在 Light 窗口内尝试构造一次角色请求。 */
 void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 	UPrimitiveComponent* HitComponent,
 	AActor* OtherActor,
-	UPrimitiveComponent* /*OtherComponent*/,
+	UPrimitiveComponent* OtherComponent,
 	const FVector NormalImpulse,
 	const FHitResult& Hit)
 {
-	if (bImpactConsumed
-		|| HitComponent != ArmedPrimitive.Get()
+	if (HitComponent != ArmedPrimitive.Get()
+		|| !Hit.bBlockingHit
 		|| !IsValid(OtherActor)
-		|| OtherActor == ActiveThrower.Get()
+		|| OtherActor == ActiveThrower.Get())
+	{
+		return;
+	}
+
+	ThrownBlockingHit.Broadcast(
+		HitComponent,
+		OtherActor,
+		OtherComponent,
+		NormalImpulse,
+		Hit);
+
+	if (!bLightImpactWindowActive
+		|| bImpactConsumed
 		|| !OtherActor->GetClass()->ImplementsInterface(UCharacterImpactReceiver::StaticClass()))
 	{
 		return;
@@ -163,7 +220,8 @@ void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 	}
 
 	FVector PushDirection = (-Hit.ImpactNormal).GetSafeNormal();
-	const FVector TowardTarget = (OtherActor->GetActorLocation() - HitComponent->GetComponentLocation()).GetSafeNormal();
+	const FVector TowardTarget =
+		(OtherActor->GetActorLocation() - HitComponent->GetComponentLocation()).GetSafeNormal();
 	if (PushDirection.IsNearlyZero())
 	{
 		PushDirection = (-NormalImpulse).GetSafeNormal();
@@ -191,18 +249,74 @@ void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 		ICharacterImpactReceiver::Execute_SubmitStandingImpact(OtherActor, Request);
 	bImpactConsumed = true;
 	UE_LOG(LogMagneticObjectImpact, Verbose,
-		TEXT("%s thrown impact consumed by %s with result %d (impulse %.1f)."),
-		*GetNameSafe(GetOwner()), *GetNameSafe(OtherActor), static_cast<int32>(Result), ImpulseMagnitude);
+		TEXT("%s thrown Light consumed by %s with result %d (impulse %.1f)."),
+		*GetNameSafe(GetOwner()),
+		*GetNameSafe(OtherActor),
+		static_cast<int32>(Result),
+		ImpulseMagnitude);
 
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(ActiveDurationTimerHandle);
-		DeferredDisarmTimerHandle = World->GetTimerManager().SetTimerForNextTick(
-			this, &UMagneticObjectComponent::HandleDeferredDisarm);
+		DeferredLightResolutionTimerHandle = World->GetTimerManager().SetTimerForNextTick(
+			this, &UMagneticObjectComponent::HandleDeferredLightResolved);
 	}
 }
 
-void UMagneticObjectComponent::HandleDeferredDisarm()
+/** Light 时间自然结束；破碎消费者存在时只降级身份，否则完整恢复。 */
+void UMagneticObjectComponent::HandleLightWindowExpired()
 {
+	bLightImpactWindowActive = false;
+	if (!bKeepMonitoringForBreak)
+	{
+		DisarmThrownImpact();
+		return;
+	}
+
+	RestoreAttackIdentityButKeepHitMonitoring();
+}
+
+/** Light 请求同帧消费完成后，在 next-tick 安全恢复攻击身份或完整事务。 */
+void UMagneticObjectComponent::HandleDeferredLightResolved()
+{
+	bLightImpactWindowActive = false;
+	if (!bKeepMonitoringForBreak)
+	{
+		DisarmThrownImpact();
+		return;
+	}
+
+	RestoreAttackIdentityButKeepHitMonitoring();
+}
+
+/** 达到破碎监听硬上限后不再保留 Hit/CCD，避免道具长期处于隐形武装状态。 */
+void UMagneticObjectComponent::HandleMaximumMonitoringExpired()
+{
+	UE_LOG(LogMagneticObjectImpact, Verbose,
+		TEXT("%s break monitoring expired; restoring the original collision state."),
+		*GetNameSafe(GetOwner()));
 	DisarmThrownImpact();
+}
+
+/** 恢复原始碰撞身份和 Tag，但由同一事务继续保留事件通知与 CCD 到硬上限。 */
+void UMagneticObjectComponent::RestoreAttackIdentityButKeepHitMonitoring()
+{
+	UPrimitiveComponent* Primitive = ArmedPrimitive.Get();
+	if (!IsValid(Primitive) || !CollisionSnapshot.bValid)
+	{
+		DisarmThrownImpact();
+		return;
+	}
+
+	Primitive->SetCollisionProfileName(CollisionSnapshot.CollisionProfileName);
+	Primitive->SetCollisionEnabled(CollisionSnapshot.CollisionEnabled);
+	Primitive->SetCollisionObjectType(CollisionSnapshot.ObjectType);
+	Primitive->SetCollisionResponseToChannels(CollisionSnapshot.Responses);
+	Primitive->SetNotifyRigidBodyCollision(true);
+	Primitive->SetUseCCD(true);
+
+	if (IsValid(GetOwner()) && !CollisionSnapshot.bOwnerHadAttackProjectileTag)
+	{
+		GetOwner()->Tags.Remove(DemoHitTags::AttackProjectile());
+	}
 }

@@ -8,6 +8,7 @@
 #include "Actors/Magnetism/MagneticPrototypeProp.h"
 
 #include "Components/Magnetism/MagneticObjectComponent.h"
+#include "Components/Magnetism/MagneticThrowBreakComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/CollisionProfile.h"
 #include "UObject/ConstructorHelpers.h"
@@ -25,6 +26,7 @@ AMagneticPrototypeProp::AMagneticPrototypeProp()
 	MagneticBody->SetAngularDamping(0.35f);
 
 	MagneticObject = CreateDefaultSubobject<UMagneticObjectComponent>(TEXT("MagneticObject"));
+	MagneticThrowBreak = CreateDefaultSubobject<UMagneticThrowBreakComponent>(TEXT("MagneticThrowBreak"));
 
 	static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeMesh(
 		TEXT("/Engine/BasicShapes/Cube.Cube"));

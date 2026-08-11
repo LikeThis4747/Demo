@@ -3,7 +3,7 @@
 /**
  * @file MagneticPrototypeProp.h
  * 职责：声明首个可玩交互测试使用的自包含磁性物理道具。
- * 状态边界：Actor 负责表现与初始质量，Chaos 负责刚体运动，磁性标记组件负责单物体磁力配置。
+ * 状态边界：Actor 负责装配与初始质量，磁性组件拥有正式投掷事务，破碎组件只拥有替换状态。
  */
 
 #pragma once
@@ -14,6 +14,7 @@
 #include "MagneticPrototypeProp.generated.h"
 
 class UMagneticObjectComponent;
+class UMagneticThrowBreakComponent;
 class UStaticMeshComponent;
 
 /** 可复用的最小磁性刚体，后续可由运行时 PCG 系统生成。 */
@@ -41,6 +42,10 @@ private:
 	/** 供电磁抓取组件读取的磁性标记与单物体配置契约。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Prototype", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UMagneticObjectComponent> MagneticObject;
+
+	/** 正式投掷共享命中的破碎消费者；未配置替身类时保持普通磁力物行为。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Prototype", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMagneticThrowBreakComponent> MagneticThrowBreak;
 
 	/** 由关卡实例配置，并在物理状态创建后应用的初始质量，单位 kg。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Prototype", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", Units = "kg"))

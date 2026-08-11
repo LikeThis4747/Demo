@@ -2,47 +2,65 @@
 
 /**
  * @file MagneticObjectComponent.h
- * 职责：声明磁性道具身份，并独占一次正式投掷的攻击碰撞快照、Hit、Tag、Timer 与恢复。
- * 边界：不保存玩家全局抓取手感、不制造投掷冲量，也不决定玩家/追猎者的反应结果。
- * 状态 Owner：本组件只拥有单个道具的磁性配置与正式投掷事务；Physics Handle 持有状态仍属于 Grab 组件。
+ * 职责：声明磁性道具身份，并独占一次正式投掷的碰撞快照、Hit、Tag、Timer 与恢复。
+ * 边界：不保存玩家全局抓取手感、不制造投掷冲量，也不决定 Light 或破碎消费者的最终表现。
+ * 状态 Owner：本组件是单个道具正式投掷碰撞事务的唯一写入者；消费者只能监听原生命中委托。
  */
 
 #pragma once
 
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
+#include "Delegates/Delegate.h"
 #include "Engine/EngineTypes.h"
 #include "Engine/TimerHandle.h"
 
 #include "MagneticObjectComponent.generated.h"
 
 class AActor;
-class UPrimitiveComponent;
 class UCharacterImpactSourceProfile;
+class UPrimitiveComponent;
 
-/** 给 Actor 添加可磁吸标记，并提供选取优先级与单物体投掷倍率。 */
+/** 正式投掷事务过滤投掷者后，为墙体、道具和角色统一广播的原生阻挡命中。 */
+DECLARE_MULTICAST_DELEGATE_FiveParams(
+	FOnMagneticThrownBlockingHit,
+	UPrimitiveComponent*,
+	AActor*,
+	UPrimitiveComponent*,
+	const FVector&,
+	const FHitResult&);
+
+/** 给 Actor 添加可磁吸标记，并提供选取优先级、投掷倍率与共享命中事务。 */
 UCLASS(ClassGroup = (Magnetism), meta = (BlueprintSpawnableComponent))
 class DEMO_API UMagneticObjectComponent final : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
-	/** 创建无 Tick 的纯配置组件；磁性资格只在玩家输入触发的选取中读取。 */
+	/** 创建无 Tick 的事件驱动配置组件；正式投掷事务只在输入触发时存在。 */
 	UMagneticObjectComponent();
 
 	/** 检查磁性标记、刚体模拟状态和全局质量上限，决定候选组件是否可抓取。 */
 	bool CanGrab(const UPrimitiveComponent* CandidateComponent, float MaxAllowedMass) const;
 
-	/** 释放 Physics Handle 后、施加投掷冲量前，用精确 Primitive 建立一次可回滚的 Light 命中事务。 */
+	/**
+	 * 释放 Physics Handle 后、施加投掷冲量前，用精确 Primitive 建立一次可回滚事务。
+	 * LightActiveDurationSeconds 控制角色轻受击窗口；MaximumBreakMonitoringSeconds 为 0 时不延长破碎监听。
+	 */
 	bool ArmThrownImpact(
 		UPrimitiveComponent* ThrownPrimitive,
 		AActor* Thrower,
-		float ActiveDurationSeconds);
+		float LightActiveDurationSeconds,
+		float MaximumBreakMonitoringSeconds = 0.0f);
 
 	/** 幂等结束当前投掷事务并精确恢复该 Primitive 的全部碰撞快照。 */
 	void DisarmThrownImpact();
 
+	/** 返回当前是否仍由本组件持有正式投掷碰撞事务。 */
 	bool IsThrownImpactArmed() const { return ArmedPrimitive.IsValid(); }
+
+	/** 返回通用阻挡命中原生委托；监听者不得在回调中改写本组件碰撞快照。 */
+	FOnMagneticThrownBlockingHit& OnThrownBlockingHit() { return ThrownBlockingHit; }
 
 	/**
 	 * 对应 C++ 属性 bMagnetizable；初始值：true。
@@ -70,9 +88,11 @@ public:
 	TObjectPtr<UCharacterImpactSourceProfile> StandingImpactSourceProfile = nullptr;
 
 protected:
+	/** Owner 或 World 结束时清除全部 Timer、委托绑定并恢复碰撞快照。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 接收唯一根刚体的真实 Hit，先广播通用命中，再按 Light 窗口提交角色请求。 */
 	UFUNCTION()
 	void HandleArmedPrimitiveHit(
 		UPrimitiveComponent* HitComponent,
@@ -81,8 +101,19 @@ private:
 		FVector NormalImpulse,
 		const FHitResult& Hit);
 
-	void HandleDeferredDisarm();
+	/** Light 窗口自然到期；若仍需破碎监听，仅恢复攻击身份并保留 Hit/CCD。 */
+	void HandleLightWindowExpired();
 
+	/** Light 已被角色消费后的 next-tick 收口，避免在受击回调同帧改写来源身份。 */
+	void HandleDeferredLightResolved();
+
+	/** 破碎监听达到硬上限后完整结束投掷事务，避免长期潜伏成随机破碎。 */
+	void HandleMaximumMonitoringExpired();
+
+	/** 恢复原 ObjectType、Responses、Profile 与 Tag，同时继续临时保留 Hit 通知和 CCD。 */
+	void RestoreAttackIdentityButKeepHitMonitoring();
+
+	/** 本组件在正式投掷期间覆盖的全部可恢复碰撞与 Tag 状态。 */
 	struct FThrownImpactCollisionSnapshot
 	{
 		bool bValid = false;
@@ -97,11 +128,36 @@ private:
 		void Reset() { *this = FThrownImpactCollisionSnapshot(); }
 	};
 
+	/** 当前由本组件临时改写并绑定 Hit 的精确刚体；完整 Disarm 后清空。 */
 	TWeakObjectPtr<UPrimitiveComponent> ArmedPrimitive;
+
+	/** 本次投掷者；只用于过滤出手瞬间和飞行中的自碰撞。 */
 	TWeakObjectPtr<AActor> ActiveThrower;
+
+	/** 当前 Light 请求的唯一标识；每次正式投掷重新生成。 */
 	FGuid ActiveImpactId;
+
+	/** 正式投掷前的唯一恢复基线；Light 与破碎不得各存一份。 */
 	FThrownImpactCollisionSnapshot CollisionSnapshot;
+
+	/** Light 与破碎共同消费的同步原生命中委托；由组件生命周期管理监听。 */
+	FOnMagneticThrownBlockingHit ThrownBlockingHit;
+
+	/** Light 有效窗口 Timer；到期后恢复攻击身份或完整 Disarm。 */
 	FTimerHandle ActiveDurationTimerHandle;
-	FTimerHandle DeferredDisarmTimerHandle;
+
+	/** 角色 Light 已消费后的 next-tick 收口 Timer。 */
+	FTimerHandle DeferredLightResolutionTimerHandle;
+
+	/** 从出手开始计算的破碎监听硬上限 Timer。 */
+	FTimerHandle MaximumMonitoringTimerHandle;
+
+	/** 为 true 时本次仍允许构造一次角色 Light 请求。 */
+	bool bLightImpactWindowActive = false;
+
+	/** 为 true 时 Light 结束后继续由同一 Hit/CCD 事务等待破碎消费者。 */
+	bool bKeepMonitoringForBreak = false;
+
+	/** 为 true 时本次 Light 已经提交，不允许同一投掷重复提交角色响应。 */
 	bool bImpactConsumed = false;
 };
