@@ -11,6 +11,7 @@
 
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
+#include "Engine/EngineTypes.h"
 #include "Engine/TimerHandle.h"
 #include "Physics/CharacterImpactTypes.h"
 
@@ -121,7 +122,9 @@ private:
 	float PhysicalSessionStartTimeSeconds = 0.0f;
 	float LastPhysicalImpactTimeSeconds = 0.0f;
 	uint64 PhysicalConfigurationFrame = 0;
+	ECollisionEnabled::Type PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
 	bool bConfigurationReady = false;
 	bool bPhysicalReactionReady = false;
 	bool bPhysicalReactionActive = false;
+	bool bPhysicalMeshCollisionOverridden = false;
 };

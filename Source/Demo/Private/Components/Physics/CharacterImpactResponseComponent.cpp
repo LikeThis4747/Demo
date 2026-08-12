@@ -410,6 +410,30 @@ void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
 
 	if (!bPhysicalReactionActive)
 	{
+		PhysicalBaselineMeshCollisionEnabled = Mesh->GetCollisionEnabled();
+		bPhysicalMeshCollisionOverridden = false;
+		if (PhysicalBaselineMeshCollisionEnabled == ECollisionEnabled::QueryOnly)
+		{
+			// SkeletalMesh 的 BodyInstance 使用组件级 CollisionEnabled；仅开启模拟还不能接收冲量。
+			// QueryAndPhysics 保留既有命中查询，而 AttackProjectileBody 仍由角色基线响应显式 Ignore，
+			// 因此不会把磁力物额外路由到 Mesh 产生第二次实体碰撞。
+			Mesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+			bPhysicalMeshCollisionOverridden =
+				Mesh->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics;
+		}
+
+		if (!CollisionEnabledHasPhysics(Mesh->GetCollisionEnabled()))
+		{
+			if (bPhysicalMeshCollisionOverridden
+				&& Mesh->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics)
+			{
+				Mesh->SetCollisionEnabled(PhysicalBaselineMeshCollisionEnabled);
+			}
+			PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
+			bPhysicalMeshCollisionOverridden = false;
+			return;
+		}
+
 		PhysicalSessionStartTimeSeconds = Now;
 		PhysicalAnimation->SetStrengthMultiplyer(1.0f);
 		Mesh->SetAllBodiesBelowSimulatePhysics(Tuning->UpperBodyRootBone, true, true);
@@ -458,10 +482,25 @@ void UCharacterImpactResponseComponent::StopPhysicalReaction()
 			false,
 			true);
 	}
+	if (bPhysicalMeshCollisionOverridden && IsValid(Mesh))
+	{
+		if (Mesh->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics)
+		{
+			Mesh->SetCollisionEnabled(PhysicalBaselineMeshCollisionEnabled);
+		}
+		else
+		{
+			UE_LOG(LogCharacterImpact, Warning,
+				TEXT("%s did not restore Mesh collision because another system changed it during Light."),
+				*GetNameSafe(GetOwner()));
+		}
+	}
 
 	PhysicalSessionStartTimeSeconds = 0.0f;
 	LastPhysicalImpactTimeSeconds = 0.0f;
+	PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
 	bPhysicalReactionActive = false;
+	bPhysicalMeshCollisionOverridden = false;
 	SetComponentTickEnabled(false);
 }
 
