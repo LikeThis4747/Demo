@@ -2,9 +2,9 @@
 
 /**
  * @file PursuerConfig.h
- * 职责：集中保存单一追猎者的移动、感知、攻击节奏与思考周期参数，供追猎者角色与其 AI 状态机只读消费。
- * 边界：不保存运行时状态，不引用具体关卡或玩家，不实现物理受击（第二步）与伤害结算。
- * 状态 Owner：本资产是该追猎者原型行为参数的唯一来源；APursuerCharacter 与 APursuerAIController 只读取并执行。
+ * 职责：集中保存单一追猎者的移动、感知、近战与预判跑跳攻击参数，供角色、攻击组件与 AI 只读消费。
+ * 边界：不保存运行时状态，不引用具体关卡或玩家，不实现命中查询、受击响应或伤害结算。
+ * 状态 Owner：本资产是追猎者行为调参的唯一来源；运行时对象只读取并执行。
  */
 
 #pragma once
@@ -15,6 +15,7 @@
 #include "PursuerConfig.generated.h"
 
 class UAnimMontage;
+class UCharacterImpactSourceProfile;
 
 /** 单一追猎者原型的行为调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
 UCLASS(BlueprintType)
@@ -23,7 +24,7 @@ class DEMO_API UPursuerConfig final : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 校验数值范围及参数间约束（丢失半径≥察觉半径、攻击距离<察觉半径、攻击蒙太奇已指定）；失败时返回具体属性名与原因。 */
+	/** 校验数值、距离层级、攻击时序和必填资产；失败时返回具体属性名与原因。 */
 	bool IsConfigured(FString& OutError) const;
 
 	/**
@@ -55,30 +56,100 @@ public:
 	bool bUseLineOfSight = true;
 
 	/**
-	 * 攻击距离，单位 cm。既作为发起攻击的判定距离，也作为寻路到达半径（移动止于此距离）。需 < SenseRadius。
-	 * 初始值：180；范围：80~500。
+	 * 近距离斧击的最大发起距离，单位 cm；AI 在此距离内优先近战，需 < JumpAttackMinRange。
+	 * 初始值：220；范围：80~500。调高更容易贴身命中，但会压缩跑跳攻击区间。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (ClampMin = "80.0", ClampMax = "500.0", Units = "cm"))
-	float AttackRange = 180.0f;
+	float AttackRange = 220.0f;
 
 	/**
-	 * 两次攻击之间的最短间隔，单位 s。冷却期间保持面向玩家但不移动、不再次攻击。
-	 * 初始值：2.0；范围：0.3~8.0。
+	 * 两次攻击起手之间的最短间隔，单位 s；组件空闲但仍在冷却时 AI 可以继续追击。
+	 * 初始值：1.2；范围：0.3~8.0。恢复窗口和冷却互相独立。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (ClampMin = "0.3", ClampMax = "8.0", Units = "s"))
-	float AttackCooldown = 2.0f;
+	float AttackCooldown = 1.2f;
 
 	/**
-	 * 攻击蒙太奇，由 APursuerCharacter::PlayAttackMontage 同步加载并播放。
-	 * 初始值：空，必须在 DA_Pursuer 指定；缺失时记录错误并跳过攻击，不使用路径兜底。
+	 * 近距离斧击全身 Montage，由 UPursuerAttackComponent 同步加载；必须在 DA_Pursuer 指定。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击")
 	TSoftObjectPtr<UAnimMontage> AttackMontage;
 
+	/** 近距离 Montage 播放倍率；初始值 1.2，调高会同步提前视觉动作但命中时刻仍由 CloseAttackHitDelay 独立决定。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float CloseAttackPlayRate = 1.2f;
+
+	/** 近战起手到 Sweep 的秒数；初始值 0.45，应对齐斧刃通过玩家身体的画面帧。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.05", ClampMax = "2.0", Units = "s"))
+	float CloseAttackHitDelay = 0.45f;
+
+	/** 从角色胶囊前方扫掠的长度，单位 cm；初始值 220，不依赖 AxeMesh 组件名。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "50.0", ClampMax = "500.0", Units = "cm"))
+	float CloseAttackReach = 220.0f;
+
+	/** 近战球形 Sweep 半径，单位 cm；初始值 70，调高增加侧向容错。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "10.0", ClampMax = "200.0", Units = "cm"))
+	float CloseAttackSweepRadius = 70.0f;
+
+	/** 近战命中伤害；初始值 18，由 HealthComponent 通过 ApplyDamage 接收。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float CloseAttackDamage = 18.0f;
+
+	/** 近战命中或落空后的不可行动恢复，单位 s；初始值 0.6。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.05", ClampMax = "3.0", Units = "s"))
+	float CloseAttackRecoverySeconds = 0.6f;
+
+	/** 跑跳下砸全身 Montage；使用追猎者骨骼的重定向版本，缺失时该攻击不会启动。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳")
+	TSoftObjectPtr<UAnimMontage> JumpAttackMontage;
+
+	/** 跑跳攻击的最小发起距离，单位 cm；初始值 220，必须 ≥ AttackRange。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "100.0", ClampMax = "1000.0", Units = "cm"))
+	float JumpAttackMinRange = 220.0f;
+
+	/** 跑跳攻击的最大发起与落点锁定距离，单位 cm；初始值 650，必须 > JumpAttackMinRange。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "200.0", ClampMax = "1500.0", Units = "cm"))
+	float JumpAttackMaxRange = 650.0f;
+
+	/** 玩家水平速度的预判时间，单位 s；初始值 0.35，仅在离地时计算一次，空中不追踪。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.0", ClampMax = "1.0", Units = "s"))
+	float JumpAttackLeadSeconds = 0.35f;
+
+	/** Montage 起手到真正 Launch 的秒数；初始值 0.65，应对齐脚离地画面。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.05", ClampMax = "2.0", Units = "s"))
+	float JumpAttackLaunchDelay = 0.65f;
+
+	/** 抛物线从离地到预测落点的固定飞行时间，单位 s；初始值 0.65。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.2", ClampMax = "1.5", Units = "s"))
+	float JumpAttackFlightSeconds = 0.65f;
+
+	/** 落地范围查询半径，单位 cm；初始值 160，给持续横跑玩家可读但可躲的容错。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "50.0", ClampMax = "400.0", Units = "cm"))
+	float JumpAttackImpactRadius = 160.0f;
+
+	/** 跑跳下砸命中伤害；初始值 30，高于近战以补偿明显起手和落空风险。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.0", ClampMax = "100.0"))
+	float JumpAttackDamage = 30.0f;
+
+	/** 下砸落地后不可行动恢复，单位 s；初始值 0.75，玩家躲开后可借此拉开距离。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.05", ClampMax = "3.0", Units = "s"))
+	float JumpAttackRecoverySeconds = 0.75f;
+
+	/** 跑跳 Montage 播放倍率；初始值 1.3，使约 0.85s 离地/1.70s 落地对齐 0.65s+0.65s 物理时序。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.1", ClampMax = "3.0"))
+	float JumpAttackPlayRate = 1.3f;
+
+	/** 攻击命中后提交给玩家现有 StandingImpact 的来源 Profile；不属于 Heavy Impact。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|反馈")
+	TObjectPtr<UCharacterImpactSourceProfile> AttackImpactSourceProfile = nullptr;
+
+	/** StandingImpact 的归一化表现强度；初始值 1，范围 0~1。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|反馈", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float AttackImpactStrength = 1.0f;
+
 	/**
-	 * 攻击时寻路贴近的目标距离，单位 cm；必须 < AttackRange。
-	 * 作用：追击到比攻击判定更近处，一旦进入攻击距离即主动停下攻击，避免停在 AttackRange 边界导致的攻击抖动。
-	 * 初始值：100；范围：50~AttackRange。
+	 * 无攻击可启动时寻路贴近的目标距离，单位 cm；必须 < AttackRange。
+	 * 初始值 100；冷却期间也继续使用此半径追击，不再停在攻击边界等待。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (ClampMin = "50.0", Units = "cm"))
 	float AttackApproachRadius = 100.0f;

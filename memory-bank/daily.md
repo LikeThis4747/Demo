@@ -131,3 +131,13 @@
 - 玩家 Tuning 使用 spine_01 模拟根、spine_03 躯干与 upperarm_l/r 左右臂受力 Body；首验驱动、冲量与时间值与当前追猎者局部物理起点一致。
 - 官方 MCP 持久化回读通过；CharacterImpact 2/2、HeavyImpact 5/5，短 SIE 无新增 CharacterImpact/磁力命中警告。
 - 用户仍需实际投掷验收减速、部位反馈、恢复与 Light→Heavy；不扩大到地刺、玩家动画、磁力事务或 Heavy 状态机修改。
+
+<!-- written by shiqiqiwang at 2026-08-12 13:16 UTC -->
+
+
+## 2026-08-12 — 追猎者预判跑跳攻击
+
+- 实现中距离预判跑跳下砸和近距离斧击 Sweep 两段攻击；助跑保留寻路，离地才按玩家速度锁一次落点，CharacterMovement 抛物线移动，Landed 结算并清除落地滑行。
+- 跑跳动画通过现有 RTG_XBot 重定向到追猎者骨骼并创建 DefaultSlot Montage；Root Motion 关闭且锁 Root，未修改 AnimBP 图。
+- 命中使用 ApplyDamage + StandingImpact；跑跳 30 伤害，近战 18 伤害，没有调用 Heavy Impact 协议。
+- DemoEditor 完整构建、PredictionAndBallistics 1/1、资产回读和 Level0 PIE 通过；日志证明跑跳与近战两段命中均贯通。最终移动玩家手感和动画观感待用户验收。

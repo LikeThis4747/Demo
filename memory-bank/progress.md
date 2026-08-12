@@ -162,3 +162,14 @@
 - 玩家 StandingImpact 启用与追猎者同一局部 Physical Animation 路径，按躯干/左右臂映射一次封顶表现冲量；地刺保持不变。
 - 两份 DataAsset 经官方 MCP 保存回读；CharacterImpact 2/2 与 HeavyImpact 5/5 合计 7/7 通过，短 SIE 无新增相关警告。
 - 技术装配完成；实际胸/左/右反馈、恢复与 Light→Heavy 仍待用户 PIE 验收。
+
+<!-- written by shiqiqiwang at 2026-08-12 13:16 UTC -->
+
+
+## 2026-08-12 — 追猎者预判跑跳攻击技术交付（待用户手感验收）
+
+- [x] 中距离全身跑跳下砸：助跑期间继续寻路，真正离地时按玩家速度一次锁定预测落点，空中不持续追踪，CharacterMovement 抛物线驱动位移。
+- [x] 真实 Landed 触发 160 cm 范围结算并清除落地残余水平速度；近距离斧击改为前方球形 Sweep，冷却期间继续追击。
+- [x] 跑跳动画重定向、DefaultSlot Montage、DA_Pursuer 与斧击 StandingImpact Profile 装配完成；Root Motion 关闭且锁 Root，AnimBP 未改。
+- [x] DemoEditor 完整构建、PredictionAndBallistics 1/1、官方资产回读与 Level0 PIE 通过；PIE 先出现 30 点跑跳命中，再出现 18 点近战兜底命中。
+- [ ] 用户验收持续横跑/急转躲避、助跑-离地-落地-恢复衔接及压力；未验收前不标记最终完成。

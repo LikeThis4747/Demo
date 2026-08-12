@@ -2,13 +2,14 @@
 
 /**
  * @file PursuerAIController.cpp
- * 职责：实现追猎者的定时状态机——感知玩家、寻路追击、进入距离攻击、冷却后回追。
- * 边界：不实现移动物理与攻击动画（角色负责），不做物理受击/伤害（第二步），不使用行为树/AIPerception。
+ * 职责：实现追猎者的定时决策——感知、追击、中距离预判跑跳与近距离斧击选择。
+ * 边界：不拥有攻击阶段、冷却、动画、位移或命中；这些统一交给 UPursuerAttackComponent。
  */
 
 #include "AI/PursuerAIController.h"
 
 #include "Characters/PursuerCharacter.h"
+#include "Components/Combat/PursuerAttackComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "Kismet/GameplayStatics.h"
@@ -21,10 +22,13 @@ APursuerAIController::APursuerAIController()
 	PrimaryActorTick.bCanEverTick = false;
 }
 
-/** 受击取消 PathFollowing 时记住恢复意图；攻击冷却仍照常限制下一次攻击。 */
+/** 受击取消 PathFollowing，并取消当前攻击事务；空中的 Z 速度仍由现有受击合同保留。 */
 void APursuerAIController::NotifyImpactMovementBlocked()
 {
-	bResumeChaseDuringAttackCooldown |= bIsOnAttackCooldown;
+	if (Pursuer.IsValid() && IsValid(Pursuer->GetAttackComponent()))
+	{
+		Pursuer->GetAttackComponent()->CancelAttack();
+	}
 
 	UCharacterMovementComponent* Movement = Pursuer.IsValid()
 		? Pursuer->GetCharacterMovement()
@@ -67,10 +71,7 @@ void APursuerAIController::OnPossess(APawn* InPawn)
 void APursuerAIController::OnUnPossess()
 {
 	GetWorldTimerManager().ClearTimer(ThinkTimerHandle);
-	GetWorldTimerManager().ClearTimer(AttackCooldownTimerHandle);
 	bIsChasing = false;
-	bIsOnAttackCooldown = false;
-	bResumeChaseDuringAttackCooldown = false;
 
 	Super::OnUnPossess();
 }
@@ -90,6 +91,15 @@ void APursuerAIController::Think()
 		return;
 	}
 	const bool bAttackSuppressed = Pursuer->IsImpactAttackSuppressed();
+	UPursuerAttackComponent* AttackComponent = Pursuer->GetAttackComponent();
+	if (!IsValid(AttackComponent))
+	{
+		return;
+	}
+	if (bAttackSuppressed && AttackComponent->IsBusy())
+	{
+		AttackComponent->CancelAttack();
+	}
 
 	// GetPlayerPawn 本就返回非 const APawn*；此处保持非 const，供下方 SetFocus/MoveToActor 直接使用，避免多余 const_cast。
 	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
@@ -118,36 +128,33 @@ void APursuerAIController::Think()
 		return;
 	}
 
-	// 攻击距离内：停下、面向玩家；不在冷却则发起一次攻击并进入冷却。
-	if (Distance <= Config->AttackRange)
+	// 攻击组件忙碌时不重复 StopMovement，避免空中 Launch 的水平速度被路径系统反复清理。
+	if (AttackComponent->IsBusy())
 	{
-		StopMovement();
 		SetFocus(PlayerPawn);
-
-		if (!bIsOnAttackCooldown && !bAttackSuppressed)
-		{
-			bResumeChaseDuringAttackCooldown = false;
-			bIsOnAttackCooldown = true;
-			Pursuer->PlayAttackMontage();
-			GetWorldTimerManager().SetTimer(
-				AttackCooldownTimerHandle, this, &APursuerAIController::OnAttackCooldownFinished,
-				Config->AttackCooldown, /*bLoop=*/false);
-		}
 		return;
 	}
 
-	// 攻击距离外且不在冷却时继续追击。Light Slow 会中断攻击但不取消路径，
-	// 因此即使旧攻击冷却尚未结束也要重新发出 MoveTo，避免原地等待完整冷却。
-	if (!bIsOnAttackCooldown || bAttackSuppressed || bResumeChaseDuringAttackCooldown)
+	// 近距离优先斧击；只有组件真正启动成功才停在攻击态，资产缺失时仍继续追击。
+	if (!bAttackSuppressed
+		&& Distance <= Config->AttackRange
+		&& AttackComponent->TryStartCloseSwing(PlayerPawn))
 	{
-		ClearFocus(EAIFocusPriority::Gameplay);
-		MoveToActor(PlayerPawn, Config->AttackApproachRadius);
+		SetFocus(PlayerPawn);
+		return;
 	}
-}
 
-/** 冷却结束：清标记，下次思考即可重新攻击或继续追击。 */
-void APursuerAIController::OnAttackCooldownFinished()
-{
-	bIsOnAttackCooldown = false;
-	bResumeChaseDuringAttackCooldown = false;
+	// 中距离用一次性预测跑跳封锁玩家前路；落点锁定后空中不再持续追踪。
+	if (!bAttackSuppressed
+		&& Distance >= Config->JumpAttackMinRange
+		&& Distance <= Config->JumpAttackMaxRange
+		&& AttackComponent->TryStartJumpSmash(PlayerPawn))
+	{
+		SetFocus(PlayerPawn);
+		return;
+	}
+
+	// 冷却中、资产暂缺或目标在攻击距离外都继续追击，不再站在旧 AttackRange 等待。
+	ClearFocus(EAIFocusPriority::Gameplay);
+	MoveToActor(PlayerPawn, Config->AttackApproachRadius);
 }

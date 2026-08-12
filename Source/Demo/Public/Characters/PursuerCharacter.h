@@ -2,9 +2,9 @@
 
 /**
  * @file PursuerCharacter.h
- * 职责：装配追猎者移动、AI 与重冲击组件，持有行为参数并保留旧局部受击的可回退接线成员。
- * 边界：不做 AI 决策，不直接拥有物理模拟状态、失衡或伤害结算，不硬编码资源路径和骨骼映射。
- * 状态 Owner：角色只拥有组件装配与攻击播放；AI 和重冲击状态分别由专用 Controller/Component 独占。
+ * 职责：装配追猎者移动、攻击、轻/重冲击组件并持有行为参数，作为各独立职责的组合入口。
+ * 边界：不做 AI 决策，不直接拥有攻击、物理模拟、失衡或伤害结算状态，不硬编码资源路径和骨骼映射。
+ * 状态 Owner：攻击、轻受击和重冲击分别由专用 Component 独占；角色只负责装配与接口转发。
  */
 
 #pragma once
@@ -26,6 +26,7 @@ class UPhysicalAnimationComponent;
 class UPhysicsControlComponent;
 class UPhysicsControlHitResponseComponent;
 class UPhysicsControlHitTuningData;
+class UPursuerAttackComponent;
 
 /** 物理命中在角色本地空间的简化方向（由 PhysicsControlHitResponseComponent 广播）。 */
 enum class EPhysicsHitDirection : uint8;
@@ -56,8 +57,8 @@ public:
 	/** 返回行为参数资产；可能为空，调用方需自行判空。 */
 	const UPursuerConfig* GetConfig() const { return Config; }
 
-	/** 播放攻击蒙太奇；Config 或蒙太奇缺失时记录错误并安全返回。 */
-	void PlayAttackMontage();
+	/** 返回追猎者攻击事务的唯一 Owner；构造后始终存在，配置无效时组件自行拒绝攻击。 */
+	UPursuerAttackComponent* GetAttackComponent() const { return PursuerAttack; }
 
 	/** Heavy 或 Light Stop 是否阻断追击移动。 */
 	bool IsImpactMovementBlocked() const;
@@ -65,7 +66,7 @@ public:
 	/** Heavy 或任意活动 Light 是否禁止发起新攻击。 */
 	bool IsImpactAttackSuppressed() const;
 
-	/** 只停止本角色明确记录的当前攻击 Montage，不影响 Light 或 Heavy 起身 Montage。 */
+	/** 转发给攻击组件取消当前事务，只停止攻击组件明确记录的 Montage。 */
 	void InterruptActiveAttackMontage();
 
 	/** Toggle only the upper-body charge presentation; the future charge executor owns gameplay state. */
@@ -82,14 +83,15 @@ public:
 	/** 受击蒙太奇结束（正常或被打断）时清除受击状态，允许 AI 恢复追击。 */
 	void OnHitReactMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 
-	/** 攻击 Montage 正常结束或被精确打断时清理记录。 */
-	void OnAttackMontageEnded(UAnimMontage* Montage, bool bInterrupted);
-
 protected:
 	/** 组件初始化后按 Config 应用移动速度；Config 无效时保留引擎默认并记录错误。 */
 	virtual void PostInitializeComponents() override;
 
 private:
+	/** 近战与预判跑跳攻击阶段、计时器、命中和恢复的唯一运行时 Owner。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UPursuerAttackComponent> PursuerAttack;
+
 	/** 官方 Physics Control 求解组件；当前只由重冲击响应组件创建和驱动运行时记录。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|物理受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPhysicsControlComponent> PhysicsControl;
@@ -132,7 +134,4 @@ private:
 	/** 受击反应播放期间为 true；由 HandleHitReact 置位、受击蒙太奇结束回调清除，供 AI 查询以暂停行动。 */
 	bool bIsReacting = false;
 
-	/** 仅记录由 PlayAttackMontage 成功启动的精确攻击 Montage。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UAnimMontage> ActiveAttackMontage = nullptr;
 };

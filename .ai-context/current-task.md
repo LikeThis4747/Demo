@@ -21,3 +21,11 @@
 - 当前正在收口玩家磁力投掷轻受击：PlayerReaction=Slow 0.40 秒、SpeedMultiplier=0.55、无动画、启用局部物理；地刺不改。
 - 玩家 StandingImpact 上半身局部物理已装配并通过官方 MCP 持久化回读、CharacterImpact 2/2、HeavyImpact 5/5 与短 SIE 启动检查。
 - 技术提交后等待用户 PIE 验收胸/左右命中反馈、恢复及 Light→Heavy；若效果仍不足，只做有限参数 A/B，不扩写来源特判。
+
+<!-- written by shiqiqiwang at 2026-08-12 13:16 UTC -->
+
+## 2026-08-12 追猎者预判跑跳攻击
+
+- 技术实现已收口：中距离约 220-650 cm 使用全身跑跳下砸，离地时按玩家水平速度预判 0.35 秒并一次锁点，CharacterMovement 固定时间抛物线位移，真实 Landed 结算 160 cm 范围；近距离使用斧击 Sweep。
+- 跑跳动画已重定向到追猎者骨骼并创建 DefaultSlot Montage；Root Motion 关闭且锁 Root，不修改 AnimBP 图。攻击命中使用 ApplyDamage + StandingImpact，不冒充 Heavy Impact。
+- DemoEditor 完整构建、PredictionAndBallistics 1/1、资产回读和 Level0 PIE 通过；PIE 先记录 30 点跑跳命中，后记录 18 点近战命中。最终移动玩家压力、躲避公平性和动画观感待用户验收。

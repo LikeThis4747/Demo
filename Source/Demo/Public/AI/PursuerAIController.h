@@ -2,9 +2,9 @@
 
 /**
  * @file PursuerAIController.h
- * 职责：以纯 C++ 定时状态机驱动追猎者的感知、追击与攻击节奏，不使用行为树。
- * 边界：只做决策与移动指令，不实现移动物理、攻击表现（交给角色）与物理受击（第二步）。
- * 状态 Owner：本控制器拥有追击/冷却运行时标记与思考 Timer 生命周期。
+ * 职责：以纯 C++ 定时状态机驱动追猎者的感知、追击与近战/跑跳攻击选择，不使用行为树。
+ * 边界：只做目标、距离和移动决策；攻击阶段、冷却、命中、恢复与中断交给 UPursuerAttackComponent。
+ * 状态 Owner：本控制器只拥有追击标记与思考 Timer；不再拥有攻击冷却状态。
  */
 
 #pragma once
@@ -41,9 +41,6 @@ private:
 	/** 单次思考：按距离与视线在追击/攻击/待机之间转移；由 Timer 周期调用。 */
 	void Think();
 
-	/** 冷却结束回调，仅清除冷却标记。 */
-	void OnAttackCooldownFinished();
-
 	/** 被占有的追猎者，OnPossess 时缓存；失效时思考直接返回。 */
 	TWeakObjectPtr<APursuerCharacter> Pursuer;
 
@@ -53,15 +50,7 @@ private:
 	/** 思考 Timer 句柄。 */
 	FTimerHandle ThinkTimerHandle;
 
-	/** 攻击冷却 Timer 句柄。 */
-	FTimerHandle AttackCooldownTimerHandle;
-
 	/** 是否处于追击态（已察觉玩家）；配合察觉/丢失双阈值防抖。 */
 	bool bIsChasing = false;
 
-	/** 是否处于攻击冷却中；冷却期间不发起新攻击，正常攻击后仍维持原有回追节奏。 */
-	bool bIsOnAttackCooldown = false;
-
-	/** Stop/Heavy 取消路径时保留；只放行追击移动，不提前结束攻击冷却。 */
-	bool bResumeChaseDuringAttackCooldown = false;
 };

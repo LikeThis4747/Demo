@@ -2,8 +2,8 @@
 
 /**
  * @file PursuerCharacter.cpp
- * 职责：装配追猎者、官方 Physics Control 与共享重冲击组件，应用移动参数并播放攻击蒙太奇。
- * 边界：不做 AI 决策或物理受击状态管理；旧局部受击只保留回退代码，不在本版本运行装配。
+ * 职责：装配追猎者攻击、官方 Physics Control 与轻/重冲击组件，并应用 DataAsset 移动参数。
+ * 边界：不做 AI 决策、攻击阶段或物理受击状态管理；所有运行时状态交给专用组件。
  */
 
 #include "Characters/PursuerCharacter.h"
@@ -13,6 +13,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/Combat/PursuerAttackComponent.h"
 #include "Components/Physics/CharacterImpactResponseComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/Physics/PhysicsControlHitResponseComponent.h"
@@ -30,6 +31,7 @@ APursuerCharacter::APursuerCharacter()
 {
 	PrimaryActorTick.bCanEverTick = false;
 
+	PursuerAttack = CreateDefaultSubobject<UPursuerAttackComponent>(TEXT("PursuerAttack"));
 	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
@@ -160,56 +162,15 @@ void APursuerCharacter::PostInitializeComponents()
 	}
 
 	GetCharacterMovement()->MaxWalkSpeed = Config->MaxWalkSpeed;
+	PursuerAttack->Configure(this, Config);
 }
 
-/** 同步加载并播放攻击蒙太奇；缺失 Config 或蒙太奇时记录错误并安全返回。 */
-void APursuerCharacter::PlayAttackMontage()
-{
-	if (IsImpactAttackSuppressed())
-	{
-		return;
-	}
-	if (!IsValid(Config))
-	{
-		UE_LOG(LogPursuer, Error, TEXT("%s 无 Config，无法播放攻击。"), *GetName());
-		return;
-	}
-
-	UAnimMontage* Montage = Config->AttackMontage.LoadSynchronous();
-	if (!IsValid(Montage))
-	{
-		// [临时-A] 项目暂无攻击动画：未配蒙太奇时仅记录攻击时机以验证追击闭环；有动画后此处应改回 Error 并直接返回。
-		UE_LOG(LogPursuer, Warning, TEXT("%s 触发攻击（暂无攻击蒙太奇，仅记录时机）。"), *GetName());
-		return;
-	}
-
-	if (IsValid(ActiveAttackMontage))
-	{
-		return;
-	}
-
-	if (PlayAnimMontage(Montage) > 0.0f)
-	{
-		ActiveAttackMontage = Montage;
-		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
-		{
-			FOnMontageEnded EndDelegate;
-			EndDelegate.BindUObject(this, &APursuerCharacter::OnAttackMontageEnded);
-			AnimInstance->Montage_SetEndDelegate(EndDelegate, Montage);
-		}
-	}
-}
-
+/** 受击系统只请求取消；精确 Montage 与 Timer 清理由攻击组件统一完成。 */
 void APursuerCharacter::InterruptActiveAttackMontage()
 {
-	UAnimMontage* MontageToStop = ActiveAttackMontage;
-	ActiveAttackMontage = nullptr;
-	if (IsValid(MontageToStop))
+	if (IsValid(PursuerAttack))
 	{
-		if (UAnimInstance* AnimInstance = GetMesh()->GetAnimInstance())
-		{
-			AnimInstance->Montage_Stop(0.05f, MontageToStop);
-		}
+		PursuerAttack->CancelAttack();
 	}
 }
 
@@ -219,14 +180,6 @@ void APursuerCharacter::SetChargeAnimationActive(const bool bActive)
 		Cast<UHeavyImpactAnimInstance>(GetMesh()->GetAnimInstance()))
 	{
 		AnimInstance->SetChargeGuardActive(bActive);
-	}
-}
-
-void APursuerCharacter::OnAttackMontageEnded(UAnimMontage* Montage, bool /*bInterrupted*/)
-{
-	if (Montage == ActiveAttackMontage)
-	{
-		ActiveAttackMontage = nullptr;
 	}
 }
 
