@@ -1,143 +1,42 @@
 # Daily Log — Demo
 
-## 2026-08-12 夜间只读审计
+> 按日期倒序；仅保留完成、验证、决定与遗留，过程细节见任务卡、DailyReport 与审计归档。
 
-- 白天完成磁力投掷物破碎 P0 验收归档、壁挂机关外观试装与同一真实弹体的 Loaded 预装生命周期；已有 Demo 模块链接和两台机关短 PIE 日志，本次夜间未构建、未跑测试、未启动 PIE。
-- 双 UE MCP 在线：Level0 打开且 PIE 停止；关键追猎者/机关蓝图 UpToDate，机关与 HeavyImpact 的 BP -> DA -> PCA 引用闭合。
-- Level0 在 Editor 中 Dirty；冲撞动画主资产、Driving 资产和一个重名/临时 Driving 对象均 Dirty，而前两份磁盘资产已删除。夜间未保存、恢复或重建；Git 只能备份磁盘状态。
-- Level0 静态存在 NavMeshBoundsVolume/RecastNavMesh，但最新相关保存 PIE 日志仍报告 Unable to find RecastNavMesh；明日先处理 Dirty 归属，再做同场景真实追猎者导航证据。
-- PCG 机关/资源分层放置与零 C++ 物理轻受击效果原型仍待用户确认/授权，不得视为已实施。
-- 新玩法建议：先用一条可选 PCG 支路组合一台已验收机关与少量磁力资源，形成可绕行的风险换资源遭遇。
-- Git：origin 精确为内部工蜂；主快照 `07d7cf3852a419147d7e547c7f6ce49d6e8d05b2` 已普通推送并远端核验，报告/错误状态回填以第二个同名快照收口。
+## 2026-08-13 夜间只读审计
 
-## 2026-08-11 磁力投掷物碰撞破碎 P0 验收归档
-
-- 用户否决初版命中 AI 时“停住再自然下落”的表现后，修正版从已推送且干净的 ba630a5 基线实施。
-- 合格 Hit 当帧冻结修正后的继承运动；当前参数为 5000 kg·cm/s、0.6、5000 cm/s、350 cm/s、1.25。
-- DemoEditor 构建、官方属性回读、两个 Blueprint 编译和隔离 PIE 碎片散开/Remove On Break 清理通过；临时 Actor 与 Level0 测试写盘变化已清理。
-- 用户随后在 Level0 验收当前核心投掷命中 AI 与碎片力量感并明确确认通过。
-- Review、DailyPlan 与任务卡已归档；薄墙、角落、多物体竞态保留为回归清单，P1 另立任务。
-
-
-## 2026-08-11 夜间只读审计
-
-- 白天完成 HeavyImpact 阶段验收、预判抛射 Chaos 机关基础机制验收，以及统一轻受击第一版技术交付；现有证据为 Demo 模块构建成功、CharacterImpact 2/2 + HeavyImpact 5/5 和白天短 PIE/官方 MCP 回读，本次夜间未重新构建、测试或运行 PIE。
-- C++ 只读审计覆盖 Source/Demo 120 个文件、31,762 行；未发现需要夜间越权修复的确定性阻断项。
-- 蓝图审计未执行：本次任务未暴露 UE5.8 官方 MCP，本地 UE Editor MCP pong=false；不据 C++ 推测资产状态。
-- 最新保存日志仍有 Unable to find RecastNavMesh 警告；下一步优先在同一正式一局中完成轻受击真实手感、Recast 追逐和 Light/Heavy 交叉验收。
-- 新玩法建议：先把已验收预判抛射机关、磁力物和地刺组合成正式一局中的单个风险岔路遭遇，复用现有系统形成可选择的高风险捷径，不新增框架。
-- Git：origin 已只读预核验为内部工蜂；最终快照与推送结果见本夜报。
-
-> 按日期倒序；只保留完成、验证、决定与遗留，过程细节见任务卡、日报和审计归档。
-
-## 2026-08-10
-
-- 统一轻受击响应第一版完成技术交付：共享 Standing Impact 请求/优先级/去重，来源 Profile 分别映射玩家与追猎者，HeavyImpact 内部保持不变。
-- 当前初值：磁力玩家 None、追猎者 Stop 0.60 秒；地刺玩家 Stop 0.25 秒、追猎者 Slow 0.60 秒且速度倍率 0.45。
-- 空中 Stop 只清 XY 并保留 Z/Falling/重力；AI Slow/Stop 均中断攻击，只有 Stop 取消 PathFollowing；Stop 后立即恢复追击但不提前结束攻击冷却。
-- Demo-only 构建成功，CharacterImpact 2/2 + HeavyImpact 5/5；四个 Blueprint、四份 DataAsset 与运行时碰撞基线经官方 MCP 回读，短 PIE 无相关配置错误。
-- 用户尚需验收真实磁力命中、地刺玩家/AI、空中 Stop、Light/Heavy 交叉和不同帧率；玩家动画等待人工 Replace Skeleton 与 Persona 检查。
-
-- 用户确认当前全部工作区改动保留并授权完整基线 commit/push；基线通过后可在 Level0 测试区手工制作首个 Geometry Collection，C++/Blueprint 运行逻辑仍需另行授权。
-- 磁力投掷物 P0 方案成文：只有正式 `ThrowHeldObject()` 后的第一次 Blocking Hit 才破碎；拉取、持有、普通放下和命中前重新抓取均不破碎，所有碎片经 Remove On Break 清空。
-- 官方 UE MCP 回读 `BP_MagneticProp` 为 20 kg 模拟物理静态网格刚体，使用第三方 `SM_crate4`；Blueprint 与源网格均非 Dirty。UE5.8 引擎接口确认初始速度、显式解簇和 Remove On Break 路径可用。
-- 新增 `DOC/DailyPlan/archive/Done-2026-08-10-磁力投掷物碰撞破碎实施计划.md` 和对应任务卡；本轮未修改 C++/UE 资产、未构建、未运行 PIE，功能实施仍待用户明确授权和完整 Git 基线门禁。
-- 用户否决旧“短时推进、飞行中制导”表现后，壁挂式机关重构为预警期预测移动交点、炮管机械转向、一次质心冲量和发射后全程 Chaos；保留旧类名仅为资产兼容。
-- 默认机关更新为约 1000 cm/s、25 kg、22/45 cm 胶囊、0.55 秒预警、30/18 度机械限角，HeavyImpact 准备关闭；无 Thruster、ProjectileMovement、Actor Tick 或 Powered 控制。
-- Launcher/Projectile Blueprint 以警告视为错误编译保存，DataAsset 与组件树逐项回读；Level0 西端新增南半幅端墙并保留北侧通路，转角 Launcher 朝东正面迎击，出口灯移出默认弹道。
-- UHT、Demo 无链接编译和 Demo-only 正式链接成功，只更新 `UnrealEditor-Demo.dll`，没有编译 UE5.8 引擎；机关资产和 Level0 均非 Dirty。
-- 新增 `DOC/DailyReport/2026-08-10-狭窄走廊预判抛射Chaos机关实施报告.md`。按用户要求未运行 PIE，画面可读性、移动命中、躲避、反弹与薄墙穿透仍待用户验收。
-- 新增 `DOC/DailyReport/2026-08-10-重冲击阶段验收收口.md`；两份 HeavyImpact 任务卡及四份已完成/被取代的 DailyPlan 已归档，旧物理姿势整理稿明确标为禁止恢复。
-- 用户完成 HeavyImpact 最终阶段验收：真实摆锤击飞、提前 Snapshot → Montage 起身、恢复控制/追逐及同机关防夹均可接受；当前效果作为稳定基线，后续细调另记。
-- 实现防夹增量：真实 Chaos 接触保留 0.15 秒后，仅将角色物理网格对 PhysicsBody 改为 Ignore；WorldStatic/WorldDynamic 仍保持原碰撞，恢复完成时统一还原角色基线。
-- 恢复后仅屏蔽同一来源 Actor：用户把玩家最终 DataAsset 调为 0.50 秒，追猎者保持 3.0 秒；保护期内同来源重复请求返回 Busy 并刷新期限，其他机关来源仍可命中。
-- 官方 MCP 最终回读玩家 0.15/0.50、追猎者 0.15/3.0，玩家资产已保存且非 Editor Dirty；HeavyImpact 自动化 5/5、短 PIE 与最终 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过。
-- 用户否决落地后可见的全物理姿势准备/蠕动路线；实现改为正常空间稳定 0.10 秒后保存当前物理姿势，同步启动起身 Montage，并用单一 Alpha 在 0.22 秒内混入原有 DefaultSlot。
-- 删除 PreparingPose、恢复姿势 Sequence Evaluator、准备时间/控制比例、额外计时器和开发期切换开关；没有保留并行旧路线或失效修复代码。
-- 修正墙角搜索前置死锁：最终位置仍要求完整站立 Capsule 无重叠；骨盆正上方无站立空间时，允许最多 60 cm、且骨盆退让路径不穿墙的小范围找位。完全封闭时保持 Downed 并持续重试。
-- 玩家/AI AnimBP 均简化为 HeavyImpactDownedPose(A) + DefaultSlot(B) + HeavyImpactRecoveryBlendAlpha，warnings-as-errors 编译成功；两份 DataAsset 重启回读为 0.10/0.22 秒与 60/20 cm。
-- HeavyImpact 自动化 5/5、短 PIE 初始化与 DemoEditor `-Module=Demo -NoEngineChanges` 构建通过；主效果与防夹随后均由用户现场验收。
-- 用户已授权恢复 `origin`，内部工蜂 baseline `3350b78c7708ca170ecb6641d32e240d57077f34` 已推送并远端核验；本轮最终实现按完整提交收口。
-
-## 2026-08-09
-
-- 上一夜间快照后完成 HeavyImpact 物理姿势准备与起身 Montage 连续交接；另新增壁挂式制导机关稳定性 Review，Review 建议尚未实施。
-- 既有证据为 Demo 模块链接成功与 HeavyImpact 5/5；本次夜间未构建、未跑测试、未启动 PIE。
-- 双 MCP 在线；Level0 打开且 PIE 停止，两份 AnimBP 父类正确并为 UpToDate，Level0、两份 AnimBP、两份 DataAsset/PCA 均非脏，角色 BP → DataAsset → PCA 引用闭合。
-- 当前编辑器世界有 NavMeshBoundsVolume/RecastNavMesh，但最新保存 PIE 日志仍有 Recast 缺失；同时有玩家/追猎者无地面支撑硬超时，均待白天建立复现场景。
-- 下一步优先完成真实命中连续画面、墙角/堵塞解除与恢复追逐验收；随后只选一个已验收机关接入正式一局。
-
-## 2026-08-08
-
-- HeavyImpact 新增物理姿势准备：落地减速后全身刚体继续由 Chaos 模拟，AnimBP 提供从当前物理姿势到起身开头的渐变目标，Physics Control 只施加有限 ParentSpace 角向控制。
-- 玩家/AI AnimBP 均由官方 MCP 接入 Snapshot、Sequence Evaluator、Two Way Blend 与显式门；warnings-as-errors 编译保存成功，两份 DataAsset 新参数回读一致。
-- 实施基线 `df833aa896624d5d3a0436b7cc1d59f520f0871b` 已推送核验；最终 Demo 模块 `-Module=Demo -NoEngineChanges` 构建成功，HeavyImpact 自动化 5/5。
-- 短 PIE 未形成可确认的真实 Chaos 命中；物理收拢、Montage 闪切、墙边/墙角和恢复控制仍由用户画面验收。
-
-## 2026-08-07
-
-- 实现 HeavyImpact 起身恢复桥：Pose Snapshot、正反面判断、安全 Capsule 找位、动态起身 Montage、失败重试与恢复收尾；真实 Chaos 位移来源保持不变。
-- 官方 MCP 装配玩家/AI AnimBP、玩家 AnimClass 和两份 DataAsset；完整链接成功，HeavyImpact 自动化 5/5 通过。
-- 现场定位 A Pose 为 Physics Control 初始化时序问题；当前磁盘修正让 Inactive Profile 完成一次 PrePhysics 应用后再关闭 Tick。
-- 真实日志后续已覆盖玩家/追猎者倒地到恢复；用户画面、墙边/堵塞和正式追逐恢复仍待验收。
-
-## 2026-08-06
-
-- Level0 常驻物理摆锤完成构建、碰撞标定与用户初步手感验收；真实物理碰撞会改变摆锤与磁性物运动。
-- 自动周期冲锤、相机顺序修正、壁挂式一次性制导机关与 HeavyImpact 共享受击原型完成实现和各自既定技术证据；用户手感与完整追逐仍待验收。
-
-## 2026-08-04 至 2026-08-05
-
-- 正式多层 PCG 完成初步验收：跨层宏结构、逐层二维 WFC、三维占用/净空、整栋连通、Start/Pursuer/Exit、动态导航门与结构表现已落盘。
-- Seed 30794 原问题楼梯经用户实测确认追猎者可上；UE5.8 完整构建与 `Demo.PCG 22/22 + Demo.GameFlow 2/2` 通过。
-- 全部楼梯/旋转实走、完整跨层追逐、整局回归和三档各 300 Seed 校准仍未完成。
-
-## 2026-08-01 至 2026-08-03
-
-- 主菜单 Seed/难度 → PCG 关卡 → Population → 玩家/追猎者，以及 Exit/死亡/暂停/结算/重开闭环已实现并通过用户阶段验收。
-- 多层正式路线冻结为“先完整跨层宏结构，再逐层二维 WFC，最后合并整栋通行图”；代表性三层 PIE 与自动化通过，但仍需玩家实走和真实追逐验收。
-
-## 2026-07 月度摘要
-
-- 建立 UE5.8 C++ 优先 Demo、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
-- PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow，并形成跨层宏结构 + 逐层二维 WFC 的正式方向。
-- 追猎者 Timer 状态机、locomotion、Physics Control 局部受击、地刺、磁性抓取和玩家生命基础链路形成；当前受击与多层追逐仍需现版本验收。
-- 第三方 SFCorridors 仅只读筛选；任何删除仍需依赖闭包、精确清单与用户授权。
-
-<!-- written by shiqiqiwang at 2026-08-12 08:33 UTC -->
-
+- 白天完成并提交 PCG 机关/资源分层 Population（用户已验收）、玩家磁力轻受击局部物理技术装配，以及追猎者近战斧击 + 预判跑跳下砸技术交付；音效需求、完整度评估和玩法诊断仍是未接入的文档/方案。
+- 本次夜间未构建、未跑自动化、未启动 PIE、未编译或保存资产。双 UE MCP 在线：Level0 打开、PIE Stopped；Level0、L_Game、BP_Pursuer、追猎者 AnimBP、Population 与轻受击关键资产非 Dirty，两份追猎者 Blueprint 为 UpToDate，关键 CDO/DA 引用和攻击参数回读正确。
+- Level0 静态存在 NavMeshBoundsVolume/RecastNavMesh，但 8 月 12 日保存的多次 PIE 日志仍反复报告 Unable to find RecastNavMesh；明日 P0 是同一正式一局动态 Recast + 真实追猎者追逐证据。
+- 玩家局部轻受击与追猎者跑跳/近战仍待用户移动实测、画面、恢复和 Light→Heavy 验收；只做有限参数 A/B，不继续扩系统。
+- 新玩法建议：用 2–3 个短时驻留电力终端解锁出口，让追猎者压力、磁力物和机关共同参与距离管理；首版复用现有 GameState/Exit/交互，不新增任务框架。
+- Git：origin、快照与普通推送结果待本轮最终回填。
 
 ## 2026-08-12
 
-- 完成轻受击动画与局部物理融合：追猎者 Stop 动画保留，新增可选上半身短时 Physical Animation 与封顶表现冲量。
-- 磁力来源仅对追猎者启用；玩家与地刺首轮关闭；没有修改磁力/破碎/地刺来源 C++、ABP、碰撞路由或 UE5.8 引擎。
-- Heavy 只新增有效请求捕获前清场 Delegate；5 项 Heavy 合同自动化全部通过。
-- Demo 模块构建成功；CharacterImpact 2/2、HeavyImpact 5/5；官方 MCP Blueprint/DataAsset 回读及短 SIE 初始化通过。
-- 遗留：用户验收胸口/左右命中画面、连续命中退出、Light→Heavy 抢占和 Heavy 起身后再 Light。
+- PCG Population 改为机关优先、资源后置：高厅必放摆锤，普通机关按类型权重抽取且操作格互斥，资源独立采样。Demo 模块、Population 8/8、完整 PCG 29/29、资产回读和 L_Game Normal Seed 12345 通过；机关 36/36、资源 13/13，用户验收当前密度/构成。
+- 机关密度收口为 Easy/Normal/Hard 26/28/30 每百格、间距统一 2；权重 5:3:2 / 1:1:1 / 2:3:5。多 Seed 统计降为非阻塞回归。
+- 玩家磁力命中改为 Slow 0.40 秒、倍率 0.55、无动画、上半身局部物理；地刺不改。CharacterImpact 2/2 + HeavyImpact 5/5、官方回读和短 SIE 通过，待玩家胸/左右、恢复与 Light→Heavy 验收。
+- 追猎者新增无 Tick攻击组件：近距斧击 Sweep 18 伤害，中距跑跳离地时一次预判、Landed 160 cm / 30 伤害。完整构建、PredictionAndBallistics 1/1、资产回读与短 PIE 通过，待移动玩家公平性和动画观感验收。
+- 上一轮夜间发现的 Level0/冲撞动画 Dirty 与磁盘删除分叉已由白天提交状态覆盖；本轮官方回读相关资产均非 Dirty。
+- 夜间快照 `07d7cf3852a419147d7e547c7f6ce49d6e8d05b2` 与回填 `c6e867bab1af1ac67c719e4797eb200016fc8783` 已推送内部工蜂。
 
-## 2026-08-12 PCG 机关与资源分层放置
+## 2026-08-10 至 2026-08-11
 
-- 完成一个 Populator 内机关优先、资源后置的分层放置；高厅必放摆锤，普通机关类型先抽且操作格互斥，资源独立采样并随机格内 X/Y。
-- 旧 Population 数量/上限规则已直接替换，无兼容双轨或额外 Manager。
-- Demo 模块链接、Population 8/8、完整 PCG 29/29、官方资产回读和 L_Game Normal Seed 12345 接入均通过；机关 36/36、资源 13/13。
-- 用户连续否决过稀初值，并要求难度主要调整种类而非总量；机关密度改为 Easy/Normal/Hard 26/28/30、间距统一 2，权重为 5:3:2 / 1:1:1 / 2:3:5；最终版本已由用户验收通过，当前配置成为正式基线，多 Seed 统计转为后续回归。
+- HeavyImpact 阶段验收完成：真实 Chaos 位移、有限关节张力、Snapshot 到起身 Montage、同来源防夹与恢复追逐；玩家 0.15/0.50 秒、追猎者 0.15/3.0 秒，HeavyImpact 5/5。
+- 壁挂预判抛射 Chaos 机关基础机制由用户验收，权威参数 900 cm / 18 deg / 50 kg / 8 s；后续完成外观试装和同一 Projectile Actor 的 Loaded 预装生命周期，画面专项仍待验收。
+- 磁力投掷物碰撞破碎 P0 完成用户验收并归档；薄墙、角落、多物体竞态为回归清单，P1 再次投掷碎片需另立任务。
+- 统一 StandingImpact 玩法层与局部物理增量形成；不得恢复全身常驻受控物理、Light/Heavy 大一体化或跨对象磁力租约方案。
 
-<!-- written by shiqiqiwang at 2026-08-12 11:45 UTC -->
+## 2026-08-01 至 2026-08-09 摘要
 
+- 主菜单 Seed/难度 → PCG → Population → 玩家/追猎者，以及 Exit/死亡/暂停/结算/重开闭环已实现并有阶段证据。
+- 多层路线冻结并落地为“跨层宏结构 → 逐层二维 WFC → 合并整栋通行图”；Seed 30794 原问题楼梯经用户确认追猎者可上，完整追逐/全楼梯/三档 300 Seed 仍待验收。
+- 摆锤、冲锤、预判抛射机关、HeavyImpact 起身恢复桥与相机时序已形成；同场景 Recast 运行时缺失一直是未闭环风险。
 
-## 2026-08-12 — 玩家磁力 Slow 局部物理装配
+## 2026-07 月度摘要
 
-- 用户明确要求暂不处理地刺；磁力投掷命中玩家改为 Slow 0.40 秒、速度倍率 0.55、无动画、启用上半身局部物理。
-- 玩家 Tuning 使用 spine_01 模拟根、spine_03 躯干与 upperarm_l/r 左右臂受力 Body；首验驱动、冲量与时间值与当前追猎者局部物理起点一致。
-- 官方 MCP 持久化回读通过；CharacterImpact 2/2、HeavyImpact 5/5，短 SIE 无新增 CharacterImpact/磁力命中警告。
-- 用户仍需实际投掷验收减速、部位反馈、恢复与 Light→Heavy；不扩大到地刺、玩家动画、磁力事务或 Heavy 状态机修改。
+- 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
+- PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow，并确定跨层宏结构 + 逐层二维 WFC 的正式方向。
+- 追猎者 Timer 状态机、locomotion、基础受击、地刺、磁力抓取与玩家生命链路形成；第三方 SFCorridors 只读筛选，删除仍需依赖闭包和用户授权。
 
-<!-- written by shiqiqiwang at 2026-08-12 13:16 UTC -->
-
-
-## 2026-08-12 — 追猎者预判跑跳攻击
-
-- 实现中距离预判跑跳下砸和近距离斧击 Sweep 两段攻击；助跑保留寻路，离地才按玩家速度锁一次落点，CharacterMovement 抛物线移动，Landed 结算并清除落地滑行。
-- 跑跳动画通过现有 RTG_XBot 重定向到追猎者骨骼并创建 DefaultSlot Montage；Root Motion 关闭且锁 Root，未修改 AnimBP 图。
-- 命中使用 ApplyDamage + StandingImpact；跑跳 30 伤害，近战 18 伤害，没有调用 Heavy Impact 协议。
-- DemoEditor 完整构建、PredictionAndBallistics 1/1、资产回读和 Level0 PIE 通过；日志证明跑跳与近战两段命中均贯通。最终移动玩家手感和动画观感待用户验收。
+<!-- compacted by Codex nightly at 2026-08-13 01:08 +08:00 -->
