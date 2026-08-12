@@ -12,6 +12,29 @@
 
 const FName UHeavyImpactAnimInstance::DownedPoseSnapshotName(TEXT("HeavyImpactDownedPose"));
 
+namespace
+{
+	constexpr float ChargeGuardBlendDurationSeconds = 0.15f;
+}
+
+void UHeavyImpactAnimInstance::SetChargeGuardActive(const bool bActive)
+{
+	bChargeGuardActive = bActive;
+}
+
+void UHeavyImpactAnimInstance::NativeUpdateAnimation(const float DeltaSeconds)
+{
+	Super::NativeUpdateAnimation(DeltaSeconds);
+
+	const float TargetAlpha = bChargeGuardActive ? 1.0f : 0.0f;
+	const float BlendSpeed = 1.0f / ChargeGuardBlendDurationSeconds;
+	ChargeGuardBlendAlpha = FMath::FInterpConstantTo(
+		ChargeGuardBlendAlpha,
+		TargetAlpha,
+		FMath::Max(DeltaSeconds, 0.0f),
+		BlendSpeed);
+}
+
 /** 保存最终根重定位后的倒地物理姿势，供 Montage 首帧混合。 */
 bool UHeavyImpactAnimInstance::StoreHeavyImpactDownedPose(FPoseSnapshot&& Pose)
 {

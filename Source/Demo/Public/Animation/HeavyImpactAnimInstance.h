@@ -27,6 +27,9 @@ class DEMO_API UHeavyImpactAnimInstance final : public UAnimInstance
 public:
 	static const FName DownedPoseSnapshotName;
 
+	/** Set the upper-body charge guard target; the AnimInstance smooths the visible weight. */
+	void SetChargeGuardActive(bool bActive);
+
 	/** Store an already root-relocated physical pose for the Pose Snapshot AnimGraph node. */
 	bool StoreHeavyImpactDownedPose(FPoseSnapshot&& Pose);
 
@@ -39,4 +42,15 @@ public:
 	/** Zero shows the stored physical pose; one shows the existing DefaultSlot output. */
 	UPROPERTY(Transient, BlueprintReadOnly, Category = "Heavy Impact")
 	float HeavyImpactRecoveryBlendAlpha = 1.0f;
+
+	/** Zero keeps locomotion unchanged; one applies the pursuer's upper-body guard pose. */
+	UPROPERTY(Transient, BlueprintReadOnly, Category = "Pursuer|Charge")
+	float ChargeGuardBlendAlpha = 0.0f;
+
+protected:
+	virtual void NativeUpdateAnimation(float DeltaSeconds) override;
+
+private:
+	/** Animation-side target only; gameplay charge ownership remains outside the AnimInstance. */
+	bool bChargeGuardActive = false;
 };

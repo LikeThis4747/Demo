@@ -67,6 +67,10 @@ public:
 	/** 只停止本角色明确记录的当前攻击 Montage，不影响 Light 或 Heavy 起身 Montage。 */
 	void InterruptActiveAttackMontage();
 
+	/** Toggle only the upper-body charge presentation; the future charge executor owns gameplay state. */
+	UFUNCTION(BlueprintCallable, Category = "Pursuer|Charge")
+	void SetChargeAnimationActive(bool bActive);
+
 	/** 是否正在播放受击反应；AI 在受击期间应停止追击与攻击。 */
 	bool IsReacting() const;
 

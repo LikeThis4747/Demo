@@ -9,6 +9,7 @@
 #include "Characters/PursuerCharacter.h"
 
 #include "AI/PursuerAIController.h"
+#include "Animation/HeavyImpactAnimInstance.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
@@ -204,6 +205,15 @@ void APursuerCharacter::InterruptActiveAttackMontage()
 		{
 			AnimInstance->Montage_Stop(0.05f, MontageToStop);
 		}
+	}
+}
+
+void APursuerCharacter::SetChargeAnimationActive(const bool bActive)
+{
+	if (UHeavyImpactAnimInstance* AnimInstance =
+		Cast<UHeavyImpactAnimInstance>(GetMesh()->GetAnimInstance()))
+	{
+		AnimInstance->SetChargeGuardActive(bActive);
 	}
 }
 
