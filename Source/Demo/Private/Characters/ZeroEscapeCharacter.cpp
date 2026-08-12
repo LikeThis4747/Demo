@@ -27,6 +27,7 @@
 #include "InputMappingContext.h"
 #include "PhysicsControlComponent.h"
 #include "Physics/DemoCollisionChannels.h"
+#include "PhysicsEngine/PhysicalAnimationComponent.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeInput, Log, All);
@@ -67,6 +68,9 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	PhysicsControl->SetAutoActivate(false);
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
 	CharacterImpactResponse = CreateDefaultSubobject<UCharacterImpactResponseComponent>(TEXT("CharacterImpactResponse"));
+	LightPhysicalAnimation = CreateDefaultSubobject<UPhysicalAnimationComponent>(TEXT("LightPhysicalAnimation"));
+	LightPhysicalAnimation->SetAutoActivate(false);
+	LightPhysicalAnimation->PrimaryComponentTick.bStartWithTickEnabled = false;
 
 	// HeavyImpact 先在 PostPhysics 更新角色根节点，弹簧臂再读取同帧的最终位置。
 	CameraBoom->AddTickPrerequisiteComponent(HeavyImpactResponse);
@@ -149,6 +153,7 @@ void AZeroEscapeCharacter::PostInitializeComponents()
 			this,
 			GetMesh(),
 			GetCharacterMovement(),
+			LightPhysicalAnimation,
 			EImpactReceiverCategory::Player,
 			CharacterImpactTuningData,
 			HeavyImpactResponse);

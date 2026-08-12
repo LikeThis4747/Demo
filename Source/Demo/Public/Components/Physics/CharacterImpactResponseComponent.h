@@ -22,8 +22,10 @@ class UAnimSequenceBase;
 class UCharacterImpactTuningData;
 class UCharacterMovementComponent;
 class UHeavyImpactResponseComponent;
+class UPhysicalAnimationComponent;
 class USkeletalMeshComponent;
 enum class EHeavyImpactState : uint8;
+struct FHeavyImpactPreparationRequest;
 
 UCLASS(ClassGroup = (Physics))
 class DEMO_API UCharacterImpactResponseComponent final : public UActorComponent
@@ -38,6 +40,7 @@ public:
 		ACharacter* InCharacter,
 		USkeletalMeshComponent* InMesh,
 		UCharacterMovementComponent* InMovement,
+		UPhysicalAnimationComponent* InPhysicalAnimation,
 		EImpactReceiverCategory InReceiverCategory,
 		UCharacterImpactTuningData* InTuning,
 		UHeavyImpactResponseComponent* InHeavyImpact);
@@ -52,8 +55,13 @@ public:
 
 protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	virtual void TickComponent(
+		float DeltaTime,
+		ELevelTick TickType,
+		FActorComponentTickFunction* ThisTickFunction) override;
 
 private:
+	void HandleHeavyPreContactCaptureRequested(const FHeavyImpactPreparationRequest& Request);
 	void HandleHeavyImpactStateChanged(EHeavyImpactState Previous, EHeavyImpactState Current);
 	void FinishActiveImpact();
 	bool ApplySlowMovement(float SpeedMultiplier, float Strength, float BaselineSpeed);
@@ -67,6 +75,13 @@ private:
 	void PlayReactionAnimation(const FVector& WorldDirection);
 	void StopReactionAnimation(bool bImmediate);
 	void HandleReactionMontageEnded(UAnimMontage* Montage, bool bInterrupted);
+	bool ResolvePhysicalHit(
+		const FStandingImpactRequest& Request,
+		FName& OutImpulseBody,
+		FVector& OutWorldPoint) const;
+	void TryApplyPhysicalReaction(const FStandingImpactRequest& Request);
+	void StopPhysicalReaction();
+	void ReleasePhysicalAnimationConfiguration();
 
 	UPROPERTY(Transient)
 	TObjectPtr<ACharacter> Character = nullptr;
@@ -76,6 +91,9 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<UCharacterMovementComponent> Movement = nullptr;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UPhysicalAnimationComponent> PhysicalAnimation = nullptr;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UCharacterImpactTuningData> Tuning = nullptr;
@@ -100,5 +118,10 @@ private:
 	float LastWrittenMaxWalkSpeed = 0.0f;
 	float LightWindowStartTimeSeconds = 0.0f;
 	float ActiveEndTimeSeconds = 0.0f;
+	float PhysicalSessionStartTimeSeconds = 0.0f;
+	float LastPhysicalImpactTimeSeconds = 0.0f;
+	uint64 PhysicalConfigurationFrame = 0;
 	bool bConfigurationReady = false;
+	bool bPhysicalReactionReady = false;
+	bool bPhysicalReactionActive = false;
 };

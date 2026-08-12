@@ -489,6 +489,9 @@ EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 		return EHeavyImpactPrepareResult::Invalid;
 	}
 
+	// 让局部物理表现同步归还 Body；不得放到角色转发层，否则无效 Heavy 也会产生副作用。
+	OnPreContactCaptureRequested.Broadcast(Request);
+
 	if (!CapturePreContactState(FailureReason)
 		|| !EnterPrepared(Request, AllowedMaximumSeconds, FailureReason))
 	{

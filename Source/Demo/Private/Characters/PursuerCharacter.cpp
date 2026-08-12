@@ -21,6 +21,7 @@
 #include "GameFramework/CharacterMovementComponent.h"
 #include "PhysicsControlComponent.h"
 #include "Physics/DemoCollisionChannels.h"
+#include "PhysicsEngine/PhysicalAnimationComponent.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPursuer, Log, All);
 
@@ -33,6 +34,9 @@ APursuerCharacter::APursuerCharacter()
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
 	CharacterImpactResponse = CreateDefaultSubobject<UCharacterImpactResponseComponent>(TEXT("CharacterImpactResponse"));
+	LightPhysicalAnimation = CreateDefaultSubobject<UPhysicalAnimationComponent>(TEXT("LightPhysicalAnimation"));
+	LightPhysicalAnimation->SetAutoActivate(false);
+	LightPhysicalAnimation->PrimaryComponentTick.bStartWithTickEnabled = false;
 
 	AIControllerClass = APursuerAIController::StaticClass();
 	AutoPossessAI = EAutoPossessAI::PlacedInWorldOrSpawned;
@@ -138,6 +142,7 @@ void APursuerCharacter::PostInitializeComponents()
 			this,
 			GetMesh(),
 			GetCharacterMovement(),
+			LightPhysicalAnimation,
 			EImpactReceiverCategory::Pursuer,
 			CharacterImpactTuningData,
 			HeavyImpactResponse);

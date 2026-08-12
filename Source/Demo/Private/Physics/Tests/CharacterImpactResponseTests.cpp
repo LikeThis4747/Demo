@@ -131,6 +131,10 @@ namespace ZeroEscape::Physics::Tests
 		TestTrue(TEXT("The canonical None reaction must be valid"),
 			Reaction.IsConfigured(TEXT("Reaction"), Error));
 		TestTrue(TEXT("A valid None reaction must not retain an error"), Error.IsEmpty());
+		Reaction.bApplyPhysicalReaction = true;
+		TestFalse(TEXT("None may not request a hidden physical presentation"),
+			Reaction.IsConfigured(TEXT("Reaction"), Error));
+		Reaction.bApplyPhysicalReaction = false;
 
 		Reaction.DurationSeconds = 0.1f;
 		TestFalse(TEXT("None may not carry a gameplay duration"),
@@ -141,6 +145,7 @@ namespace ZeroEscape::Physics::Tests
 		Reaction.DurationSeconds = 0.5f;
 		Reaction.SpeedMultiplier = 0.5f;
 		Reaction.bPlayReactionAnimation = false;
+		Reaction.bApplyPhysicalReaction = true;
 		TestTrue(TEXT("Slow requires a duration and a strict fractional speed multiplier"),
 			Reaction.IsConfigured(TEXT("Reaction"), Error));
 		Reaction.bPlayReactionAnimation = true;
@@ -151,6 +156,7 @@ namespace ZeroEscape::Physics::Tests
 		Reaction.DurationSeconds = 0.25f;
 		Reaction.SpeedMultiplier = 0.0f;
 		Reaction.bPlayReactionAnimation = true;
+		Reaction.bApplyPhysicalReaction = true;
 		TestTrue(TEXT("Stop may request the optional reaction animation"),
 			Reaction.IsConfigured(TEXT("Reaction"), Error));
 		Reaction.SpeedMultiplier = 0.1f;

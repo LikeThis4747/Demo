@@ -103,3 +103,14 @@
 - PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow，并形成跨层宏结构 + 逐层二维 WFC 的正式方向。
 - 追猎者 Timer 状态机、locomotion、Physics Control 局部受击、地刺、磁性抓取和玩家生命基础链路形成；当前受击与多层追逐仍需现版本验收。
 - 第三方 SFCorridors 仅只读筛选；任何删除仍需依赖闭包、精确清单与用户授权。
+
+<!-- written by shiqiqiwang at 2026-08-12 08:33 UTC -->
+
+
+## 2026-08-12
+
+- 完成轻受击动画与局部物理融合：追猎者 Stop 动画保留，新增可选上半身短时 Physical Animation 与封顶表现冲量。
+- 磁力来源仅对追猎者启用；玩家与地刺首轮关闭；没有修改磁力/破碎/地刺来源 C++、ABP、碰撞路由或 UE5.8 引擎。
+- Heavy 只新增有效请求捕获前清场 Delegate；5 项 Heavy 合同自动化全部通过。
+- Demo 模块构建成功；CharacterImpact 2/2、HeavyImpact 5/5；官方 MCP Blueprint/DataAsset 回读及短 SIE 初始化通过。
+- 遗留：用户验收胸口/左右命中画面、连续命中退出、Light→Heavy 抢占和 Heavy 起身后再 Light。

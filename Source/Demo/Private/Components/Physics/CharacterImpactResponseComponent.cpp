@@ -17,6 +17,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "PhysicsEngine/PhysicalAnimationComponent.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCharacterImpact, Log, All);
@@ -39,7 +40,9 @@ namespace
 
 UCharacterImpactResponseComponent::UCharacterImpactResponseComponent()
 {
-	PrimaryComponentTick.bCanEverTick = false;
+	PrimaryComponentTick.bCanEverTick = true;
+	PrimaryComponentTick.bStartWithTickEnabled = false;
+	PrimaryComponentTick.TickGroup = TG_PrePhysics;
 	RecentImpactIds.Reserve(Demo::CharacterImpact::RecentImpactHistorySize);
 }
 
@@ -47,23 +50,30 @@ void UCharacterImpactResponseComponent::Configure(
 	ACharacter* InCharacter,
 	USkeletalMeshComponent* InMesh,
 	UCharacterMovementComponent* InMovement,
+	UPhysicalAnimationComponent* InPhysicalAnimation,
 	const EImpactReceiverCategory InReceiverCategory,
 	UCharacterImpactTuningData* InTuning,
 	UHeavyImpactResponseComponent* InHeavyImpact)
 {
+	StopPhysicalReaction();
+	ReleasePhysicalAnimationConfiguration();
 	ClearActiveImpact(true, true);
 	if (IsValid(HeavyImpact))
 	{
+		HeavyImpact->OnPreContactCaptureRequested.RemoveAll(this);
 		HeavyImpact->OnStateChanged.RemoveAll(this);
 	}
 
 	Character = InCharacter;
 	Mesh = InMesh;
 	Movement = InMovement;
+	PhysicalAnimation = InPhysicalAnimation;
 	ReceiverCategory = InReceiverCategory;
 	Tuning = InTuning;
 	HeavyImpact = InHeavyImpact;
 	bConfigurationReady = false;
+	bPhysicalReactionReady = false;
+	PhysicalConfigurationFrame = 0;
 
 	FString ConfigurationError;
 	if (!IsValid(Character)
@@ -86,6 +96,39 @@ void UCharacterImpactResponseComponent::Configure(
 		return;
 	}
 
+	if (Tuning->bEnablePhysicalReaction)
+	{
+		FString PhysicalError;
+		if (!IsValid(PhysicalAnimation))
+		{
+			PhysicalError = TEXT("the character has no PhysicalAnimation component");
+		}
+		else if (Tuning->IsPhysicalReactionConfigured(Mesh, PhysicalError))
+		{
+			PhysicalAnimation->SetSkeletalMeshComponent(Mesh);
+			PhysicalAnimation->ApplyPhysicalAnimationSettingsBelow(
+				Tuning->UpperBodyRootBone,
+				Tuning->PhysicalAnimationSettings,
+				true);
+			PhysicalAnimation->SetStrengthMultiplyer(0.0f);
+			PhysicalAnimation->Activate(true);
+			PhysicalAnimation->SetComponentTickEnabled(true);
+			PhysicalConfigurationFrame = GFrameCounter;
+			bPhysicalReactionReady = true;
+		}
+
+		if (!bPhysicalReactionReady)
+		{
+			UE_LOG(LogCharacterImpact, Warning,
+				TEXT("%s Light physical presentation disabled: %s"),
+				*GetNameSafe(GetOwner()),
+				PhysicalError.IsEmpty() ? TEXT("invalid physical configuration") : *PhysicalError);
+			ReleasePhysicalAnimationConfiguration();
+		}
+	}
+
+	HeavyImpact->OnPreContactCaptureRequested.AddUObject(
+		this, &UCharacterImpactResponseComponent::HandleHeavyPreContactCaptureRequested);
 	HeavyImpact->OnStateChanged.AddUObject(
 		this, &UCharacterImpactResponseComponent::HandleHeavyImpactStateChanged);
 	bConfigurationReady = true;
@@ -123,6 +166,10 @@ EStandingImpactSubmitResult UCharacterImpactResponseComponent::SubmitImpact(
 	{
 		RecordRecentImpactId(Request.ImpactId);
 		return EStandingImpactSubmitResult::Ignored;
+	}
+	if (Spec.bApplyPhysicalReaction)
+	{
+		TryApplyPhysicalReaction(Request);
 	}
 
 	const float Strength = FMath::Clamp(Request.NormalizedStrength, 0.0f, 1.0f);
@@ -203,12 +250,64 @@ EStandingImpactSubmitResult UCharacterImpactResponseComponent::SubmitImpact(
 
 void UCharacterImpactResponseComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	StopPhysicalReaction();
 	ClearActiveImpact(true, true);
 	if (IsValid(HeavyImpact))
 	{
+		HeavyImpact->OnPreContactCaptureRequested.RemoveAll(this);
 		HeavyImpact->OnStateChanged.RemoveAll(this);
 	}
+	ReleasePhysicalAnimationConfiguration();
 	Super::EndPlay(EndPlayReason);
+}
+
+void UCharacterImpactResponseComponent::TickComponent(
+	const float DeltaTime,
+	const ELevelTick TickType,
+	FActorComponentTickFunction* ThisTickFunction)
+{
+	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
+
+	if (!bPhysicalReactionActive
+		|| !IsValid(Mesh)
+		|| !IsValid(Tuning)
+		|| !IsValid(GetWorld()))
+	{
+		StopPhysicalReaction();
+		return;
+	}
+
+	const float Now = GetWorld()->GetTimeSeconds();
+	const float NormalBlendStart =
+		LastPhysicalImpactTimeSeconds + Tuning->PhysicalHoldSeconds;
+	const float ForcedBlendStart =
+		PhysicalSessionStartTimeSeconds + Tuning->MaxContinuousPhysicalSeconds;
+	const float BlendStart = FMath::Min(NormalBlendStart, ForcedBlendStart);
+	if (Now < BlendStart)
+	{
+		return;
+	}
+
+	const float Alpha = 1.0f - FMath::Clamp(
+		(Now - BlendStart) / Tuning->PhysicalBlendOutSeconds,
+		0.0f,
+		1.0f);
+	Mesh->SetAllBodiesBelowPhysicsBlendWeight(
+		Tuning->UpperBodyRootBone,
+		Alpha,
+		false,
+		true);
+
+	if (Alpha <= UE_KINDA_SMALL_NUMBER)
+	{
+		StopPhysicalReaction();
+	}
+}
+
+void UCharacterImpactResponseComponent::HandleHeavyPreContactCaptureRequested(
+	const FHeavyImpactPreparationRequest& /*Request*/)
+{
+	StopPhysicalReaction();
 }
 
 void UCharacterImpactResponseComponent::HandleHeavyImpactStateChanged(
@@ -217,8 +316,168 @@ void UCharacterImpactResponseComponent::HandleHeavyImpactStateChanged(
 {
 	if (Current == EHeavyImpactState::Prepared)
 	{
+		StopPhysicalReaction();
 		ClearActiveImpact(true, true);
 	}
+}
+
+bool UCharacterImpactResponseComponent::ResolvePhysicalHit(
+	const FStandingImpactRequest& Request,
+	FName& OutImpulseBody,
+	FVector& OutWorldPoint) const
+{
+	OutImpulseBody = NAME_None;
+	OutWorldPoint = FVector::ZeroVector;
+	if (!IsValid(Mesh) || !IsValid(Tuning))
+	{
+		return false;
+	}
+
+	const FName ClosestBone = Mesh->FindClosestBone(
+		Request.ImpactPoint,
+		nullptr,
+		0.0f,
+		true);
+	if (ClosestBone.IsNone())
+	{
+		return false;
+	}
+
+	const auto IsBoneOrChild = [this, ClosestBone](const FName ParentBone)
+	{
+		return ClosestBone == ParentBone || Mesh->BoneIsChildOf(ClosestBone, ParentBone);
+	};
+	if (IsBoneOrChild(Tuning->LeftArmImpulseBone))
+	{
+		OutImpulseBody = Tuning->LeftArmImpulseBone;
+	}
+	else if (IsBoneOrChild(Tuning->RightArmImpulseBone))
+	{
+		OutImpulseBody = Tuning->RightArmImpulseBone;
+	}
+	else if (IsBoneOrChild(Tuning->UpperBodyRootBone))
+	{
+		OutImpulseBody = Tuning->TorsoImpulseBone;
+	}
+	else
+	{
+		return false;
+	}
+
+	OutWorldPoint = Mesh->GetBoneLocation(OutImpulseBody);
+	return !OutWorldPoint.ContainsNaN();
+}
+
+void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
+	const FStandingImpactRequest& Request)
+{
+	UWorld* World = GetWorld();
+	if (!bPhysicalReactionReady
+		|| GFrameCounter <= PhysicalConfigurationFrame
+		|| !IsValid(World)
+		|| !IsValid(Mesh)
+		|| !IsValid(Movement)
+		|| !IsValid(PhysicalAnimation)
+		|| !IsValid(Tuning)
+		|| !IsValid(HeavyImpact)
+		|| HeavyImpact->IsBusy()
+		|| (!Movement->IsMovingOnGround() && !Movement->IsFalling()))
+	{
+		return;
+	}
+
+	const FVector Direction = Request.WorldDirection.GetSafeNormal();
+	const float Magnitude = Tuning->PhysicalImpulseAtFullStrength
+		* FMath::Clamp(Request.NormalizedStrength, 0.0f, 1.0f);
+	if (Direction.IsNearlyZero() || !FMath::IsFinite(Magnitude) || Magnitude <= 0.0f)
+	{
+		return;
+	}
+
+	const float Now = World->GetTimeSeconds();
+	if (bPhysicalReactionActive
+		&& Now - PhysicalSessionStartTimeSeconds >= Tuning->MaxContinuousPhysicalSeconds)
+	{
+		return;
+	}
+
+	FName ImpulseBody = NAME_None;
+	FVector AppliedPoint = FVector::ZeroVector;
+	if (!ResolvePhysicalHit(Request, ImpulseBody, AppliedPoint))
+	{
+		return;
+	}
+
+	if (!bPhysicalReactionActive)
+	{
+		PhysicalSessionStartTimeSeconds = Now;
+		PhysicalAnimation->SetStrengthMultiplyer(1.0f);
+		Mesh->SetAllBodiesBelowSimulatePhysics(Tuning->UpperBodyRootBone, true, true);
+		Mesh->SetAllBodiesBelowPhysicsBlendWeight(
+			Tuning->UpperBodyRootBone,
+			1.0f,
+			false,
+			true);
+		bPhysicalReactionActive = true;
+		SetComponentTickEnabled(true);
+	}
+	else
+	{
+		Mesh->SetAllBodiesBelowPhysicsBlendWeight(
+			Tuning->UpperBodyRootBone,
+			1.0f,
+			false,
+			true);
+	}
+
+	LastPhysicalImpactTimeSeconds = Now;
+	Mesh->AddImpulseAtLocation(Direction * Magnitude, AppliedPoint, ImpulseBody);
+}
+
+void UCharacterImpactResponseComponent::StopPhysicalReaction()
+{
+	if (IsValid(PhysicalAnimation))
+	{
+		PhysicalAnimation->SetStrengthMultiplyer(0.0f);
+	}
+
+	// Prepared 状态回调会再次调用本函数；只有 Light 真正拥有模拟时才可改 Body，
+	// 否则会把 Heavy 刚启用的全身模拟错误切回 Kinematic。
+	if (bPhysicalReactionActive
+		&& IsValid(Mesh)
+		&& IsValid(Tuning)
+		&& !Tuning->UpperBodyRootBone.IsNone())
+	{
+		Mesh->SetAllBodiesBelowPhysicsBlendWeight(
+			Tuning->UpperBodyRootBone,
+			0.0f,
+			false,
+			true);
+		Mesh->SetAllBodiesBelowSimulatePhysics(
+			Tuning->UpperBodyRootBone,
+			false,
+			true);
+	}
+
+	PhysicalSessionStartTimeSeconds = 0.0f;
+	LastPhysicalImpactTimeSeconds = 0.0f;
+	bPhysicalReactionActive = false;
+	SetComponentTickEnabled(false);
+}
+
+void UCharacterImpactResponseComponent::ReleasePhysicalAnimationConfiguration()
+{
+	bPhysicalReactionReady = false;
+	PhysicalConfigurationFrame = 0;
+	if (!IsValid(PhysicalAnimation))
+	{
+		return;
+	}
+
+	PhysicalAnimation->SetStrengthMultiplyer(0.0f);
+	PhysicalAnimation->SetSkeletalMeshComponent(nullptr);
+	PhysicalAnimation->SetComponentTickEnabled(false);
+	PhysicalAnimation->Deactivate();
 }
 
 void UCharacterImpactResponseComponent::FinishActiveImpact()

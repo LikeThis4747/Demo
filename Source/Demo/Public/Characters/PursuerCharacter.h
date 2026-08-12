@@ -22,6 +22,7 @@ class UCharacterImpactTuningData;
 class UHeavyImpactResponseComponent;
 class UHeavyImpactTuningData;
 class UPursuerConfig;
+class UPhysicalAnimationComponent;
 class UPhysicsControlComponent;
 class UPhysicsControlHitResponseComponent;
 class UPhysicsControlHitTuningData;
@@ -100,6 +101,10 @@ private:
 	/** 追猎者站立轻受击、速度恢复与 Heavy 抢占的运行时 Owner。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCharacterImpactResponseComponent> CharacterImpactResponse;
+
+	/** UE 官方局部动画驱动物理组件；只由 CharacterImpactResponse 配置和调节强度。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UPhysicalAnimationComponent> LightPhysicalAnimation;
 
 	/** 追猎者独立的重冲击 PCA 与判稳参数；必须在 BP_Pursuer 类默认值中指定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "追猎者|重冲击", meta = (AllowPrivateAccess = "true"))

@@ -1,30 +1,23 @@
 # Current Task
 
-## 夜间交接状态（2026-08-12）
+## 轻受击动画与局部物理融合（2026-08-12）
 
-当前不是功能实施阶段。先处理资产状态分叉与可玩闭环证据，再决定进入哪项方案。
+- 用户已授权并确认当前实现方向。
+- 功能代码、追猎者与磁力来源 DataAsset 装配已完成。
+- Demo 模块构建、CharacterImpact 2/2、HeavyImpact 5/5、官方 MCP 资产回读和短 SIE 初始化通过。
+- 当前仍是技术交付，不是效果验收；任务保持 active。
 
-## 必须先处理
+## 当前权威边界
 
-- Level0 在 Editor 中 Dirty。
-- `AS_Pursuer_ChargeRun_Work`、其 Driving 资产和一个重名/临时 Driving 对象均 Dirty；前两份磁盘资产已删除。
-- 夜间未保存、恢复或重建。用户必须白天明确这些 Editor 内容保存还是放弃；Git 快照只覆盖磁盘状态。
-- Level0 静态存在 NavMeshBoundsVolume 与 RecastNavMesh，但最新相关保存 PIE 日志仍报告运行时找不到 Recast；需要同场景真实追猎者追逐验证。
+- 保留 StandingImpact 的 None/Slow/Stop、速度效果、攻击打断和 Stop 方向动画。
+- 可选物理层使用 UPhysicalAnimationComponent：追猎者上半身短时模拟、封顶表现冲量、Hold/Blend Out；玩家和地刺首轮关闭。
+- Heavy 只新增校验成功后、捕获前清场 Delegate；Heavy 状态机、PCA、击飞、倒地、起身与误预测恢复不变。
+- 不改磁力/破碎/地刺来源 C++、碰撞路由、ABP、Level0、Config 或 UE5.8 引擎。
+- 当前 Mesh 为 QueryOnly，因此该层是局部骨骼物理表现，不宣称第一次接触中的完整双向动量交换。
 
-## 已有技术证据
+## 下一步
 
-- 真实弹体预装机关已完成 Demo 模块链接和两台 Launcher 短 PIE：同一个 Projectile 依次记录 loaded、started、released loaded projectile。
-- 关键追猎者/机关 Blueprint 为 UpToDate；机关与 HeavyImpact 的 BP -> DA -> PCA 引用闭合。
-- 以上不替代用户对机关画面/机械感的验收。
-
-## 仍待确认的方案
-
-- PCG 机关与物理资源分层 Population：修订讨论稿已形成，未获实现授权；确认后仍需先展示代码预览。
-- 物理轻受击：只允许零 C++ 的独立测试 PCA + Actor Blueprint + 测试关卡；不改生产 Heavy、磁力、玩家、追猎者或 Level0，实施前仍需完整 Git 基线和用户明确授权。
-
-## 建议顺序
-
-1. 处理 Dirty/删除状态归属。
-2. 建立同场景 Recast 真实追逐证据。
-3. 完成预装机关用户画面验收。
-4. 用户选择后再推进 PCG Population 方案或隔离物理轻受击效果原型。
+1. 用户用磁力物验收胸口、左侧、右侧命中画面。
+2. 验证连续命中后的退出与无永久模拟。
+3. 验证 Light 活动时 Heavy 抢占，以及 Heavy 起身后再次 Light。
+4. 最多做有限 A/B；若仍不可接受，停止扩写来源特判或共享身体系统并回到方案评审。

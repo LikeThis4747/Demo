@@ -24,10 +24,11 @@ bool FStandingImpactReactionSpec::IsConfigured(
 	case EStandingImpactResult::None:
 		if (!FMath::IsNearlyZero(DurationSeconds)
 			|| !FMath::IsNearlyEqual(SpeedMultiplier, 1.0f)
-			|| bPlayReactionAnimation)
+			|| bPlayReactionAnimation
+			|| bApplyPhysicalReaction)
 		{
 			OutError = FString::Printf(
-				TEXT("%s None requires DurationSeconds=0, SpeedMultiplier=1 and no animation."),
+				TEXT("%s None requires DurationSeconds=0, SpeedMultiplier=1, no animation and no physical reaction."),
 				*Prefix);
 			return false;
 		}

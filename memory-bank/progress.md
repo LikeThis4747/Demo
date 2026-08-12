@@ -130,3 +130,14 @@
 - 第一轮新增 C++ 为 0，只创建独立测试 Physics Control Asset、普通 Actor Blueprint 测试目标和独立关卡；用户可用任意现有真实模拟物体直接撞击。
 - 目标只验证九个追猎者上半身刚体受动画约束时的真实双向碰撞、部位相关让位、站立稳定与自然回稳；生产 Heavy、磁力、玩家、追猎者和 Level0 全部冻结。
 - 画面通过前不抽共享组件、不预留来源接口；最多三组参数仍无明显改善即止损。
+
+<!-- written by shiqiqiwang at 2026-08-12 08:33 UTC -->
+
+
+## 2026-08-12 轻受击动画与局部物理融合
+
+- 已实现 StandingImpact 可选上半身局部 Physical Animation 表现，并保留 None/Slow/Stop、Stop 方向动画、AI 攻击打断和移动规则。
+- 追猎者与磁力来源首轮装配完成；玩家与地刺局部物理保持关闭。
+- Heavy 仅新增校验后、捕获前清场 Delegate，既有状态机/PCA/击飞/倒地/起身未改。
+- Demo 模块构建、CharacterImpact 2/2、HeavyImpact 5/5、官方 MCP 回读和短 SIE 通过。
+- 状态：技术交付完成，用户 PIE 画面与交叉行为验收待办。

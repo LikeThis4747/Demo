@@ -44,6 +44,11 @@ DECLARE_MULTICAST_DELEGATE_OneParam(
 	FOnHeavyImpactCommitted,
 	const FHeavyImpactPreparationRequest&);
 
+/** 请求已通过 Heavy 校验、即将捕获接触前身体状态；同步订阅者必须立即释放局部身体写入。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(
+	FOnHeavyImpactPreContactCaptureRequested,
+	const FHeavyImpactPreparationRequest&);
+
 /** 单个 Physics Asset Body 在进入 Prepared 前的可恢复属性。 */
 struct FHeavyImpactBodySnapshot
 {
@@ -158,6 +163,9 @@ public:
 
 	/** 真实接触提交通知；玩家用它释放磁力物体。 */
 	FOnHeavyImpactCommitted OnImpactCommitted;
+
+	/** 仅在有效 Heavy 请求捕获身体前广播；Busy、Duplicate 和 Invalid 请求不会触发。 */
+	FOnHeavyImpactPreContactCaptureRequested OnPreContactCaptureRequested;
 
 protected:
 	/** 验证配置并提前创建本组件独占的 PCA 运行时记录。 */

@@ -7,6 +7,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Engine/SkeletalMesh.h"
 #include "Animation/Skeleton.h"
+#include "PhysicsEngine/PhysicsAsset.h"
 
 bool UCharacterImpactTuningData::IsConfigured(
 	const USkeletalMeshComponent* Mesh,
@@ -58,4 +59,82 @@ bool UCharacterImpactTuningData::IsConfigured(
 	return ValidateAnimation(TEXT("FrontReaction"), FrontReaction)
 		&& ValidateAnimation(TEXT("LeftReaction"), LeftReaction)
 		&& ValidateAnimation(TEXT("RightReaction"), RightReaction);
+}
+
+bool UCharacterImpactTuningData::IsPhysicalReactionConfigured(
+	const USkeletalMeshComponent* Mesh,
+	FString& OutError) const
+{
+	OutError.Reset();
+	if (!bEnablePhysicalReaction)
+	{
+		return true;
+	}
+
+	const UPhysicsAsset* PhysicsAsset = IsValid(Mesh) ? Mesh->GetPhysicsAsset() : nullptr;
+	if (!IsValid(PhysicsAsset))
+	{
+		OutError = TEXT("Physical presentation requires a valid PhysicsAsset.");
+		return false;
+	}
+
+	const FName RequiredBodies[] =
+	{
+		UpperBodyRootBone,
+		TorsoImpulseBone,
+		LeftArmImpulseBone,
+		RightArmImpulseBone
+	};
+	for (const FName BodyName : RequiredBodies)
+	{
+		if (BodyName.IsNone() || PhysicsAsset->FindBodyIndex(BodyName) == INDEX_NONE)
+		{
+			OutError = FString::Printf(
+				TEXT("Physical presentation body '%s' is missing."),
+				*BodyName.ToString());
+			return false;
+		}
+	}
+
+	const auto IsRootOrChild = [Mesh, this](const FName BoneName)
+	{
+		return BoneName == UpperBodyRootBone
+			|| Mesh->BoneIsChildOf(BoneName, UpperBodyRootBone);
+	};
+	if (!IsRootOrChild(TorsoImpulseBone)
+		|| !IsRootOrChild(LeftArmImpulseBone)
+		|| !IsRootOrChild(RightArmImpulseBone))
+	{
+		OutError = TEXT("All physical impulse bodies must belong to UpperBodyRootBone.");
+		return false;
+	}
+
+	const FPhysicalAnimationData& Settings = PhysicalAnimationSettings;
+	if (!Settings.bIsLocalSimulation
+		|| !FMath::IsFinite(Settings.OrientationStrength)
+		|| Settings.OrientationStrength <= 0.0f
+		|| !FMath::IsFinite(Settings.AngularVelocityStrength)
+		|| Settings.AngularVelocityStrength < 0.0f
+		|| !FMath::IsFinite(Settings.PositionStrength)
+		|| !FMath::IsFinite(Settings.VelocityStrength)
+		|| !FMath::IsFinite(Settings.MaxLinearForce)
+		|| !FMath::IsFinite(Settings.MaxAngularForce)
+		|| Settings.MaxAngularForce <= 0.0f
+		|| !FMath::IsFinite(PhysicalImpulseAtFullStrength)
+		|| PhysicalImpulseAtFullStrength <= 0.0f
+		|| !FMath::IsFinite(PhysicalHoldSeconds)
+		|| PhysicalHoldSeconds < MontageBlendInSeconds
+		|| PhysicalHoldSeconds > 0.25f
+		|| !FMath::IsFinite(PhysicalBlendOutSeconds)
+		|| PhysicalBlendOutSeconds < 0.05f
+		|| PhysicalBlendOutSeconds > 0.5f
+		|| !FMath::IsFinite(MaxContinuousPhysicalSeconds)
+		|| MaxContinuousPhysicalSeconds < PhysicalHoldSeconds + PhysicalBlendOutSeconds
+		|| MaxContinuousPhysicalSeconds > 2.0f)
+	{
+		OutError = TEXT("Physical presentation drive, impulse or timing values are invalid.");
+		return false;
+	}
+
+	return true;
 }

@@ -25,6 +25,7 @@ class UHeavyImpactResponseComponent;
 class UHeavyImpactTuningData;
 class UHealthComponent;
 class UPhysicsHandleComponent;
+class UPhysicalAnimationComponent;
 class UPhysicsControlComponent;
 class USpringArmComponent;
 class UZeroEscapeInputConfig;
@@ -135,6 +136,10 @@ private:
 	/** 玩家站立轻受击、速度恢复与 Heavy 抢占的运行时 Owner。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "轻受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCharacterImpactResponseComponent> CharacterImpactResponse;
+
+	/** UE 官方局部动画驱动物理组件；玩家首轮关闭，但与追猎者共用同一装配路径。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "轻受击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UPhysicalAnimationComponent> LightPhysicalAnimation;
 
 	/** 玩家独立的重冲击 PCA 与判稳参数；必须在 BP_ZeroEscapeCharacter 类默认值中指定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "重冲击", meta = (AllowPrivateAccess = "true"))
