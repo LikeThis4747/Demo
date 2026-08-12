@@ -28,3 +28,9 @@ enabled = true
 url = "http://127.0.0.1:8000/mcp"
 startup_timeout_sec = 30
 tool_timeout_sec = 120
+
+[mcp_servers.ue58-official-mcp.tools.list_toolsets]
+approval_mode = "approve"
+
+[mcp_servers.ue58-official-mcp.tools.describe_toolset]
+approval_mode = "approve"
