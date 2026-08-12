@@ -114,3 +114,10 @@
 - Heavy 只新增有效请求捕获前清场 Delegate；5 项 Heavy 合同自动化全部通过。
 - Demo 模块构建成功；CharacterImpact 2/2、HeavyImpact 5/5；官方 MCP Blueprint/DataAsset 回读及短 SIE 初始化通过。
 - 遗留：用户验收胸口/左右命中画面、连续命中退出、Light→Heavy 抢占和 Heavy 起身后再 Light。
+
+## 2026-08-12 PCG 机关与资源分层放置
+
+- 完成一个 Populator 内机关优先、资源后置的分层放置；高厅必放摆锤，普通机关类型先抽且操作格互斥，资源独立采样并随机格内 X/Y。
+- 旧 Population 数量/上限规则已直接替换，无兼容双轨或额外 Manager。
+- Demo 模块链接、Population 8/8、完整 PCG 29/29、官方资产回读和 L_Game Normal Seed 12345 接入均通过；机关 36/36、资源 13/13。
+- 用户连续否决过稀初值，并要求难度主要调整种类而非总量；机关密度改为 Easy/Normal/Hard 26/28/30、间距统一 2，权重为 5:3:2 / 1:1:1 / 2:3:5；遗留多 Seed 验收。

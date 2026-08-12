@@ -69,12 +69,6 @@ namespace
 		return LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(OutWorldTransform);
 	}
 
-	bool IsWithinOneStepOnSameFloor(const FIntVector A, const FIntVector B)
-	{
-		return A.Z == B.Z
-			&& FMath::Abs(A.X - B.X) + FMath::Abs(A.Y - B.Y) <= 1;
-	}
-
 	bool IsAddressInsidePlan(
 		const FIntVector Address,
 		const FZeroEscapeGeneratedLevelPlan& Plan)
@@ -306,6 +300,7 @@ bool AZeroEscapeRuntimeLevelGenerator::GenerateFromRequest(
 		(FPlatformTime::Seconds() - InstantiationStartSeconds) * 1000.0;
 
 	LastPlan = MoveTemp(CandidatePlan);
+	ActiveFloorTopZCm = PresentationProfile->FloorTopZCm;
 	PendingReport = Report;
 	StartNavigationWait();
 	return true;
@@ -934,6 +929,7 @@ void AZeroEscapeRuntimeLevelGenerator::ClearGeneratedSceneInternal()
 	}
 	GeneratedHismComponents.Reset();
 	LastPlan = FZeroEscapeGeneratedLevelPlan();
+	ActiveFloorTopZCm = 0.0;
 	State = EZeroEscapeRuntimeGenerationState::Idle;
 }
 
@@ -1042,48 +1038,25 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedExitWorldTransform(
 		&& AddressToWorldTransform(LastPlan, LastPlan.ExitCoordinate, true, OutTransform);
 }
 
-bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedOrdinaryGameplayCellWorldTransforms(
-	const bool bAvoidSpawnExitNeighbors,
-	const bool bStraightCorridorOnly,
-	TArray<FTransform>& OutTransforms) const
+bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedPopulationSnapshot(
+	FZeroEscapeGeneratedLevelPlan& OutPlan,
+	FTransform& OutGeneratedRootWorldTransform,
+	double& OutFloorTopZCm) const
 {
-	OutTransforms.Reset();
-	if (State != EZeroEscapeRuntimeGenerationState::Ready || !IsValid(GeneratedRoot))
+	OutPlan = FZeroEscapeGeneratedLevelPlan();
+	OutGeneratedRootWorldTransform = FTransform::Identity;
+	OutFloorTopZCm = 0.0;
+	if (State != EZeroEscapeRuntimeGenerationState::Ready
+		|| !IsValid(GeneratedRoot)
+		|| !LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
+			GeneratedRoot->GetComponentTransform())
+		|| !FMath::IsFinite(ActiveFloorTopZCm))
 	{
 		return false;
 	}
-
-	const uint8 StraightNS = static_cast<uint8>(EZeroEscapeOpenEdge::North)
-		| static_cast<uint8>(EZeroEscapeOpenEdge::South);
-	const uint8 StraightEW = static_cast<uint8>(EZeroEscapeOpenEdge::East)
-		| static_cast<uint8>(EZeroEscapeOpenEdge::West);
-	for (const FZeroEscapeGeneratedOrdinaryCell& Cell : LastPlan.OrdinaryCells)
-	{
-		if (bAvoidSpawnExitNeighbors
-			&& (IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.PlayerSpawnCoordinate)
-				|| IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.PursuerSpawnCoordinate)
-				|| IsWithinOneStepOnSameFloor(Cell.Coordinate, LastPlan.ExitCoordinate)))
-		{
-			continue;
-		}
-		const bool bStraightNS = Cell.OpeningMask == StraightNS;
-		const bool bStraightEW = Cell.OpeningMask == StraightEW;
-		if (bStraightCorridorOnly && !bStraightNS && !bStraightEW)
-		{
-			continue;
-		}
-
-		const FTransform LocalTransform(
-			FRotator(0.0, bStraightNS ? 90.0 : 0.0, 0.0),
-			AddressToLocalLocation(LastPlan, Cell.Coordinate, false));
-		FTransform WorldTransform;
-		if (!ConvertLocalToWorld(*GeneratedRoot, LocalTransform, WorldTransform))
-		{
-			OutTransforms.Reset();
-			return false;
-		}
-		OutTransforms.Add(WorldTransform);
-	}
+	OutPlan = LastPlan;
+	OutGeneratedRootWorldTransform = GeneratedRoot->GetComponentTransform();
+	OutFloorTopZCm = ActiveFloorTopZCm;
 	return true;
 }
 

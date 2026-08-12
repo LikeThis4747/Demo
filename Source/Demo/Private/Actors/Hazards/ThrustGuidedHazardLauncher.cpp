@@ -230,7 +230,7 @@ void AThrustGuidedHazardLauncher::EndPlay(
 	const EEndPlayReason::Type EndPlayReason)
 {
 	ClearWarningState();
-	DestroyOwnedLoadedProjectile();
+	DestroyOwnedProjectile();
 	if (IsValid(TriggerVolume))
 	{
 		TriggerVolume->OnComponentBeginOverlap.RemoveDynamic(
@@ -292,17 +292,22 @@ bool AThrustGuidedHazardLauncher::SpawnAndAttachLoadedProjectile(
 	}
 
 	LoadedProjectile = FinishedProjectile;
+	OwnedProjectile = FinishedProjectile;
 	return true;
 }
 
-void AThrustGuidedHazardLauncher::DestroyOwnedLoadedProjectile()
+void AThrustGuidedHazardLauncher::DestroyOwnedProjectile()
 {
-	if (IsValid(LoadedProjectile))
+	AThrustGuidedHazardProjectile* Projectile = IsValid(OwnedProjectile)
+		? OwnedProjectile.Get()
+		: LoadedProjectile.Get();
+	if (IsValid(Projectile))
 	{
-		LoadedProjectile->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
-		LoadedProjectile->Destroy();
+		Projectile->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		Projectile->Destroy();
 	}
 	LoadedProjectile = nullptr;
+	OwnedProjectile = nullptr;
 }
 
 void AThrustGuidedHazardLauncher::ApplyTriggerGeometry(
@@ -1265,7 +1270,7 @@ void AThrustGuidedHazardLauncher::DisableHazard(const FString& Reason)
 {
 	ClearWarningState();
 	Phase = EThrustGuidedHazardLauncherPhase::Disabled;
-	DestroyOwnedLoadedProjectile();
+	DestroyOwnedProjectile();
 	if (IsValid(TriggerVolume))
 	{
 		TriggerVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);

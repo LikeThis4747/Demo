@@ -2,67 +2,87 @@
 
 /**
  * @file ZeroEscapePopulationPlacementPolicy.h
- * 职责：用纯整数计算单条 Population 规则的目标格数与 Actor 数安全预算。
- * 边界：不加载资产、不消费随机数、不 Spawn；0 个目标是合法成功结果。
+ * 职责：把最终空间 Plan 与三档 Population 纯值配置原子规划为机关层和资源层放置结果。
+ * 边界：不访问 UObject、World 或资产；不加载 Class、不 Spawn，也不修改输入 Plan。
  */
 
 #pragma once
 
+#include "Containers/ArrayView.h"
 #include "CoreMinimal.h"
+#include "PCG/Population/ZeroEscapePlacementTypes.h"
 #include "PCG/ZeroEscapeGenerationTypes.h"
 
 namespace ZeroEscape::LevelGeneration
 {
-	enum class EPopulationPlacementBudgetResult : uint8
+	enum class EPopulationPlacementKind : uint8
+	{
+		Pendulum = 0,
+		SpikeTrap = 1,
+		BatteringRam = 2,
+		GuidedLauncher = 3,
+		MagneticResource = 4
+	};
+
+	enum class EPopulationPlacementResult : uint8
 	{
 		Success = 0,
-		InvalidRule = 1,
-		InvalidCandidateCount = 2,
-		SpawnBudgetExceeded = 3
+		InvalidPlan = 1,
+		InvalidConfiguration = 2,
+		InvalidTraversalGraph = 3,
+		SpawnBudgetExceeded = 4
+	};
+
+	struct FPopulationPlannedPlacement
+	{
+		EPopulationPlacementKind Kind = EPopulationPlacementKind::SpikeTrap;
+		FIntVector AnchorAddress = FIntVector::ZeroValue;
+		TArray<FTransform> LocalSpawnTransforms;
+		/** 机关实际占用/操作格；同时用于机关间互斥与后续资源避让。 */
+		TArray<FIntVector> ResourceBlockedAddresses;
+	};
+
+	struct FPopulationKindCounts
+	{
+		int32 Pendulums = 0;
+		int32 SpikeTrapGroups = 0;
+		int32 BatteringRams = 0;
+		int32 GuidedLaunchers = 0;
+		int32 MagneticResources = 0;
+		int32 SpikeCandidateAnchors = 0;
+		int32 RamCandidateAnchors = 0;
+		int32 LauncherCandidateAnchors = 0;
+	};
+
+	struct FPopulationLayerStats
+	{
+		int32 TargetCount = 0;
+		int32 ActualCount = 0;
+		int32 CandidateAnchorCount = 0;
+		int32 SpacingRejectedCount = 0;
+		int32 UnderfilledCount = 0;
+	};
+
+	struct FPopulationPlacementPlan
+	{
+		TArray<FPopulationPlannedPlacement> HazardPlacements;
+		TArray<FPopulationPlannedPlacement> ResourcePlacements;
+		FPopulationKindCounts KindCounts;
+		FPopulationLayerStats HazardStats;
+		FPopulationLayerStats ResourceStats;
 	};
 
 	class FPopulationPlacementPolicy final
 	{
 	public:
-		/**
-		 * 此处只校验单条规则；Actor 上限复用 C++ 的 MaxGridCells × MaxFloorCount。
-		 * 用 int64 先乘，避免 LateralCount 导致 int32 溢出或意外海量 Spawn。
-		 */
-		static EPopulationPlacementBudgetResult Evaluate(
-			const int32 CandidateCount,
-			const int32 OneEveryNCells,
-			const int32 MaxCount,
-			const int32 LateralCount,
-			int32& OutTargetCellCount,
-			int32& OutActorCount)
-		{
-			OutTargetCellCount = 0;
-			OutActorCount = 0;
-			if (OneEveryNCells <= 0 || MaxCount <= 0 || LateralCount <= 0)
-			{
-				return EPopulationPlacementBudgetResult::InvalidRule;
-			}
-
-			constexpr int64 MaxGeneratedAddresses =
-				static_cast<int64>(GenerationLimits::MaxGridCells)
-				* GenerationLimits::MaxFloorCount;
-			if (CandidateCount < 0
-				|| static_cast<int64>(CandidateCount) > MaxGeneratedAddresses)
-			{
-				return EPopulationPlacementBudgetResult::InvalidCandidateCount;
-			}
-
-			OutTargetCellCount = FMath::Min(
-				MaxCount, CandidateCount / OneEveryNCells);
-			const int64 ActorCount =
-				static_cast<int64>(OutTargetCellCount) * LateralCount;
-			if (ActorCount > MaxGeneratedAddresses)
-			{
-				OutTargetCellCount = 0;
-				return EPopulationPlacementBudgetResult::SpawnBudgetExceeded;
-			}
-			OutActorCount = static_cast<int32>(ActorCount);
-			return EPopulationPlacementBudgetResult::Success;
-		}
+		/** 成功时原子提交完整两层计划；失败时 OutPlan 保持空值。 */
+		static EPopulationPlacementResult BuildPlan(
+			const FZeroEscapeGeneratedLevelPlan& LevelPlan,
+			double FloorTopZCm,
+			const FZeroEscapeHazardPopulationAssembly& HazardAssembly,
+			const FZeroEscapeResourcePopulationAssembly& ResourceAssembly,
+			TConstArrayView<FZeroEscapePopulationDifficultySettings> Difficulties,
+			FPopulationPlacementPlan& OutPlan,
+			FString& OutError);
 	};
 }

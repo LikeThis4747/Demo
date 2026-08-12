@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapePopulationProfile.h
- * 职责：一局要往生成结果里撒哪些玩法对象的权威数据资产；一个条目一类对象。
- * 边界：只描述"放什么/放哪/放多少"，不含放置算法，也不引用生成器运行时状态。
+ * 职责：保存一份共享机关/资源装配和三档纯数值 Population 配置。
+ * 边界：不保存候选规则链、不执行放置，也不引用生成器运行时状态。
  */
 
 #pragma once
@@ -14,14 +14,20 @@
 
 #include "ZeroEscapePopulationProfile.generated.h"
 
-/** 玩法对象放置规则表；新增一类对象=加一条规则，无需改代码。 */
+/** 一局玩法填充的唯一配置资产。 */
 UCLASS(BlueprintType)
 class DEMO_API UZeroEscapePopulationProfile final : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 
 public:
-	/** 按顺序执行的放置规则；每条独立消费一类区域格。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population")
-	TArray<FZeroEscapePlacementRule> Rules;
+	FZeroEscapeHazardPopulationAssembly HazardAssembly;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population")
+	FZeroEscapeResourcePopulationAssembly ResourceAssembly;
+
+	/** 必须恰好包含 Easy、Normal、Hard 各一条；数组顺序不参与确定性。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Difficulty")
+	TArray<FZeroEscapePopulationDifficultySettings> Difficulties;
 };

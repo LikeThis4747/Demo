@@ -4,7 +4,7 @@
  * @file ThrustGuidedHazardLauncher.h
  * 职责：拥有壁挂机关的首个角色锁定、真实弹体预装、预警期移动目标预测、机械炮管瞄准和一次性释放。
  * 边界：不模拟弹体、不在离膛后追踪、不判断受击，不依赖关卡名、Actor 名或组件名查找。
- * 状态 Owner：本 Actor 唯一写入 Armed/Warning/Spent/Disabled、目标快照、弹道解和两个 Timer。
+ * 状态 Owner：本 Actor 唯一写入 Armed/Warning/Spent/Disabled、目标快照、弹道解、弹体生命周期和两个 Timer。
  * 轴约定：Muzzle/ProjectileSpawnPoint 局部 +X 是炮管方向；弹体局部 +Z 对齐最终世界方向。
  */
 
@@ -141,8 +141,8 @@ private:
 		const FTransform& SpawnTransform,
 		FString& OutError);
 
-	/** 只回收仍由 Launcher 持有的预装弹体；成功离膛后指针会先清空。 */
-	void DestroyOwnedLoadedProjectile();
+	/** 回收本 Launcher 创建的真实弹体，无论它仍在预装还是已经离膛。 */
+	void DestroyOwnedProjectile();
 
 	/** 清理 Warning/Aim Timer、目标和预警显隐；不隐式改写当前阶段。 */
 	void ClearWarningState();
@@ -270,6 +270,10 @@ private:
 	/** 发射前可见并随 AimPivot 转动的真实弹体；成功离膛后立即清空，避免 Launcher 误销毁它。 */
 	UPROPERTY(Transient)
 	TObjectPtr<AThrustGuidedHazardProjectile> LoadedProjectile;
+
+	/** 本 Launcher 创建的唯一真实弹体；离膛后仍保留，确保关卡重置可立即回收。 */
+	UPROPERTY(Transient)
+	TObjectPtr<AThrustGuidedHazardProjectile> OwnedProjectile;
 
 	/** 当前一次性阶段，只由本 Actor 的阶段函数写入。 */
 	EThrustGuidedHazardLauncherPhase Phase =

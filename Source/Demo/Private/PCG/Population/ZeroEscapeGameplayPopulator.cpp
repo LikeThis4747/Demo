@@ -2,8 +2,8 @@
 
 /**
  * @file ZeroEscapeGameplayPopulator.cpp
- * 职责：在 GameMode 明确提交开局时读取普通格候选，并原子放置全部玩法对象规则。
- * 边界：不订阅 Generator、不生成空间结构、不结算玩法后果；失败只回滚自己 Spawn 的对象。
+ * 职责：读取 Ready 空间快照，原子规划、校验并依次生成机关层和磁力资源层。
+ * 边界：不生成空间、不实现候选算法、不改变机关行为；失败只回滚自己 Spawn 的对象。
  */
 
 #include "PCG/Population/ZeroEscapeGameplayPopulator.h"
@@ -11,9 +11,189 @@
 #include "Engine/World.h"
 #include "PCG/Population/ZeroEscapePopulationPlacementPolicy.h"
 #include "PCG/Population/ZeroEscapePopulationProfile.h"
+#include "PCG/ZeroEscapeGenerationCore.h"
 #include "PCG/ZeroEscapeRuntimeLevelGenerator.h"
 
+namespace LevelGen = ZeroEscape::LevelGeneration;
+
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePopulator, Log, All);
+
+namespace
+{
+	struct FPopulationSpawnRequest
+	{
+		LevelGen::EPopulationPlacementKind Kind =
+			LevelGen::EPopulationPlacementKind::SpikeTrap;
+		UClass* ActorClass = nullptr;
+		FTransform WorldTransform = FTransform::Identity;
+	};
+
+	const TCHAR* PlacementKindName(const LevelGen::EPopulationPlacementKind Kind)
+	{
+		switch (Kind)
+		{
+		case LevelGen::EPopulationPlacementKind::Pendulum: return TEXT("Pendulum");
+		case LevelGen::EPopulationPlacementKind::SpikeTrap: return TEXT("SpikeTrap");
+		case LevelGen::EPopulationPlacementKind::BatteringRam: return TEXT("BatteringRam");
+		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return TEXT("GuidedLauncher");
+		case LevelGen::EPopulationPlacementKind::MagneticResource: return TEXT("MagneticResource");
+		default: return TEXT("Unknown");
+		}
+	}
+
+	const TCHAR* PlacementResultName(const LevelGen::EPopulationPlacementResult Result)
+	{
+		switch (Result)
+		{
+		case LevelGen::EPopulationPlacementResult::Success: return TEXT("Success");
+		case LevelGen::EPopulationPlacementResult::InvalidPlan: return TEXT("InvalidPlan");
+		case LevelGen::EPopulationPlacementResult::InvalidConfiguration: return TEXT("InvalidConfiguration");
+		case LevelGen::EPopulationPlacementResult::InvalidTraversalGraph: return TEXT("InvalidTraversalGraph");
+		case LevelGen::EPopulationPlacementResult::SpawnBudgetExceeded: return TEXT("SpawnBudgetExceeded");
+		default: return TEXT("Unknown");
+		}
+	}
+
+	const TSoftClassPtr<AActor>* FindClassReference(
+		const LevelGen::EPopulationPlacementKind Kind,
+		const FZeroEscapeHazardPopulationAssembly& Hazards,
+		const FZeroEscapeResourcePopulationAssembly& Resources)
+	{
+		switch (Kind)
+		{
+		case LevelGen::EPopulationPlacementKind::Pendulum: return &Hazards.PendulumClass;
+		case LevelGen::EPopulationPlacementKind::SpikeTrap: return &Hazards.SpikeTrapClass;
+		case LevelGen::EPopulationPlacementKind::BatteringRam: return &Hazards.BatteringRamClass;
+		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return &Hazards.GuidedLauncherClass;
+		case LevelGen::EPopulationPlacementKind::MagneticResource: return &Resources.MagneticResourceClass;
+		default: return nullptr;
+		}
+	}
+
+	bool LoadUsedClasses(
+		const LevelGen::FPopulationPlacementPlan& Plan,
+		const FZeroEscapeHazardPopulationAssembly& Hazards,
+		const FZeroEscapeResourcePopulationAssembly& Resources,
+		TMap<LevelGen::EPopulationPlacementKind, UClass*>& OutClasses,
+		FString& OutError)
+	{
+		OutClasses.Reset();
+		auto LoadKind = [&](const LevelGen::EPopulationPlacementKind Kind)
+		{
+			if (OutClasses.Contains(Kind))
+			{
+				return true;
+			}
+			const TSoftClassPtr<AActor>* Reference =
+				FindClassReference(Kind, Hazards, Resources);
+			if (Reference == nullptr || Reference->IsNull())
+			{
+				OutError = FString::Printf(
+					TEXT("已规划类型 %s 缺少 Actor Class。"), PlacementKindName(Kind));
+				return false;
+			}
+			UClass* LoadedClass = Reference->LoadSynchronous();
+			if (!IsValid(LoadedClass)
+				|| !LoadedClass->IsChildOf(AActor::StaticClass())
+				|| LoadedClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				OutError = FString::Printf(
+					TEXT("类型 %s 的 Actor Class 无法加载或不可生成。"), PlacementKindName(Kind));
+				return false;
+			}
+			OutClasses.Add(Kind, LoadedClass);
+			return true;
+		};
+
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.HazardPlacements)
+		{
+			if (!LoadKind(Placement.Kind))
+			{
+				return false;
+			}
+		}
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.ResourcePlacements)
+		{
+			if (!LoadKind(Placement.Kind))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	bool BuildSpawnRequests(
+		const LevelGen::FPopulationPlacementPlan& Plan,
+		const FTransform& GeneratedRootWorldTransform,
+		const TMap<LevelGen::EPopulationPlacementKind, UClass*>& Classes,
+		TArray<FPopulationSpawnRequest>& OutRequests,
+		FString& OutError)
+	{
+		OutRequests.Reset();
+		int64 DirectSpawnRequestCount = 0;
+		int64 WorldActorBudgetCount = 0;
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.HazardPlacements)
+		{
+			DirectSpawnRequestCount += Placement.LocalSpawnTransforms.Num();
+			WorldActorBudgetCount += Placement.LocalSpawnTransforms.Num();
+			if (Placement.Kind == LevelGen::EPopulationPlacementKind::GuidedLauncher)
+			{
+				// 每个发射器在 BeginPlay 内同步预装一个真实弹体。
+				++WorldActorBudgetCount;
+			}
+		}
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.ResourcePlacements)
+		{
+			DirectSpawnRequestCount += Placement.LocalSpawnTransforms.Num();
+			WorldActorBudgetCount += Placement.LocalSpawnTransforms.Num();
+		}
+		const int64 Maximum = static_cast<int64>(ZeroEscape::GenerationLimits::MaxGridCells)
+			* ZeroEscape::GenerationLimits::MaxFloorCount;
+		if (DirectSpawnRequestCount < 0 || DirectSpawnRequestCount > Maximum
+			|| WorldActorBudgetCount < 0 || WorldActorBudgetCount > Maximum)
+		{
+			OutError = TEXT("Spawn 请求数量超过安全预算。");
+			return false;
+		}
+		OutRequests.Reserve(static_cast<int32>(DirectSpawnRequestCount));
+		auto AppendLayer = [&](const TArray<LevelGen::FPopulationPlannedPlacement>& Placements)
+		{
+			for (const LevelGen::FPopulationPlannedPlacement& Placement : Placements)
+			{
+				UClass* const* ActorClass = Classes.Find(Placement.Kind);
+				if (ActorClass == nullptr || !IsValid(*ActorClass)
+					|| Placement.LocalSpawnTransforms.IsEmpty())
+				{
+					OutError = FString::Printf(
+						TEXT("类型 %s 的规划 Class 或 Transform 为空。"),
+						PlacementKindName(Placement.Kind));
+					return false;
+				}
+				for (const FTransform& LocalTransform : Placement.LocalSpawnTransforms)
+				{
+					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(LocalTransform))
+					{
+						OutError = TEXT("规划生成了非法局部 Transform。");
+						return false;
+					}
+					FPopulationSpawnRequest& Request = OutRequests.AddDefaulted_GetRef();
+					Request.Kind = Placement.Kind;
+					Request.ActorClass = *ActorClass;
+					Request.WorldTransform = LocalTransform * GeneratedRootWorldTransform;
+					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
+							Request.WorldTransform))
+					{
+						OutError = TEXT("局部到世界组合生成了非法 Transform。");
+						return false;
+					}
+				}
+			}
+			return true;
+		};
+		return AppendLayer(Plan.HazardPlacements)
+			&& AppendLayer(Plan.ResourcePlacements);
+	}
+}
 
 AZeroEscapeGameplayPopulator::AZeroEscapeGameplayPopulator()
 {
@@ -25,139 +205,108 @@ bool AZeroEscapeGameplayPopulator::Populate(
 {
 	ClearPopulation();
 	UWorld* World = GetWorld();
-	if (!IsValid(World)
-		|| !IsValid(PopulationProfile)
-		|| Generator.State != EZeroEscapeRuntimeGenerationState::Ready)
+	auto Fail = [this](const TCHAR* Reason, const FString& Detail = FString())
 	{
 		UE_LOG(LogZeroEscapePopulator, Error,
-			TEXT("ZE_POPULATION result=Failure reason=InvalidSetup"));
-		return false;
-	}
-
-	auto Fail = [this](const TCHAR* Reason, const int32 RuleIndex)
-	{
-		UE_LOG(LogZeroEscapePopulator, Error,
-			TEXT("ZE_POPULATION result=Failure reason=%s rule=%d"), Reason, RuleIndex);
+			TEXT("ZE_POPULATION result=Failure reason=%s detail=\"%s\""),
+			Reason, *Detail.ReplaceCharWithEscapedChar());
 		ClearPopulation();
 		return false;
 	};
+	if (!IsValid(World) || !IsValid(PopulationProfile))
+	{
+		return Fail(TEXT("InvalidSetup"));
+	}
 
-	FRandomStream Rng(Generator.GetGeneratedSeed());
+	FZeroEscapeGeneratedLevelPlan LevelPlan;
+	FTransform GeneratedRootWorldTransform;
+	double FloorTopZCm = 0.0;
+	if (!Generator.GetGeneratedPopulationSnapshot(
+			LevelPlan, GeneratedRootWorldTransform, FloorTopZCm))
+	{
+		return Fail(TEXT("PopulationSnapshotFailed"));
+	}
+
+	LevelGen::FPopulationPlacementPlan PlacementPlan;
+	FString PlacementError;
+	const LevelGen::EPopulationPlacementResult Result =
+		LevelGen::FPopulationPlacementPolicy::BuildPlan(
+			LevelPlan,
+			FloorTopZCm,
+			PopulationProfile->HazardAssembly,
+			PopulationProfile->ResourceAssembly,
+			PopulationProfile->Difficulties,
+			PlacementPlan,
+			PlacementError);
+	if (Result != LevelGen::EPopulationPlacementResult::Success)
+	{
+		return Fail(PlacementResultName(Result), PlacementError);
+	}
+
+	TMap<LevelGen::EPopulationPlacementKind, UClass*> LoadedClasses;
+	if (!LoadUsedClasses(
+			PlacementPlan,
+			PopulationProfile->HazardAssembly,
+			PopulationProfile->ResourceAssembly,
+			LoadedClasses,
+			PlacementError))
+	{
+		return Fail(TEXT("ActorClassLoadFailed"), PlacementError);
+	}
+	TArray<FPopulationSpawnRequest> SpawnRequests;
+	if (!BuildSpawnRequests(
+			PlacementPlan,
+			GeneratedRootWorldTransform,
+			LoadedClasses,
+			SpawnRequests,
+			PlacementError))
+	{
+		return Fail(TEXT("SpawnRequestInvalid"), PlacementError);
+	}
+
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
 	SpawnParameters.SpawnCollisionHandlingOverride =
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-
-	for (int32 RuleIndex = 0;
-		RuleIndex < PopulationProfile->Rules.Num();
-		++RuleIndex)
+	for (const FPopulationSpawnRequest& Request : SpawnRequests)
 	{
-		const FZeroEscapePlacementRule& Rule = PopulationProfile->Rules[RuleIndex];
-		if (Rule.ActorClass.IsNull()
-			|| Rule.OneEveryNCells <= 0
-			|| Rule.MaxCount <= 0
-			|| Rule.LateralCount <= 0
-			|| !FMath::IsFinite(Rule.LateralSpacing)
-			|| Rule.LateralSpacing < 0.0f
-			|| !FMath::IsFinite(Rule.SpawnZOffsetCm)
-			|| Rule.SpawnZOffsetCm < 0.0f)
+		AActor* Spawned = World->SpawnActor<AActor>(
+			Request.ActorClass, Request.WorldTransform, SpawnParameters);
+		if (!IsValid(Spawned))
 		{
-			return Fail(TEXT("InvalidRule"), RuleIndex);
+			return Fail(TEXT("ActorSpawnFailed"), PlacementKindName(Request.Kind));
 		}
-
-		UClass* ActorClass = Rule.ActorClass.LoadSynchronous();
-		if (!IsValid(ActorClass) || ActorClass->HasAnyClassFlags(CLASS_Abstract))
-		{
-			return Fail(TEXT("ActorClassLoadFailed"), RuleIndex);
-		}
-
-		TArray<FTransform> Candidates;
-		if (!Generator.GetGeneratedOrdinaryGameplayCellWorldTransforms(
-				Rule.bAvoidStartExitNeighbors,
-				Rule.bStraightCorridorOnly,
-				Candidates))
-		{
-			return Fail(TEXT("OrdinaryCandidateQueryFailed"), RuleIndex);
-		}
-
-		int32 TargetCount = 0;
-		int32 PlannedActorCount = 0;
-		const ZeroEscape::LevelGeneration::EPopulationPlacementBudgetResult BudgetResult =
-			ZeroEscape::LevelGeneration::FPopulationPlacementPolicy::Evaluate(
-				Candidates.Num(),
-				Rule.OneEveryNCells,
-				Rule.MaxCount,
-				Rule.LateralCount,
-				TargetCount,
-				PlannedActorCount);
-		if (BudgetResult !=
-			ZeroEscape::LevelGeneration::EPopulationPlacementBudgetResult::Success)
-		{
-			return Fail(TEXT("PlacementBudgetInvalid"), RuleIndex);
-		}
-		constexpr int64 MaxGeneratedAddresses =
-			static_cast<int64>(ZeroEscape::GenerationLimits::MaxGridCells)
-			* ZeroEscape::GenerationLimits::MaxFloorCount;
-		// Evaluate 只管当前规则；这里限制按 DataAsset 顺序累计的整局 Spawn 总量。
-		if (static_cast<int64>(SpawnedActors.Num()) + PlannedActorCount
-			> MaxGeneratedAddresses)
-		{
-			return Fail(TEXT("TotalSpawnBudgetExceeded"), RuleIndex);
-		}
-		if (TargetCount == 0)
-		{
-			UE_LOG(LogZeroEscapePopulator, Log,
-				TEXT("ZE_POPULATION result=RuleSkipped rule=%d candidates=%d"),
-				RuleIndex, Candidates.Num());
-			continue;
-		}
-
-		// 规则间仍按 DataAsset 顺序消费随机数；同一 Seed 与同一规则表保持可复现。
-		for (int32 Index = Candidates.Num() - 1; Index > 0; --Index)
-		{
-			Candidates.Swap(Index, Rng.RandRange(0, Index));
-		}
-
-		int32 SpawnedForRule = 0;
-		for (int32 Index = 0; Index < TargetCount; ++Index)
-		{
-			const FTransform& CellTransform = Candidates[Index];
-			const FVector LateralDirection =
-				CellTransform.GetRotation().GetRightVector();
-			const FRotator SpawnRotation = CellTransform.GetRotation().Rotator();
-			for (int32 LateralIndex = 0;
-				LateralIndex < Rule.LateralCount;
-				++LateralIndex)
-			{
-				const float LateralOffset =
-					(static_cast<float>(LateralIndex)
-						- (Rule.LateralCount - 1) * 0.5f)
-					* Rule.LateralSpacing;
-				const FVector SpawnLocation = CellTransform.GetLocation()
-					+ LateralDirection * LateralOffset
-					+ FVector(0.0f, 0.0f, Rule.SpawnZOffsetCm);
-				AActor* Spawned = World->SpawnActor<AActor>(
-					ActorClass, SpawnLocation, SpawnRotation, SpawnParameters);
-				if (!IsValid(Spawned))
-				{
-					return Fail(TEXT("ActorSpawnFailed"), RuleIndex);
-				}
-				SpawnedActors.Add(Spawned);
-				++SpawnedForRule;
-			}
-		}
-		if (SpawnedForRule != PlannedActorCount)
-		{
-			return Fail(TEXT("SpawnCountInvariantFailed"), RuleIndex);
-		}
-
-		UE_LOG(LogZeroEscapePopulator, Log,
-			TEXT("ZE_POPULATION result=RuleSuccess rule=%d class=%s candidates=%d actors=%d"),
-			RuleIndex, *ActorClass->GetName(), Candidates.Num(), SpawnedForRule);
+		SpawnedActors.Add(Spawned);
 	}
 
+	if (PlacementPlan.HazardStats.UnderfilledCount > 0
+		|| PlacementPlan.ResourceStats.UnderfilledCount > 0)
+	{
+		UE_LOG(LogZeroEscapePopulator, Warning,
+			TEXT("ZE_POPULATION_UNDERFILL seed=%d hazards=%d/%d resources=%d/%d"),
+			LevelPlan.Signature.Seed,
+			PlacementPlan.HazardStats.ActualCount,
+			PlacementPlan.HazardStats.TargetCount,
+			PlacementPlan.ResourceStats.ActualCount,
+			PlacementPlan.ResourceStats.TargetCount);
+	}
 	UE_LOG(LogZeroEscapePopulator, Display,
-		TEXT("ZE_POPULATION result=Success actors=%d"), SpawnedActors.Num());
+		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld hazard_target=%d hazard_actual=%d pendulums=%d spikes=%d rams=%d launchers=%d resource_target=%d resource_actual=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d resource_candidates=%d actors=%d"),
+		LevelPlan.Signature.Seed,
+		static_cast<long long>(LevelPlan.CanonicalLayoutHash),
+		PlacementPlan.HazardStats.TargetCount,
+		PlacementPlan.HazardStats.ActualCount,
+		PlacementPlan.KindCounts.Pendulums,
+		PlacementPlan.KindCounts.SpikeTrapGroups,
+		PlacementPlan.KindCounts.BatteringRams,
+		PlacementPlan.KindCounts.GuidedLaunchers,
+		PlacementPlan.ResourceStats.TargetCount,
+		PlacementPlan.ResourceStats.ActualCount,
+		PlacementPlan.KindCounts.SpikeCandidateAnchors,
+		PlacementPlan.KindCounts.RamCandidateAnchors,
+		PlacementPlan.KindCounts.LauncherCandidateAnchors,
+		PlacementPlan.ResourceStats.CandidateAnchorCount,
+		SpawnedActors.Num());
 	return true;
 }
 

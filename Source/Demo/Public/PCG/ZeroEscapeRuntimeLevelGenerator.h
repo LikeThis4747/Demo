@@ -94,16 +94,11 @@ public:
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	bool GetGeneratedExitWorldTransform(FTransform& OutTransform) const;
 
-	/**
-	 * 返回普通二维 WFC 格的玩法放置候选；完整结构、实体和净空从不进入此查询。
-	 * 保护区按同层曼哈顿距离计算，Transform 贴当前层地面且 X 轴沿走廊。
-	 * 返回 true 时，全部输出都已通过有限值、规范旋转与 Unit Scale 校验。
-	 */
-	UFUNCTION(BlueprintPure, Category = "PCG")
-	bool GetGeneratedOrdinaryGameplayCellWorldTransforms(
-		bool bAvoidSpawnExitNeighbors,
-		bool bStraightCorridorOnly,
-		TArray<FTransform>& OutTransforms) const;
+	/** 复制 Ready 状态下的纯空间结果、生成坐标系和地板顶面；失败时输出保持空值。 */
+	bool GetGeneratedPopulationSnapshot(
+		FZeroEscapeGeneratedLevelPlan& OutPlan,
+		FTransform& OutGeneratedRootWorldTransform,
+		double& OutFloorTopZCm) const;
 
 	UFUNCTION(BlueprintPure, Category = "PCG")
 	int32 GetGeneratedSeed() const;
@@ -211,6 +206,7 @@ private:
 	FZeroEscapeGenerationRequest ActiveRequest;
 	FZeroEscapeGenerationReport PendingReport;
 	double ActiveGenerationStartSeconds = 0.0;
+	double ActiveFloorTopZCm = 0.0;
 	int64 ActiveCanonicalLayoutHash = 0;
 	int32 ActiveOrdinaryCellCount = 0;
 	int32 ActiveStructureCount = 0;

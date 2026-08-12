@@ -28,7 +28,9 @@ namespace ZeroEscape::LevelGeneration
 		HighCeilingRoomCount = 0x6A943D2Bu,
 		HighCeilingRoomPlacement = 0x73C80E4Fu,
 		PlayerPursuerSpawn = 0x84D26B19u,
-		WfcLayout = 0x95E27B43u
+		WfcLayout = 0x95E27B43u,
+		HazardPopulationPlacement = 0xA67B5D91u,
+		ResourcePopulationPlacement = 0xB84F26E3u
 	};
 
 	/** 一次请求完成配置解析后的唯一纯值输入。 */

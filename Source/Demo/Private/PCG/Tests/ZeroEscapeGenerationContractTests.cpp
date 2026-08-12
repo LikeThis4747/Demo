@@ -94,7 +94,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 	bool FZeroEscapeRandomDomainIsolationTest::RunTest(const FString& Parameters)
 	{
 		(void)Parameters;
-		const TStaticArray<ERandomDomain, 9> Domains = {
+		const TStaticArray<ERandomDomain, 11> Domains = {
 			ERandomDomain::FloorCount,
 			ERandomDomain::RequiredTwoFloorStairPlacement,
 			ERandomDomain::AdditionalTwoFloorStairCount,
@@ -103,7 +103,9 @@ namespace ZeroEscape::LevelGeneration::Tests
 			ERandomDomain::HighCeilingRoomCount,
 			ERandomDomain::HighCeilingRoomPlacement,
 			ERandomDomain::PlayerPursuerSpawn,
-			ERandomDomain::WfcLayout };
+			ERandomDomain::WfcLayout,
+			ERandomDomain::HazardPopulationPlacement,
+			ERandomDomain::ResourcePopulationPlacement };
 		TSet<uint32> FirstValues;
 		for (const ERandomDomain Domain : Domains)
 		{
