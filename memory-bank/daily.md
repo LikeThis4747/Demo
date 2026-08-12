@@ -9,7 +9,7 @@
 - Level0 静态存在 NavMeshBoundsVolume/RecastNavMesh，但 8 月 12 日保存的多次 PIE 日志仍反复报告 Unable to find RecastNavMesh；明日 P0 是同一正式一局动态 Recast + 真实追猎者追逐证据。
 - 玩家局部轻受击与追猎者跑跳/近战仍待用户移动实测、画面、恢复和 Light→Heavy 验收；只做有限参数 A/B，不继续扩系统。
 - 新玩法建议：用 2–3 个短时驻留电力终端解锁出口，让追猎者压力、磁力物和机关共同参与距离管理；首版复用现有 GameState/Exit/交互，不新增任务框架。
-- Git：origin、快照与普通推送结果待本轮最终回填。
+- Git：origin 精确为内部工蜂；主快照 `8d137c5cb57831d00851fad7fbcc46fd2576c39b` 已普通推送并远端核验，最终报告/错误状态回填以第二个同名快照收口。
 
 ## 2026-08-12
 
