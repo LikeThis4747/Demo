@@ -152,3 +152,13 @@
 - [x] 三档纯值配置、真实 Actor 预算、原子 Spawn/Rollback、发射器预装/离膛弹体清理与生成时快照完成。
 - [x] Demo 模块链接、Population 8/8、完整 PCG 29/29、官方 MCP 资产回读与 L_Game Normal Seed 12345 接入通过；机关 36/36、资源 13/13。
 - [x] 用户连续否决过稀初值后，机关密度收口为 Easy/Normal/Hard 26/28/30、间距统一 2，并用权重 5:3:2 / 1:1:1 / 2:3:5 区分构成；用户已确认当前版本验收通过，多 Seed 统计转为后续回归。
+
+<!-- written by shiqiqiwang at 2026-08-12 11:45 UTC -->
+
+
+## 2026-08-12 玩家磁力 Slow + 局部物理（待用户画面验收）
+
+- 玩家磁力投掷命中从 None 改为 Slow 0.40 秒、速度倍率 0.55；不播放轻受击动画，保留移动与镜头控制。
+- 玩家 StandingImpact 启用与追猎者同一局部 Physical Animation 路径，按躯干/左右臂映射一次封顶表现冲量；地刺保持不变。
+- 两份 DataAsset 经官方 MCP 保存回读；CharacterImpact 2/2 与 HeavyImpact 5/5 合计 7/7 通过，短 SIE 无新增相关警告。
+- 技术装配完成；实际胸/左/右反馈、恢复与 Light→Heavy 仍待用户 PIE 验收。

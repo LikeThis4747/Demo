@@ -20,3 +20,11 @@
 1. 当前 PCG 无验收阻塞；后续出现新证据时再独立调整 DataAsset 参数。
 2. 多 Seed Sweep、极端净距与长期难度曲线作为非阻塞回归项。
 3. 轻受击局部物理仍另行等待用户画面与 Light/Heavy 交叉验收。
+
+<!-- written by shiqiqiwang at 2026-08-12 11:45 UTC -->
+
+
+## 2026-08-12 玩家磁力轻受击增量
+
+- 玩家磁力投掷命中已配置为可操控 Slow 0.40 秒、速度倍率 0.55、无受击动画并启用上半身局部物理；地刺未改。
+- 两份 DataAsset 已保存回读，CharacterImpact 2/2 与 HeavyImpact 5/5 通过；最终画面、恢复与 Light→Heavy 仍待用户 PIE 验收。

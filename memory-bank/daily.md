@@ -121,3 +121,13 @@
 - 旧 Population 数量/上限规则已直接替换，无兼容双轨或额外 Manager。
 - Demo 模块链接、Population 8/8、完整 PCG 29/29、官方资产回读和 L_Game Normal Seed 12345 接入均通过；机关 36/36、资源 13/13。
 - 用户连续否决过稀初值，并要求难度主要调整种类而非总量；机关密度改为 Easy/Normal/Hard 26/28/30、间距统一 2，权重为 5:3:2 / 1:1:1 / 2:3:5；最终版本已由用户验收通过，当前配置成为正式基线，多 Seed 统计转为后续回归。
+
+<!-- written by shiqiqiwang at 2026-08-12 11:45 UTC -->
+
+
+## 2026-08-12 — 玩家磁力 Slow 局部物理装配
+
+- 用户明确要求暂不处理地刺；磁力投掷命中玩家改为 Slow 0.40 秒、速度倍率 0.55、无动画、启用上半身局部物理。
+- 玩家 Tuning 使用 spine_01 模拟根、spine_03 躯干与 upperarm_l/r 左右臂受力 Body；首验驱动、冲量与时间值与当前追猎者局部物理起点一致。
+- 官方 MCP 持久化回读通过；CharacterImpact 2/2、HeavyImpact 5/5，短 SIE 无新增 CharacterImpact/磁力命中警告。
+- 用户仍需实际投掷验收减速、部位反馈、恢复与 Light→Heavy；不扩大到地刺、玩家动画、磁力事务或 Heavy 状态机修改。

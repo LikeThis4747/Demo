@@ -12,3 +12,12 @@
 1. 轻受击动画与上半身局部物理仍等待用户画面和 Light/Heavy 交叉验收。
 2. PCG 多 Seed 统计、极端净距和长期难度曲线只作为后续回归/独立调优，不再阻塞本次验收。
 3. 后续若调整 PCG，只优先修改 DataAsset 密度、间距与权重；没有新证据时不恢复旧规则或增加每层上限、每类保底、固定节奏、动态 Director。
+
+<!-- written by shiqiqiwang at 2026-08-12 11:45 UTC -->
+
+
+## 2026-08-12 轻受击增量
+
+- 当前正在收口玩家磁力投掷轻受击：PlayerReaction=Slow 0.40 秒、SpeedMultiplier=0.55、无动画、启用局部物理；地刺不改。
+- 玩家 StandingImpact 上半身局部物理已装配并通过官方 MCP 持久化回读、CharacterImpact 2/2、HeavyImpact 5/5 与短 SIE 启动检查。
+- 技术提交后等待用户 PIE 验收胸/左右命中反馈、恢复及 Light→Heavy；若效果仍不足，只做有限参数 A/B，不扩写来源特判。
