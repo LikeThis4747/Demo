@@ -1,8 +1,8 @@
 # 当前任务
 
-- 制导投射物 Light 已完成一次现场反馈收尾：第一次有效角色命中后弹体忽略 Pawn、继续碰撞环境，避免后续帧持续顶住 Capsule。
-- Light 物理窗口内角色 Mesh 暂时忽略普通 PhysicsBody；退出时恢复完整 Collision Profile、CollisionEnabled 与响应容器，防止同一弹体二次挤压表现身体或留下 Custom 状态。
-- 玩家参数为 Slow 0.40 秒、速度倍率 0.55、无动画；局部物理满强度冲量 13000、Hold 0.11 秒、BlendOut 0.22 秒。
-- DemoEditor 模块构建成功；CharacterImpact 2 项与 HeavyImpact 5 项共 7/7 通过；标准 PIE 连续三发制导命中均 Applied，实际记录到 upperarm_l 的 13000 冲量，相关警告为 0。
-- 当前仅待用户现场复测：奔跑跳跃中命中是否不再异常前冲，以及头/胸/左右臂反馈是否足够明显。未验收前任务保持 active。
-- 不修改 HeavyImpact、CharacterMovement Velocity/Transform、追猎者攻击、磁力事务、地刺或其他机关。
+- 当前受击系统新机关接入权威：`DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。
+- 2026-08-13 用户已接受制导/磁力轻受击收口：异常前冲已修复；`Slow + 局部物理` 方向成立，物理反馈偏弱但当前勉强够用，不再扩大本轮物理架构。
+- Light 接入使用命中后的 `ICharacterImpactReceiver::SubmitStandingImpact`，来源 Profile 分别映射玩家/追猎者的 None、Slow、Stop；新增机关不应修改角色接收核心。
+- Heavy 使用接触前 `IHeavyImpactReceiver::PrepareForHeavyImpact`；机关必须提供自身几何/运动的预测并随后发生真实 Chaos 接触，不能只配枚举。
+- 当前唯一受击完整度 P0：玩家 Stop 的 Front/Left/Right 动画引用仍为空。下一任务为 `TASK-20260813-005-玩家Stop方向受击动画补齐`。
+- 玩家 Stop 首轮计划：复用追猎者三条方向 Sequence，按已验收 GetUp 工作流制作玩家 Skeleton 副本，装配 `DA_PlayerStandingImpact`；第一轮不改 CharacterImpact/HeavyImpact/AnimBP。

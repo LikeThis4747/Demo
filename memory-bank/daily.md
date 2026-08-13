@@ -67,3 +67,15 @@
 - 玩家物理表现参数调为冲量 13000、Hold 0.11 秒、BlendOut 0.22 秒；未修改 Heavy 或 CharacterMovement。
 - DemoEditor 构建成功，CharacterImpact 与 HeavyImpact 自动化 7/7；PIE 三次命中 Applied、无相关物理/恢复警告。
 - 遗留：用户现场复测奔跑跳跃异常前冲与头部反馈强度。
+
+<!-- written by shiqiqiwang at 2026-08-13 09:22 UTC -->
+
+
+<!-- written by Codex at 2026-08-13 17:22 +08:00 -->
+
+## 2026-08-13 — 轻受击验收、文档归档与新机关接口审视
+
+- 用户确认制导命中后的异常位移问题已解决；当前 Slow + 局部物理保留，局部物理观感偏弱但勉强够用，不再扩大本轮架构。
+- 官方 MCP 回读当前来源映射：制导对玩家 Slow、磁力对玩家 Slow/对追猎者 Stop、地刺对玩家 Stop/对追猎者 Slow；玩家 StandingImpact 三方向动画仍为空。
+- 静态审计确认 CharacterImpact/HeavyImpact 核心没有磁力、制导、地刺、摆锤或冲锤类型依赖；新机关接入合同已固化到 `DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。
+- 已归档完成的轻受击调研、融合计划与制导收口任务；新建 P0 玩家 Stop 方向动画计划，第一轮只做动画副本/重定向和 DataAsset 装配，不改受击核心。

@@ -8,7 +8,7 @@
 | `DailyPlan/` | 用户确认后的当日实施方案；根目录只放正在推进的，完成后移入 `DailyPlan/archive/` |
 | `DailyReport/` | 按日期保存的阶段或日报 |
 | `Bugs/` | 尚未解决、暂停调查或等待验收的 Bug 记录与索引 |
-| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/`，动画重定向等制作工作流放在 `Outputs/Animation/` |
+| `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/`，动画重定向等制作工作流放在 `Outputs/Animation/`，受击系统接入合同放在 `Outputs/Physics/` |
 
 新增文档必须放入用途匹配的子目录；没有合适分类时创建名称明确的新目录，并在此表增加一行。`DOC/` 根目录只保留本目录文件。
 
@@ -42,9 +42,11 @@ DailyPlan 完成或被后续主线取代后，**移入 `DailyPlan/archive/` 子�
 
 ## 物理受击阶段基线
 
+- `Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`：新机关接入 Light/Heavy 的当前权威合同；明确来源 Profile、稳定事件 ID、Light 命中后接口、Heavy 接触前准备协议，以及机关生命周期与角色受击核心的职责边界。
 - `DailyReport/2026-08-10-重冲击阶段验收收口.md`：玩家与追猎者共享重受击的当前权威记录；真实 Chaos 决定位移，Physics Control 维持有限人体张力，Snapshot 混入起身 Montage，并包含最终防夹参数和用户验收边界。
-- `DailyReport/2026-08-10-统一轻受击响应第一版技术交付.md`：玩家与追猎者共享站立轻受击输入、来源映射、Heavy 优先级与磁力/地刺接入；代码、资产装配、构建和自动化已完成，真实手感等待用户验收。
-- 2026-08-05、08-07、08-08、08-10 的重冲击实施计划均已完成或被最终路线取代，统一移入 `DailyPlan/archive/`；后续轻受击先讨论共享输入、强度分级和状态仲裁，不直接扩写现有重受击状态机。
+- `DailyReport/2026-08-13-制导投射物与磁力投掷物轻受击技术收口.md`：当前 Light 最终验收记录；制导/磁力对玩家使用 Slow，磁力对追猎者使用 Stop，异常位移已修正，局部物理偏弱但用户接受当前版本。
+- `DailyPlan/2026-08-13-玩家Stop方向受击动画补齐.md`：当前唯一明确的受击完整度 P0；补齐玩家 Front/Left/Right 动画，不修改 Light/Heavy 接口。
+- 2026-08-05 至 08-13 已完成或被取代的受击实施计划统一移入 `DailyPlan/archive/`；历史技术报告只作追溯，不再覆盖上述接入指南和最终验收记录。
 
 ## 当前物理机关原型计划
 
@@ -53,7 +55,6 @@ DailyPlan 完成或被后续主线取代后，**移入 `DailyPlan/archive/` 子�
 - `DailyReport/2026-08-12-追猎者预判跑跳攻击技术交付.md`：记录中距离助跑预判、离地一次锁点、CharacterMovement 抛物线、真实落地范围结算、近距离斧击兜底，以及构建/自动化/Level0 PIE 技术证据；最终手感待用户验收。
 - `DailyReport/2026-08-11-磁力投掷物破碎冲击感修正.md`：磁力投掷物 P0 当前交付结论；命中当帧冻结继承运动，碎片受控外散并由 Remove On Break 清理，构建/资产/隔离 PIE 与用户核心手感验收均已通过。
 - `DailyPlan/archive/Done-2026-08-10-磁力投掷物碰撞破碎实施计划.md`：已完成的 P0 实施计划，仅供追溯；P1 可再次投掷碎片不在本次授权范围。
-- `DailyPlan/2026-08-10-统一轻受击响应第一版实施计划.md`：玩家与追猎者共享站立轻受击接收、优先级和 Heavy 抢占规则；代码、DataAsset 与 Blueprint 装配及技术验证已完成，当前等待磁力、地刺、空中 Stop 与 Light/Heavy 交叉场景的用户手感验收。
 - `DailyPlan/2026-08-05-Level0常驻物理摆锤实施计划.md`：在 Level0 独立高厅实现一个不接 PCG 的 Chaos 自由摆锤，以硬角限位保留空间安全边界，并通过中线有限补能抵消实测被动损失；自动验证已通过，待用户手感验收。
 - `DailyReport/2026-08-05-Level0常驻物理摆锤实现记录.md`：记录摆锤 C++/资产、36 件独立高厅装配、20 cm/s 补能标定与 20 kg 磁性箱碰撞证据。
 - `DailyPlan/2026-08-06-Level0自动周期冲锤实施计划.md`：在摆锤房旁的三段低天花走廊实现自动周期冲锤；复用 HeavyImpact，只以真实 Chaos 接触驱动受击，当前待用户体验验收。

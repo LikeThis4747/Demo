@@ -1,8 +1,8 @@
 # TASK-20260813-004 制导投射物轻受击收口
 
 - Owner: Codex `/root`
-- Status: active
-- Stage: implementation authorized
+- Status: completed
+- Stage: user accepted and archived
 - Baseline: `79262a743157638d0fd8d1eb6522519b447176c7`
 
 ## Goal
@@ -34,7 +34,7 @@
 
 - 完整 Git 门禁已通过；本地、`origin/main`、远端 `main` 均为基线哈希，工作区起始干净。
 - UE 当前关闭；先完成 C++/构建，再启动编辑器并使用官方 MCP 装配、测试和回读资产。
-- 当日计划：`DOC/DailyPlan/2026-08-13-制导投射物与磁力投掷物轻受击收口.md`。
+- 当日计划：`DOC/DailyPlan/archive/Done-2026-08-13-制导投射物与磁力投掷物轻受击收口.md`。
 
 ## Implementation checkpoint
 
@@ -54,4 +54,11 @@
 - 玩家局部物理首轮参数调整为：满强度冲量 `13000`、保持 `0.11s`、BlendOut `0.22s`；Heavy 参数、CharacterMovement 速度/Transform 均未修改。
 - 修正后 DemoEditor 模块构建成功；CharacterImpact 2 项与 HeavyImpact 5 项仍为 7/7。
 - 标准 PIE 自动命中确认玩家 `upperarm_l` 收到 `13000` 表现冲量，连续三发制导命中均提交 Applied；日志中没有无效 AddImpulse 或碰撞基线恢复警告。
-- 尚待用户现场复测“奔跑跳跃中命中是否不再突进”以及头/胸/左右臂的最终可见程度；任务继续保持 active。
+- 该条是修正完成时的历史检查点；最终用户验收见下节。
+
+## Final acceptance
+
+- 2026-08-13 用户确认本次异常位移修正没有问题。
+- 用户认为局部物理表现仍偏弱，但当前勉强够用；保留 `Slow + 局部物理`，不再扩大本轮物理架构。
+- 新机关接入合同已整理到 `DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。
+- 玩家 Stop 方向动画作为独立 P0 任务继续：`claude/tasks/active/TASK-20260813-005-玩家Stop方向受击动画补齐.md`。

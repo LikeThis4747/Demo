@@ -2,45 +2,23 @@
 
 ## 当前已确认基线
 
-- PCG Population 已在一个 Populator 内完成机关优先、资源后置的分层放置并由用户验收；Normal Seed 12345 代表性结果为机关 36/36、资源 13/13。
-- 玩家磁力轻受击已技术装配为 Slow 0.40 秒、倍率 0.55、无动画、上半身局部物理；地刺未改。
-- 追猎者新增无 Tick 攻击组件：近距斧击 Sweep 18 伤害，中距 220–650 cm 在离地时按玩家速度预判 0.35 秒并一次锁点，Landed 结算 160 cm / 30 伤害；构建、1/1 自动化、资产回读和短 PIE 技术证据通过。
+- PCG Population 已完成机关优先、资源后置的分层放置并由用户验收；Normal Seed 12345 代表结果为机关 36/36、资源 13/13。
+- HeavyImpact 已验收：真实 Chaos 位移、有限 Physics Control、Snapshot 起身、同来源保护；HeavyImpact 5/5。
+- 追猎者近战斧击与预判跑跳 Heavy 攻击已经技术交付并由用户看到击飞效果；不要无依据调整其预测、命中或击飞参数。
+- Light 当前验收：制导/磁力命中玩家为 Slow 0.40 秒、倍率 0.55、无动画、局部物理；磁力命中追猎者为 Stop 0.60 秒、三方向动画、局部物理。异常前冲已修复；局部物理偏弱但用户接受当前版本。
+- 新机关受击接入权威：`DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。Light/Heavy 接收核心不包含机关类型特判。
 
 ## 当前 P0
 
-1. 在同一正式一局中证明动态 Recast 和真实追猎者多层追逐；静态 Level0 有 NavMeshBoundsVolume/RecastNavMesh，但 8 月 12 日保存 PIE 日志仍反复报告 Unable to find RecastNavMesh。
-2. 用户验收追猎者跑跳/近战的预警、可躲性、落空恢复与动画观感。
-3. 用户验收玩家磁力轻受击的胸/左右反馈、恢复和 Light→Heavy 抢占；只允许有限参数 A/B。
-4. 确认并灰盒化最小目标链与首批音效；当前音效需求表、停留式目标建议均未接入。
+1. 补齐玩家 Stop 的 Front/Left/Right 方向受击动画；当前 `DA_PlayerStandingImpact` 三个动画引用为空。计划：`DOC/DailyPlan/2026-08-13-玩家Stop方向受击动画补齐.md`。
+2. 在同一正式一局中证明动态 Recast 和真实追猎者多层追逐。
+3. 用户验收追猎者跑跳/近战的预警、可躲性、落空恢复与动画观感。
+4. 确认并灰盒化最小目标链与首批音效。
 5. 完成首轮 Development 打包与整局回归。
 
-## 边界
+## 受击架构边界
 
-- 本次夜间只读审计未构建、测试、运行 PIE、编译或保存资产。
-- PCG 多 Seed 大样本、极端净距、长期难度曲线和 UI 精修均为非阻塞后续。
+- 新机关 None/Slow/Stop：来源 DataAsset + 稳定事件 ID + 一次 `FStandingImpactRequest`；不得修改 CharacterImpact 核心或 Cast 具体角色。
+- 新机关 Heavy：机关侧实现接触前预测并由真实动态刚体接触；不得在 Heavy 失败后对同一接触降级补 Light。
+- 机关自己的碰撞、销毁、伤害、持续力和破碎不进入角色受击组件。
 - 不恢复全身常驻受控物理、Light/Heavy 大一体化或跨对象磁力租约方案。
-
-<!-- written by Codex nightly at 2026-08-13 01:06 +08:00 -->
-
-<!-- written by shiqiqiwang at 2026-08-13 07:38 UTC -->
-
-## 2026-08-13 追猎者攻击交接
-- 当前追猎者跑跳/近战 Heavy 攻击、击飞和命中后喘息已实现并验证；不要再无依据调整其预测、命中半径或击飞参数。
-- 下一步按用户指令由“设计物理受击交互方案”任务独立开始轻受击代码实现，必须以本次推送后的干净提交为基线，避免修改追猎者攻击与玩家 1000 生命资产。
-
-<!-- written by shiqiqiwang at 2026-08-13 08:10 UTC -->
-
-## 2026-08-13 制导投射物轻受击技术收口
-
-- 制导投射物已接入玩家 StandingImpact：Slow 0.40 秒、速度倍率 0.55、无动画、局部物理；来源支持可调最低表现强度，零 NormalImpulse 也不会变成零反馈。
-- 局部物理新增 head 路由，并使用受限真实命中点；磁力箱子对追猎者仍为 Stop + 三方向动画 + 局部物理。
-- 构建成功，CharacterImpact + HeavyImpact 自动化 7/7；SIE 真实命中已覆盖 head、upperarm_r 与零冲量保底。
-- 技术接线完成但观感未验收；只允许现场有限参数确认，失败则转 Stop + 受击动画，不再扩共享身体、预测或租约系统。
-
-<!-- written by shiqiqiwang at 2026-08-13 08:43 UTC -->
-
-## 2026-08-13 制导轻受击现场反馈修正
-
-- 第一次制导 Light 命中后，弹体只忽略 Pawn 并继续碰撞环境；Light 窗口内 Mesh 暂时忽略 PhysicsBody，退出时完整恢复碰撞基线。
-- 玩家物理表现参数调整为 13000 / 0.11s Hold / 0.22s BlendOut；CharacterImpact + HeavyImpact 自动化 7/7，标准 PIE 连续命中 Applied 且无相关警告。
-- 尚待用户复测奔跑跳跃异常前冲与头部可见度；不得在此之前继续扩大物理架构或宣称验收完成。

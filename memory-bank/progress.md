@@ -63,3 +63,15 @@
 - 已实现制导弹首次 Light 结算后的 Pawn 清场，以及 Light Mesh 对 PhysicsBody 的临时隔离和完整碰撞基线恢复。
 - 已把玩家局部物理满强度冲量调至 13000，Hold 调至 0.11 秒，BlendOut 调至 0.22 秒。
 - DemoEditor 构建成功；CharacterImpact + HeavyImpact 7/7；标准 PIE 技术证据通过。玩家奔跑跳跃手感与最终部位可见度仍待验收。
+
+<!-- written by shiqiqiwang at 2026-08-13 09:22 UTC -->
+
+
+<!-- written by Codex at 2026-08-13 17:22 +08:00 -->
+
+## 2026-08-13 轻受击最终验收与接入合同
+
+- [x] 用户确认制导轻受击异常前冲修复无问题；保留 Slow + 局部物理。局部物理偏弱但当前可用，本轮停止扩写。
+- [x] 整理新机关统一接入指南：StandingImpact 负责 None/Slow/Stop，HeavyImpact 负责接触前准备与真实击飞；核心组件无机关类型特判。
+- [x] 归档 8 月 10 日、12 日和 13 日已完成的 Light 调研/实施计划与制导收口任务。
+- [ ] P0：补齐玩家 Stop 的正面/左侧/右侧方向动画；当前 `DA_PlayerStandingImpact` 三个动画引用为空。
