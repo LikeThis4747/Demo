@@ -1,4 +1,5 @@
 # Latest Error
 
-- 当前无未解决的夜间 Git 备份错误；2026-08-13 主快照已推送并核验内部工蜂。
-- 功能侧仍需白天复现：Level0 静态存在 Recast Actor，但 2026-08-12 保存 PIE 日志反复报告 `Unable to find RecastNavMesh`。
+- 当前无未解决的夜间 Git 备份错误；2026-08-14 快照前 origin 已核验为内部工蜂。
+- 本夜资产审计未执行：本地 UE MCP `pong=false`，官方 UE5.8 MCP 工具未暴露。
+- 功能侧 P0：仍缺同一正式一局动态 Recast 与真实追猎者跨层追逐证据；最新 NavigationOperationGate 成功不替代该验收。
