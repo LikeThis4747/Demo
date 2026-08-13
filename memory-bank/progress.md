@@ -85,3 +85,12 @@
 - [x] 楼梯斜坡或玩家存在超过一步高度差时，追猎者不再发动跑跳下砸；近身挥斧、导航上楼和平层下砸保持原行为。
 - [x] 仅修改 `PursuerAIController.cpp`；DemoEditor Win64 Development 标准构建成功，用户 PIE 验收通过。
 - [x] 功能提交 `74a4a62568a8a83f91597ced9c57096bebe28855` 已推送内部工蜂并完成远端哈希核验。
+
+<!-- written by shiqiqiwang at 2026-08-13 13:40 UTC -->
+
+## 2026-08-13 刺轮 Level0 P0
+
+- [x] 新增最小样条驱动刺轮 Actor 与调参 DataAsset，支持任意点数的 1～3 格路线模板、逐实例确定性变化、闭环循环或开放往返。
+- [x] 完成 Blueprint/StandingImpact Profile/默认调参资产和 Level0 两格实例；玩家 Stop + 20 伤害、追猎者 None、局部防重复命中技术验证通过。
+- [x] Demo 项目模块 UHT、编译和链接通过；Blueprint Warning-as-error 编译、官方资产回读、移动与玩家接触 PIE 通过。
+- [ ] 用户验收路线覆盖、速度、危险性与穿越手感；Population/PCG 跨格投放和与其他机关组合不在本轮。

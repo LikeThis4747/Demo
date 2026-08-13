@@ -89,3 +89,12 @@
 - 追猎者处于楼梯斜坡，或与玩家存在超过一步的高度差时，禁止启动跑跳下砸；近身挥斧仍优先，距离不足时继续沿导航上楼，平层下砸不变。
 - 仅修改 `Source/Demo/Private/AI/PursuerAIController.cpp`；DemoEditor Win64 Development 标准构建成功，用户 PIE 验收通过。
 - 功能提交 `74a4a62568a8a83f91597ced9c57096bebe28855` 已推送内部工蜂，远端 `main` 与本地提交一致。
+
+<!-- written by shiqiqiwang at 2026-08-13 13:40 UTC -->
+
+## 2026-08-13 — 刺轮 Level0 技术初版
+
+- 新增项目自有刺轮 C++ Actor 与调参 DataAsset；路线点数不设固定值，模板覆盖 1～3 格，并按实例 Seed 选择模板、镜像、方向和起始相位；开放路线往返，闭合路线循环。
+- 新建刺轮 Blueprint、默认调参和 StandingImpact Profile，在 Level0 放置一个两格实例；只读复用第三方圆锯 Mesh/音效，未修改第三方资产、PCG、玩家、追猎者或既有机关。
+- 玩家接触为 Stop + 20 伤害，离开再进入且超过 1.0 秒局部门禁后才可重击；追猎者返回 Ignored、伤害 0。玩家受击动画由独立任务负责。
+- Demo 模块 UHT/编译/链接、蓝图 Warning-as-error 编译、官方资产回读与 PIE 通过；末轮将移动改为扫掠检测后再次编译、链接并命中验证。用户路线压力和穿越手感仍待验收。
