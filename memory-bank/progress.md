@@ -75,3 +75,13 @@
 - [x] 整理新机关统一接入指南：StandingImpact 负责 None/Slow/Stop，HeavyImpact 负责接触前准备与真实击飞；核心组件无机关类型特判。
 - [x] 归档 8 月 10 日、12 日和 13 日已完成的 Light 调研/实施计划与制导收口任务。
 - [ ] P0：补齐玩家 Stop 的正面/左侧/右侧方向动画；当前 `DA_PlayerStandingImpact` 三个动画引用为空。
+
+<!-- written by shiqiqiwang at 2026-08-13 12:27 UTC -->
+
+<!-- written by Codex at 2026-08-13 20:27 +08:00 -->
+
+## 2026-08-13 追猎者楼梯持续追逐修复
+
+- [x] 楼梯斜坡或玩家存在超过一步高度差时，追猎者不再发动跑跳下砸；近身挥斧、导航上楼和平层下砸保持原行为。
+- [x] 仅修改 `PursuerAIController.cpp`；DemoEditor Win64 Development 标准构建成功，用户 PIE 验收通过。
+- [x] 功能提交 `74a4a62568a8a83f91597ced9c57096bebe28855` 已推送内部工蜂并完成远端哈希核验。

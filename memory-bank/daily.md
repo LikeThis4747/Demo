@@ -79,3 +79,13 @@
 - 官方 MCP 回读当前来源映射：制导对玩家 Slow、磁力对玩家 Slow/对追猎者 Stop、地刺对玩家 Stop/对追猎者 Slow；玩家 StandingImpact 三方向动画仍为空。
 - 静态审计确认 CharacterImpact/HeavyImpact 核心没有磁力、制导、地刺、摆锤或冲锤类型依赖；新机关接入合同已固化到 `DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。
 - 已归档完成的轻受击调研、融合计划与制导收口任务；新建 P0 玩家 Stop 方向动画计划，第一轮只做动画副本/重定向和 DataAsset 装配，不改受击核心。
+
+<!-- written by shiqiqiwang at 2026-08-13 12:27 UTC -->
+
+<!-- written by Codex at 2026-08-13 20:27 +08:00 -->
+
+## 2026-08-13 — 追猎者楼梯攻击最小修复
+
+- 追猎者处于楼梯斜坡，或与玩家存在超过一步的高度差时，禁止启动跑跳下砸；近身挥斧仍优先，距离不足时继续沿导航上楼，平层下砸不变。
+- 仅修改 `Source/Demo/Private/AI/PursuerAIController.cpp`；DemoEditor Win64 Development 标准构建成功，用户 PIE 验收通过。
+- 功能提交 `74a4a62568a8a83f91597ced9c57096bebe28855` 已推送内部工蜂，远端 `main` 与本地提交一致。
