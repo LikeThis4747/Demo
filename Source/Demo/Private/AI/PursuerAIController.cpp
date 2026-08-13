@@ -2,7 +2,7 @@
 
 /**
  * @file PursuerAIController.cpp
- * 职责：实现追猎者的定时决策——感知、追击、中距离预判跑跳与近距离斧击选择。
+ * 职责：实现追猎者的定时决策——持续追击、中距离预判跑跳与近距离斧击选择。
  * 边界：不拥有攻击阶段、冷却、动画、位移或命中；这些统一交给 UPursuerAttackComponent。
  */
 
@@ -67,16 +67,15 @@ void APursuerAIController::OnPossess(APawn* InPawn)
 		Config->ThinkInterval, /*bLoop=*/true, /*FirstDelay=*/0.0f);
 }
 
-/** 失去占有前清理全部 Timer 与标记，避免悬挂回调访问失效对象。 */
+/** 失去占有前清理思考 Timer，避免悬挂回调访问失效对象。 */
 void APursuerAIController::OnUnPossess()
 {
 	GetWorldTimerManager().ClearTimer(ThinkTimerHandle);
-	bIsChasing = false;
 
 	Super::OnUnPossess();
 }
 
-/** 状态机核心：按距离（察觉/丢失双阈值 + 可选视线）决定追击、攻击或待机。 */
+/** 状态机核心：只要玩家有效就持续追击，并按距离选择移动或攻击。 */
 void APursuerAIController::Think()
 {
 	if (!Pursuer.IsValid() || !Config.IsValid())
@@ -109,24 +108,6 @@ void APursuerAIController::Think()
 	}
 
 	const float Distance = FVector::Dist(Pursuer->GetActorLocation(), PlayerPawn->GetActorLocation());
-
-	// 察觉/丢失双阈值：未追击时需进入 SenseRadius（且视线通过）才开始；已追击时超过 LoseSightRadius 才放弃。
-	if (!bIsChasing)
-	{
-		const bool bInSenseRange = Distance <= Config->SenseRadius;
-		const bool bCanSee = !Config->bUseLineOfSight || LineOfSightTo(PlayerPawn);
-		bIsChasing = bInSenseRange && bCanSee;
-	}
-	else if (Distance > Config->LoseSightRadius)
-	{
-		bIsChasing = false;
-		StopMovement();
-	}
-
-	if (!bIsChasing)
-	{
-		return;
-	}
 
 	// 攻击组件忙碌时不重复 StopMovement，避免空中 Launch 的水平速度被路径系统反复清理。
 	if (AttackComponent->IsBusy())
