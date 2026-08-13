@@ -108,6 +108,14 @@ void APursuerAIController::Think()
 	}
 
 	const float Distance = FVector::Dist(Pursuer->GetActorLocation(), PlayerPawn->GetActorLocation());
+	constexpr float FlatFloorNormalZ = 0.99f;
+	const UCharacterMovementComponent* Movement = Pursuer->GetCharacterMovement();
+	const bool bOnInclinedFloor = IsValid(Movement)
+		&& Movement->CurrentFloor.IsWalkableFloor()
+		&& Movement->CurrentFloor.HitResult.ImpactNormal.Z < FlatFloorNormalZ;
+	const bool bNeedsVerticalTraversal = IsValid(Movement)
+		&& FMath::Abs(PlayerPawn->GetActorLocation().Z - Pursuer->GetActorLocation().Z) > Movement->MaxStepHeight;
+	const bool bCanStartJumpSmash = !bOnInclinedFloor && !bNeedsVerticalTraversal;
 
 	// 攻击组件忙碌时不重复 StopMovement，避免空中 Launch 的水平速度被路径系统反复清理。
 	if (AttackComponent->IsBusy())
@@ -127,6 +135,7 @@ void APursuerAIController::Think()
 
 	// 中距离用一次性预测跑跳封锁玩家前路；落点锁定后空中不再持续追踪。
 	if (!bAttackSuppressed
+		&& bCanStartJumpSmash
 		&& Distance >= Config->JumpAttackMinRange
 		&& Distance <= Config->JumpAttackMaxRange
 		&& AttackComponent->TryStartJumpSmash(PlayerPawn))
