@@ -13,8 +13,11 @@
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "Data/Hazards/ThrustGuidedHazardTuningData.h"
+#include "Data/Physics/CharacterImpactSourceProfile.h"
 #include "Engine/World.h"
+#include "Interfaces/CharacterImpactReceiver.h"
 #include "Interfaces/HeavyImpactReceiver.h"
+#include "Physics/CharacterImpactTypes.h"
 #include "Physics/HeavyImpactTypes.h"
 #include "PhysicsEngine/BodyInstance.h"
 #include "TimerManager.h"
@@ -759,6 +762,83 @@ float AThrustGuidedHazardProjectile::CalculateCapsuleRaySurfaceDistance(
 	return SegmentHalfLength * AxisDot + FMath::Sqrt(SphereDiscriminant);
 }
 
+/** 首次有效角色阻挡复用弹体的 LaunchId 提交一次 Light；强度有策划保底但保留真实冲量上浮。 */
+void AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
+	AActor* ContactOwner,
+	const FVector& ContactLinearVelocity,
+	const FVector& NormalImpulse,
+	const FHitResult& Hit)
+{
+	if (!IsValid(ContactOwner)
+		|| !IsValid(RuntimeTuningData)
+		|| !IsValid(RuntimeTuningData->StandingImpactSourceProfile)
+		|| !LaunchId.IsValid()
+		|| !ContactOwner->GetClass()->ImplementsInterface(
+			UCharacterImpactReceiver::StaticClass()))
+	{
+		return;
+	}
+
+	const FVector SafeNormalImpulse =
+		NormalImpulse.ContainsNaN() ? FVector::ZeroVector : NormalImpulse;
+	const float ImpulseMagnitude = SafeNormalImpulse.Size();
+	const float MappedStrength =
+		RuntimeTuningData->StandingImpactSourceProfile->NormalizePhysicalImpulse(
+			ImpulseMagnitude);
+	const float ResponseStrength = FMath::Clamp(
+		FMath::Max(
+			MappedStrength,
+			RuntimeTuningData->MinimumStandingImpactStrength),
+		0.0f,
+		1.0f);
+
+	FVector PushDirection = (-Hit.ImpactNormal).GetSafeNormal();
+	const FVector TowardTarget =
+		(ContactOwner->GetActorLocation() - ProjectileBody->GetComponentLocation()).GetSafeNormal();
+	if (PushDirection.IsNearlyZero())
+	{
+		PushDirection = ContactLinearVelocity.GetSafeNormal();
+	}
+	if (PushDirection.IsNearlyZero())
+	{
+		PushDirection = PendingLaunchVelocity.GetSafeNormal();
+	}
+	if (!TowardTarget.IsNearlyZero()
+		&& FVector::DotProduct(PushDirection, TowardTarget) < 0.0f)
+	{
+		PushDirection *= -1.0f;
+	}
+	if (PushDirection.IsNearlyZero())
+	{
+		UE_LOG(LogThrustGuidedHazardProjectile, Warning,
+			TEXT("LaunchId=%s could not resolve a StandingImpact direction for %s."),
+			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
+			*GetNameSafe(ContactOwner));
+		return;
+	}
+
+	FStandingImpactRequest Request;
+	Request.ImpactId = LaunchId;
+	Request.SourceActor = this;
+	Request.SourceComponent = ProjectileBody;
+	Request.SourceProfile = RuntimeTuningData->StandingImpactSourceProfile;
+	Request.WorldDirection = PushDirection;
+	Request.ImpactPoint = Hit.ImpactPoint;
+	Request.NormalizedStrength = ResponseStrength;
+	Request.RawNormalImpulse = SafeNormalImpulse;
+
+	const EStandingImpactSubmitResult Result =
+		ICharacterImpactReceiver::Execute_SubmitStandingImpact(ContactOwner, Request);
+	UE_LOG(LogThrustGuidedHazardProjectile, Log,
+		TEXT("LaunchId=%s submitted StandingImpact to %s: Result=%d RawImpulse=%.1f Mapped=%.2f Applied=%.2f."),
+		*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
+		*GetNameSafe(ContactOwner),
+		static_cast<int32>(Result),
+		ImpulseMagnitude,
+		MappedStrength,
+		ResponseStrength);
+}
+
 /** 每次接触都记录；首个有效阻挡只切阶段、阻尼和表现，不接管速度。 */
 void AThrustGuidedHazardProjectile::HandleProjectileHit(
 	UPrimitiveComponent* /*HitComponent*/,
@@ -816,6 +896,12 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 			*GetNameSafe(ContactOwner));
 	}
+
+	TrySubmitStandingImpact(
+		ContactOwner,
+		LinearVelocity,
+		NormalImpulse,
+		Hit);
 
 	ReceiveFirstBlockingImpact(
 		ContactOwner,

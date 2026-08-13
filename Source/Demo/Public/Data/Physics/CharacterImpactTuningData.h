@@ -70,6 +70,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Physical Presentation")
 	FName RightArmImpulseBone = NAME_None;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Physical Presentation")
+	FName HeadImpulseBone = TEXT("head");
+
 	/**
 	 * UE 官方 Physical Animation 的局部角向驱动参数。
 	 * Chaos 将 MaxAngularForce=0 解释为不限制；本项目要求有限正值，避免马达把上半身焊成刚体墙。
@@ -80,6 +83,14 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Physical Presentation",
 		meta = (ClampMin = "0.0"))
 	float PhysicalImpulseAtFullStrength = 0.0f;
+
+	/**
+	 * 从受力 Body 中心到实际施力点允许的最大距离。
+	 * 零值退回骨骼中心；有限力臂让侧面命中可见，同时避免 Capsule 命中点制造过大扭矩。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Physical Presentation",
+		meta = (ClampMin = "0.0", ClampMax = "100.0", Units = "cm"))
+	float MaximumPhysicalImpulseLeverArm = 30.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Physical Presentation",
 		meta = (ClampMin = "0.0", ClampMax = "0.25", Units = "s"))

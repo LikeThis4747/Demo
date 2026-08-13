@@ -13,6 +13,8 @@
 
 #include "ThrustGuidedHazardTuningData.generated.h"
 
+class UCharacterImpactSourceProfile;
+
 /** 壁挂式一次性预判抛射机关的唯一运行时调参来源。 */
 UCLASS(BlueprintType)
 class DEMO_API UThrustGuidedHazardTuningData final : public UDataAsset
@@ -120,6 +122,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|弹体",
 		meta = (ClampMin = "0.0", ClampMax = "10.0", UIMin = "0.0", UIMax = "2.0"))
 	float PostImpactAngularDamping = 0.15f;
+
+	/** 第一次有效角色阻挡命中使用的可选 StandingImpact 来源配置；为空时弹体只保留原有碰撞行为。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|轻受击")
+	TObjectPtr<UCharacterImpactSourceProfile> StandingImpactSourceProfile = nullptr;
+
+	/**
+	 * 制导弹体作为已创作 Light 攻击时的最低响应强度。
+	 * NormalImpulse 可用时仍可向上增加；该值避免扫掠命中返回零冲量时完全没有反馈。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|轻受击",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinimumStandingImpactStrength = 0.8f;
 
 	/**
 	 * 是否启用现有 HeavyImpact 提前准备链；首轮默认关闭以独立验收弹道。

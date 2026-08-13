@@ -87,6 +87,7 @@ namespace ZeroEscape::Physics::Tests
 		Profile->PursuerReaction.bPlayReactionAnimation = true;
 		Profile->MinimumPhysicalImpulse = 100.0f;
 		Profile->FullStrengthPhysicalImpulse = 300.0f;
+		Profile->MinimumResponseStrength = 0.6f;
 
 		TestTrue(
 			TEXT("Player category must select the player mapping"),
@@ -101,14 +102,20 @@ namespace ZeroEscape::Physics::Tests
 
 		TestEqual(TEXT("Impulse below the source threshold must normalize to zero"),
 			Profile->NormalizePhysicalImpulse(-25.0f), 0.0f);
-		TestEqual(TEXT("Impulse at the source threshold must normalize to zero"),
-			Profile->NormalizePhysicalImpulse(100.0f), 0.0f);
-		TestEqual(TEXT("Impulse halfway through the source range must normalize to one half"),
-			Profile->NormalizePhysicalImpulse(200.0f), 0.5f);
+		TestEqual(TEXT("Impulse immediately below the source threshold must remain zero"),
+			Profile->NormalizePhysicalImpulse(99.0f), 0.0f);
+		TestTrue(TEXT("Impulse at the source threshold must receive the authored response floor"),
+			FMath::IsNearlyEqual(Profile->NormalizePhysicalImpulse(100.0f), 0.6f));
+		TestTrue(TEXT("Impulse halfway through the source range must interpolate above the floor"),
+			FMath::IsNearlyEqual(Profile->NormalizePhysicalImpulse(200.0f), 0.8f));
 		TestEqual(TEXT("Impulse at full strength must normalize to one"),
 			Profile->NormalizePhysicalImpulse(300.0f), 1.0f);
 		TestEqual(TEXT("Impulse above full strength must remain clamped to one"),
 			Profile->NormalizePhysicalImpulse(1000.0f), 1.0f);
+
+		Profile->MinimumResponseStrength = 1.1f;
+		TestFalse(TEXT("A response floor above one must be rejected"), Profile->IsConfigured(Error));
+		Profile->MinimumResponseStrength = 0.6f;
 
 		Profile->FullStrengthPhysicalImpulse = Profile->MinimumPhysicalImpulse;
 		TestFalse(TEXT("A collapsed physical impulse range must be rejected"), Profile->IsConfigured(Error));

@@ -347,7 +347,11 @@ bool UCharacterImpactResponseComponent::ResolvePhysicalHit(
 	{
 		return ClosestBone == ParentBone || Mesh->BoneIsChildOf(ClosestBone, ParentBone);
 	};
-	if (IsBoneOrChild(Tuning->LeftArmImpulseBone))
+	if (IsBoneOrChild(Tuning->HeadImpulseBone))
+	{
+		OutImpulseBody = Tuning->HeadImpulseBone;
+	}
+	else if (IsBoneOrChild(Tuning->LeftArmImpulseBone))
 	{
 		OutImpulseBody = Tuning->LeftArmImpulseBone;
 	}
@@ -364,7 +368,15 @@ bool UCharacterImpactResponseComponent::ResolvePhysicalHit(
 		return false;
 	}
 
-	OutWorldPoint = Mesh->GetBoneLocation(OutImpulseBody);
+	const FVector BodyCenter = Mesh->GetBoneLocation(OutImpulseBody);
+	if (BodyCenter.ContainsNaN())
+	{
+		return false;
+	}
+
+	const FVector RequestedOffset = Request.ImpactPoint - BodyCenter;
+	OutWorldPoint = BodyCenter + RequestedOffset.GetClampedToMaxSize(
+		Tuning->MaximumPhysicalImpulseLeverArm);
 	return !OutWorldPoint.ContainsNaN();
 }
 
@@ -456,6 +468,13 @@ void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
 
 	LastPhysicalImpactTimeSeconds = Now;
 	Mesh->AddImpulseAtLocation(Direction * Magnitude, AppliedPoint, ImpulseBody);
+	UE_LOG(LogCharacterImpact, Log,
+		TEXT("%s applied Light physical reaction: Body=%s Strength=%.2f Impulse=%.1f Point=%s."),
+		*GetNameSafe(GetOwner()),
+		*ImpulseBody.ToString(),
+		FMath::Clamp(Request.NormalizedStrength, 0.0f, 1.0f),
+		Magnitude,
+		*AppliedPoint.ToCompactString());
 }
 
 void UCharacterImpactResponseComponent::StopPhysicalReaction()

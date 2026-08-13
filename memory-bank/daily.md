@@ -49,3 +49,12 @@
 - 保留跑跳起跳前对移动玩家的一次性落点预测；成功 Heavy 后等待玩家完整恢复，再额外停顿 0.75 秒，并从恢复时开始计算 5 秒攻击冷却（均由 DA_Pursuer 调整）。
 - 玩家 BP_ZeroEscapeCharacter 最大生命值调整为 1000；修正 AttackImpactBody 停用时先退出物理模拟再关闭碰撞，避免 Invalid Simulate Options 警告。
 - DemoEditor Win64 Development 构建成功；PursuerAttack 与 HeavyImpact 自动化 6/6 通过、0 警告。用户已在 PIE 看到真实击飞效果。
+
+<!-- written by shiqiqiwang at 2026-08-13 08:10 UTC -->
+
+## 2026-08-13 — 制导投射物与磁力轻受击收口
+
+- 制导投射物首次有效角色阻挡命中接入 StandingImpact：玩家 Slow 0.40 秒、倍率 0.55、无动画、局部物理；新增来源强度保底，NormalImpulse 为 0 时仍有策划强度。
+- 局部物理增加 head，并将实际受力点限制在命中 Body 附近；磁力箱子保持追猎者 Stop + 三方向动画，仅提高最低可见强度。
+- DemoEditor 构建成功；CharacterImpact 2 项和 HeavyImpact 5 项共 7/7 通过。SIE 真实制导命中返回 Applied，覆盖 head、upperarm_r 与零冲量保底。
+- 未修改追猎者攻击、DA_Pursuer、BP_ZeroEscapeCharacter、HeavyImpact、磁力事务、地刺、ABP、Level0 或 Config；用户观感验收仍待完成。

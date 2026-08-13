@@ -83,7 +83,8 @@ bool UCharacterImpactTuningData::IsPhysicalReactionConfigured(
 		UpperBodyRootBone,
 		TorsoImpulseBone,
 		LeftArmImpulseBone,
-		RightArmImpulseBone
+		RightArmImpulseBone,
+		HeadImpulseBone
 	};
 	for (const FName BodyName : RequiredBodies)
 	{
@@ -103,7 +104,8 @@ bool UCharacterImpactTuningData::IsPhysicalReactionConfigured(
 	};
 	if (!IsRootOrChild(TorsoImpulseBone)
 		|| !IsRootOrChild(LeftArmImpulseBone)
-		|| !IsRootOrChild(RightArmImpulseBone))
+		|| !IsRootOrChild(RightArmImpulseBone)
+		|| !IsRootOrChild(HeadImpulseBone))
 	{
 		OutError = TEXT("All physical impulse bodies must belong to UpperBodyRootBone.");
 		return false;
@@ -122,6 +124,9 @@ bool UCharacterImpactTuningData::IsPhysicalReactionConfigured(
 		|| Settings.MaxAngularForce <= 0.0f
 		|| !FMath::IsFinite(PhysicalImpulseAtFullStrength)
 		|| PhysicalImpulseAtFullStrength <= 0.0f
+		|| !FMath::IsFinite(MaximumPhysicalImpulseLeverArm)
+		|| MaximumPhysicalImpulseLeverArm < 0.0f
+		|| MaximumPhysicalImpulseLeverArm > 100.0f
 		|| !FMath::IsFinite(PhysicalHoldSeconds)
 		|| PhysicalHoldSeconds < MontageBlendInSeconds
 		|| PhysicalHoldSeconds > 0.25f

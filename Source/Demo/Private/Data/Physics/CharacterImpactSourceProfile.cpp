@@ -12,9 +12,15 @@ const FStandingImpactReactionSpec& UCharacterImpactSourceProfile::GetReaction(
 
 float UCharacterImpactSourceProfile::NormalizePhysicalImpulse(const float ImpulseMagnitude) const
 {
+	if (!FMath::IsFinite(ImpulseMagnitude)
+		|| ImpulseMagnitude < MinimumPhysicalImpulse)
+	{
+		return 0.0f;
+	}
+
 	return FMath::GetMappedRangeValueClamped(
 		FVector2D(MinimumPhysicalImpulse, FullStrengthPhysicalImpulse),
-		FVector2D(0.0f, 1.0f),
+		FVector2D(MinimumResponseStrength, 1.0f),
 		ImpulseMagnitude);
 }
 
@@ -28,10 +34,13 @@ bool UCharacterImpactSourceProfile::IsConfigured(FString& OutError) const
 	}
 	if (!FMath::IsFinite(MinimumPhysicalImpulse)
 		|| !FMath::IsFinite(FullStrengthPhysicalImpulse)
+		|| !FMath::IsFinite(MinimumResponseStrength)
 		|| MinimumPhysicalImpulse < 0.0f
-		|| FullStrengthPhysicalImpulse <= MinimumPhysicalImpulse)
+		|| FullStrengthPhysicalImpulse <= MinimumPhysicalImpulse
+		|| MinimumResponseStrength < 0.0f
+		|| MinimumResponseStrength > 1.0f)
 	{
-		OutError = TEXT("MinimumPhysicalImpulse must be finite and non-negative; FullStrengthPhysicalImpulse must be larger.");
+		OutError = TEXT("Physical impulse range and MinimumResponseStrength must be finite; the range must increase and strength must be within 0..1.");
 		return false;
 	}
 	return true;

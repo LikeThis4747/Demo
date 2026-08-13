@@ -34,6 +34,14 @@ public:
 		meta = (ClampMin = "0.0"))
 	float FullStrengthPhysicalImpulse = 10000.0f;
 
+	/**
+	 * 达到 MinimumPhysicalImpulse 的有效攻击至少输出该归一化强度。
+	 * 这是项目的策划表现保底，不代表 Chaos 的真实动量比例；零值保持旧线性映射。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Standing Impact|Mapping",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float MinimumResponseStrength = 0.0f;
+
 	const FStandingImpactReactionSpec& GetReaction(EImpactReceiverCategory Category) const;
 	float NormalizePhysicalImpulse(float ImpulseMagnitude) const;
 	bool IsConfigured(FString& OutError) const;

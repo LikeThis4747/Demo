@@ -8,6 +8,8 @@
 
 #include "Data/Hazards/ThrustGuidedHazardTuningData.h"
 
+#include "Data/Physics/CharacterImpactSourceProfile.h"
+
 /** 完整校验当前权威字段；删除旧推进字段后不保留兼容兜底。 */
 bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 {
@@ -39,7 +41,8 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 		|| !FMath::IsFinite(ProjectileLifetimeSeconds)
 		|| !FMath::IsFinite(BallisticAngularDamping)
 		|| !FMath::IsFinite(PostImpactLinearDamping)
-		|| !FMath::IsFinite(PostImpactAngularDamping))
+		|| !FMath::IsFinite(PostImpactAngularDamping)
+		|| !FMath::IsFinite(MinimumStandingImpactStrength))
 	{
 		return Reject(TEXT("预判抛射机关配置包含非有限基础数值。"));
 	}
@@ -138,6 +141,29 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 		|| PostImpactAngularDamping < 0.0f || PostImpactAngularDamping > 10.0f)
 	{
 		return Reject(TEXT("弹道角阻尼与首碰后阻尼都必须位于 0~10。"));
+	}
+
+	if (MinimumStandingImpactStrength < 0.0f
+		|| MinimumStandingImpactStrength > 1.0f)
+	{
+		return Reject(TEXT("MinimumStandingImpactStrength 必须位于 0~1。"));
+	}
+
+	if (IsValid(StandingImpactSourceProfile))
+	{
+		if (MinimumStandingImpactStrength <= 0.0f)
+		{
+			return Reject(TEXT("启用 StandingImpactSourceProfile 时，MinimumStandingImpactStrength 必须大于零。"));
+		}
+
+		FString ProfileError;
+		if (!StandingImpactSourceProfile->IsConfigured(ProfileError))
+		{
+			OutError = FString::Printf(
+				TEXT("StandingImpactSourceProfile 配置无效：%s"),
+				*ProfileError);
+			return false;
+		}
 	}
 
 	if (!bEnableHeavyImpactPreparation)

@@ -103,6 +103,13 @@ private:
 	/** 关闭碰撞/模拟和全部本地能力并记录明确错误。 */
 	void DisableProjectile(const FString& Reason);
 
+	/** 第一次有效角色阻挡命中复用 LaunchId 提交现有 StandingImpact；不改变弹体物理。 */
+	void TrySubmitStandingImpact(
+		AActor* ContactOwner,
+		const FVector& ContactLinearVelocity,
+		const FVector& NormalImpulse,
+		const FHitResult& Hit);
+
 	/** 记录每个 Chaos Hit；首次有效阻挡只切阶段/阻尼/表现，不改写速度。 */
 	UFUNCTION()
 	void HandleProjectileHit(
