@@ -2,7 +2,7 @@
 
 /**
  * @file PursuerAttackComponent.cpp
- * 职责：实现近战 Sweep、一次性预判跑跳、抛物线位移、落地范围命中、伤害/StandingImpact 与恢复。
+ * 职责：实现近战 Sweep、一次性预判跑跳、抛物线位移、真实 Heavy 攻击刚体、伤害、击飞与命中后喘息。
  * 边界：不持续修正空中方向、不伪造 Heavy 接触、不依赖斧头组件名或动画长度决定玩法状态。
  */
 
@@ -13,12 +13,14 @@
 #include "Animation/AnimMontage.h"
 #include "Characters/PursuerCharacter.h"
 #include "Components/CapsuleComponent.h"
-#include "Data/Physics/CharacterImpactSourceProfile.h"
+#include "Components/Physics/HeavyImpactResponseComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Components/SphereComponent.h"
 #include "Data/PursuerConfig.h"
 #include "Engine/OverlapResult.h"
 #include "Engine/World.h"
 #include "GameFramework/CharacterMovementComponent.h"
-#include "Interfaces/CharacterImpactReceiver.h"
+#include "Interfaces/HeavyImpactReceiver.h"
 #include "Kismet/GameplayStatics.h"
 #include "TimerManager.h"
 
@@ -43,10 +45,12 @@ void UPursuerAttackComponent::Configure(
 	CancelAttack();
 	Character = InCharacter;
 	Config = InConfig;
+	AttackImpactBody = IsValid(InCharacter) ? InCharacter->GetAttackImpactBody() : nullptr;
 
-	if (!Character.IsValid() || !Config.IsValid())
+	if (!Character.IsValid() || !Config.IsValid() || !AttackImpactBody.IsValid())
 	{
-		UE_LOG(LogPursuerAttack, Error, TEXT("PursuerAttack Configure 缺少有效角色或 Config，攻击保持禁用。"));
+		UE_LOG(LogPursuerAttack, Error,
+			TEXT("PursuerAttack Configure 缺少有效角色、Config 或 AttackImpactBody，攻击保持禁用。"));
 		return;
 	}
 
@@ -131,9 +135,15 @@ void UPursuerAttackComponent::CancelAttack(const float BlendOutSeconds)
 	}
 
 	ActiveMontage = nullptr;
+	UnbindTargetHeavyImpact();
+	DeactivateAttackImpactBody();
 	ActiveTarget.Reset();
 	LockedImpactPoint = FVector::ZeroVector;
 	ActiveImpactId.Invalidate();
+	PendingDamage = 0.0f;
+	PendingKnockbackVelocity = FVector::ZeroVector;
+	PendingMissRecoverySeconds = 0.0f;
+	bHeavyCommitQueued = false;
 	Phase = EPursuerAttackPhase::Idle;
 }
 
@@ -184,6 +194,42 @@ bool UPursuerAttackComponent::CalculateBallisticLaunchVelocity(
 	OutVelocity = Delta / FlightSeconds;
 	OutVelocity.Z = (Delta.Z - 0.5f * GravityZ * FMath::Square(FlightSeconds)) / FlightSeconds;
 	return !OutVelocity.ContainsNaN();
+}
+
+/** 方向只取水平面；目标与来源重合时退回角色前向，避免产生零向量击飞。 */
+FVector UPursuerAttackComponent::ComputeKnockbackVelocity(
+	const FVector& SourceLocation,
+	const FVector& TargetLocation,
+	const FVector& SourceForward,
+	const float HorizontalVelocity,
+	const float UpwardVelocity)
+{
+	FVector HorizontalDirection = TargetLocation - SourceLocation;
+	HorizontalDirection.Z = 0.0f;
+	if (!HorizontalDirection.Normalize())
+	{
+		HorizontalDirection = SourceForward;
+		HorizontalDirection.Z = 0.0f;
+		HorizontalDirection = HorizontalDirection.GetSafeNormal(SMALL_NUMBER, FVector::ForwardVector);
+	}
+
+	return HorizontalDirection * FMath::Max(0.0f, HorizontalVelocity)
+		+ FVector::UpVector * FMath::Max(0.0f, UpwardVelocity);
+}
+
+/** 保留约 45 cm 的目标身体余量，再叠加球半径和速度乘 ETA，避免同帧提前接触。 */
+FVector UPursuerAttackComponent::ComputeImpactBodyStart(
+	const FVector& TargetPoint,
+	const FVector& AttackDirection,
+	const float BodyRadius,
+	const float BodySpeed,
+	const float ContactEtaSeconds)
+{
+	const FVector SafeDirection = AttackDirection.GetSafeNormal(SMALL_NUMBER, FVector::ForwardVector);
+	const float StartDistance = FMath::Max(0.0f, BodyRadius)
+		+ 45.0f
+		+ FMath::Max(0.0f, BodySpeed) * FMath::Max(0.0f, ContactEtaSeconds);
+	return TargetPoint - SafeDirection * StartDistance;
 }
 
 /** 世界销毁前解除动态委托，并停止组件自己的 Montage/Timer。 */
@@ -291,7 +337,17 @@ void UPursuerAttackComponent::ExecuteCloseHit()
 		&& IsActiveTargetInCloseSweep(ImpactOrigin)
 		&& HasClearLineToTarget(ImpactOrigin, ActiveTarget.Get()))
 	{
-		ApplyAttackResult(ActiveTarget.Get(), ImpactOrigin, Config->CloseAttackDamage);
+		if (ArmHeavyStrike(
+			ActiveTarget.Get(),
+			ImpactOrigin,
+			Config->CloseAttackDamage,
+			Config->CloseHeavyImpactBodyRadius,
+			Config->CloseKnockbackHorizontalVelocity,
+			Config->CloseKnockbackUpwardVelocity,
+			Config->CloseAttackRecoverySeconds))
+		{
+			return;
+		}
 	}
 	BeginRecovery(Config->CloseAttackRecoverySeconds);
 }
@@ -369,7 +425,17 @@ void UPursuerAttackComponent::HandleCharacterLanded(const FHitResult& Hit)
 		&& IsActiveTargetInLandingRadius(ImpactOrigin)
 		&& HasClearLineToTarget(ImpactOrigin, ActiveTarget.Get()))
 	{
-		ApplyAttackResult(ActiveTarget.Get(), ImpactOrigin, Config->JumpAttackDamage);
+		if (ArmHeavyStrike(
+			ActiveTarget.Get(),
+			ImpactOrigin,
+			Config->JumpAttackDamage,
+			Config->JumpHeavyImpactBodyRadius,
+			Config->JumpKnockbackHorizontalVelocity,
+			Config->JumpKnockbackUpwardVelocity,
+			Config->JumpAttackRecoverySeconds))
+		{
+			return;
+		}
 	}
 	BeginRecovery(Config->JumpAttackRecoverySeconds);
 }
@@ -460,55 +526,312 @@ bool UPursuerAttackComponent::HasClearLineToTarget(
 	return !bBlocked || Hit.GetActor() == Target;
 }
 
-/** 一次命中同时走生命值和既有站立冲击合同；缺 Profile 时仍保留伤害并输出明确诊断。 */
-void UPursuerAttackComponent::ApplyAttackResult(
+/** 宽容查询只授予准备资格；伤害仍等待同一隐藏刚体的真实 Chaos 接触提交。 */
+bool UPursuerAttackComponent::ArmHeavyStrike(
 	APawn* Target,
 	const FVector& ImpactOrigin,
-	const float Damage)
+	const float Damage,
+	const float BodyRadius,
+	const float HorizontalVelocity,
+	const float UpwardVelocity,
+	const float MissRecoverySeconds)
 {
-	if (!Character.IsValid() || !Config.IsValid() || !IsValid(Target) || !ActiveImpactId.IsValid())
+	if (!Character.IsValid()
+		|| !Config.IsValid()
+		|| !AttackImpactBody.IsValid()
+		|| !IsValid(Target)
+		|| !ActiveImpactId.IsValid()
+		|| !Target->GetClass()->ImplementsInterface(UHeavyImpactReceiver::StaticClass())
+		|| !IsValid(GetWorld()))
+	{
+		UE_LOG(LogPursuerAttack, Warning,
+			TEXT("%s 无法为 %s 建立 Heavy 攻击事务。"),
+			*GetNameSafe(Character.Get()), *GetNameSafe(Target));
+		return false;
+	}
+
+	UHeavyImpactResponseComponent* HeavyImpact =
+		Target->FindComponentByClass<UHeavyImpactResponseComponent>();
+	UPrimitiveComponent* TargetPrimitive =
+		IHeavyImpactReceiver::Execute_GetHeavyImpactPredictionPrimitive(Target);
+	if (!IsValid(HeavyImpact) || !IsValid(TargetPrimitive))
+	{
+		UE_LOG(LogPursuerAttack, Warning,
+			TEXT("%s 命中查询选中 %s，但目标缺少 HeavyImpactResponse 或预测 Primitive。"),
+			*GetNameSafe(Character.Get()), *GetNameSafe(Target));
+		return false;
+	}
+
+	FVector AttackDirection = TargetPrimitive->Bounds.Origin - ImpactOrigin;
+	AttackDirection.Z = 0.0f;
+	if (!AttackDirection.Normalize())
+	{
+		AttackDirection = Character->GetActorForwardVector().GetSafeNormal(SMALL_NUMBER, FVector::ForwardVector);
+	}
+
+	const float FrameAwareLeadSeconds = GetWorld()->GetDeltaSeconds() > 0.0f
+		? GetWorld()->GetDeltaSeconds() * 1.5f
+		: 0.0f;
+	const float ContactEtaSeconds = FMath::Clamp(
+		FMath::Max(Config->HeavyImpactLeadSeconds, FrameAwareLeadSeconds),
+		0.03f,
+		0.45f);
+	// Heavy 接收端在 Prepare 成功时会同步停掉 CharacterMovement；因此瞄准当前身体中心，
+	// 不再把准备前的奔跑速度外推到一个目标已不会抵达的位置。
+	const FVector PredictedTargetPoint = TargetPrimitive->Bounds.Origin;
+	const FVector Start = ComputeImpactBodyStart(
+		PredictedTargetPoint,
+		AttackDirection,
+		BodyRadius,
+		Config->HeavyImpactBodySpeed,
+		ContactEtaSeconds);
+
+	USphereComponent* Body = AttackImpactBody.Get();
+	Body->SetSimulatePhysics(false);
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Body->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	Body->SetSphereRadius(BodyRadius, true);
+	Body->SetWorldLocation(Start, false, nullptr, ETeleportType::TeleportPhysics);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Body->SetMassOverrideInKg(NAME_None, Config->HeavyImpactBodyMassKg, true);
+	Body->SetEnableGravity(false);
+	Body->SetSimulatePhysics(true);
+	Body->SetPhysicsLinearVelocity(FVector::ZeroVector, false, NAME_None);
+	Body->WakeAllRigidBodies();
+
+	FHeavyImpactPreparationRequest Request;
+	Request.ImpactId = ActiveImpactId;
+	Request.SourceActor = Character.Get();
+	Request.SourceComponent = Body;
+	Request.PredictedImpactPoint = PredictedTargetPoint;
+	Request.SourceLinearVelocity = AttackDirection * Config->HeavyImpactBodySpeed;
+	Request.EstimatedTimeToContactSeconds = ContactEtaSeconds;
+
+	const EHeavyImpactPrepareResult PrepareResult =
+		IHeavyImpactReceiver::Execute_PrepareForHeavyImpact(Target, Request);
+	if (PrepareResult != EHeavyImpactPrepareResult::Accepted)
+	{
+		UE_LOG(LogPursuerAttack, Verbose,
+			TEXT("%s Heavy attack prepare rejected by %s (Result=%d)."),
+			*GetNameSafe(Character.Get()), *GetNameSafe(Target), static_cast<int32>(PrepareResult));
+		DeactivateAttackImpactBody();
+		return false;
+	}
+
+	TargetHeavyImpact = HeavyImpact;
+	HeavyImpact->OnImpactCommitted.RemoveAll(this);
+	HeavyImpact->OnStateChanged.RemoveAll(this);
+	HeavyImpact->OnImpactCommitted.AddUObject(this, &UPursuerAttackComponent::HandleHeavyImpactCommitted);
+	HeavyImpact->OnStateChanged.AddUObject(this, &UPursuerAttackComponent::HandleTargetHeavyStateChanged);
+	PendingDamage = FMath::Max(0.0f, Damage);
+	PendingKnockbackVelocity = ComputeKnockbackVelocity(
+		Character->GetActorLocation(),
+		Target->GetActorLocation(),
+		Character->GetActorForwardVector(),
+		HorizontalVelocity,
+		UpwardVelocity);
+	PendingMissRecoverySeconds = FMath::Max(0.01f, MissRecoverySeconds);
+	bHeavyCommitQueued = false;
+	Phase = EPursuerAttackPhase::ImpactPending;
+
+	Body->SetPhysicsLinearVelocity(Request.SourceLinearVelocity, false, NAME_None);
+	GetWorld()->GetTimerManager().ClearTimer(ActionTimerHandle);
+	GetWorld()->GetTimerManager().SetTimer(
+		ActionTimerHandle,
+		this,
+		&UPursuerAttackComponent::HandleHeavyStrikeMiss,
+		FMath::Min(0.5f, ContactEtaSeconds + 0.25f),
+		false);
+	return true;
+}
+
+/** 只接受当前事务与同一真实攻击刚体，避免目标其他 Heavy 来源触发追猎者伤害。 */
+void UPursuerAttackComponent::HandleHeavyImpactCommitted(
+	const FHeavyImpactPreparationRequest& Request)
+{
+	if (Phase != EPursuerAttackPhase::ImpactPending
+		|| bHeavyCommitQueued
+		|| Request.ImpactId != ActiveImpactId
+		|| Request.SourceActor != Character.Get()
+		|| Request.SourceComponent != AttackImpactBody.Get()
+		|| !IsValid(GetWorld()))
 	{
 		return;
+	}
+
+	bHeavyCommitQueued = true;
+	GetWorld()->GetTimerManager().ClearTimer(ActionTimerHandle);
+	CommitFinalizeTimerHandle = GetWorld()->GetTimerManager().SetTimerForNextTick(
+		this,
+		&UPursuerAttackComponent::FinalizeCommittedHeavyHit);
+}
+
+/** 真实提交后的下一帧再关源刚体，确保接收端同一求解事件已完成状态转换。 */
+void UPursuerAttackComponent::FinalizeCommittedHeavyHit()
+{
+	if (Phase != EPursuerAttackPhase::ImpactPending
+		|| !bHeavyCommitQueued
+		|| !Character.IsValid()
+		|| !ActiveTarget.IsValid())
+	{
+		CancelAttack();
+		return;
+	}
+
+	APawn* Target = ActiveTarget.Get();
+	UPrimitiveComponent* TargetPrimitive =
+		Target->GetClass()->ImplementsInterface(UHeavyImpactReceiver::StaticClass())
+		? IHeavyImpactReceiver::Execute_GetHeavyImpactPredictionPrimitive(Target)
+		: nullptr;
+	if (IsValid(TargetPrimitive) && TargetPrimitive->IsAnySimulatingPhysics())
+	{
+		TargetPrimitive->AddImpulse(PendingKnockbackVelocity, NAME_None, true);
 	}
 
 	UGameplayStatics::ApplyDamage(
 		Target,
-		FMath::Max(0.0f, Damage),
+		PendingDamage,
 		Character->GetController(),
 		Character.Get(),
 		UDamageType::StaticClass());
 
-	if (!Target->GetClass()->ImplementsInterface(UCharacterImpactReceiver::StaticClass())
-		|| !IsValid(Config->AttackImpactSourceProfile))
+	DeactivateAttackImpactBody();
+	BeginPostHitRespite();
+
+	UE_LOG(LogPursuerAttack, Display,
+		TEXT("%s Heavy attack committed on %s (Damage=%.1f, VelocityChange=%s, PostRecoveryCooldown=%.2fs)."),
+		*GetNameSafe(Character.Get()),
+		*GetNameSafe(Target),
+		PendingDamage,
+		*PendingKnockbackVelocity.ToCompactString(),
+		Config->SuccessfulHitCooldownSeconds);
+}
+
+/** Prepared 超时恢复由目标 Heavy 自己处理；攻击端只关源刚体并走原落空恢复。 */
+void UPursuerAttackComponent::HandleHeavyStrikeMiss()
+{
+	if (Phase != EPursuerAttackPhase::ImpactPending || bHeavyCommitQueued)
 	{
-		UE_LOG(LogPursuerAttack, Warning,
-			TEXT("%s 命中 %s，但缺少站立冲击接收接口或 AttackImpactSourceProfile。"),
-			*GetNameSafe(Character.Get()), *GetNameSafe(Target));
 		return;
 	}
 
-	FVector WorldDirection = Target->GetActorLocation() - ImpactOrigin;
-	WorldDirection.Z = FMath::Max(25.0f, WorldDirection.Size2D() * 0.2f);
-	WorldDirection = WorldDirection.GetSafeNormal();
-	if (WorldDirection.IsNearlyZero())
+	const float RecoverySeconds = PendingMissRecoverySeconds;
+	UnbindTargetHeavyImpact();
+	DeactivateAttackImpactBody();
+	BeginRecovery(RecoverySeconds);
+}
+
+/** 成功 Heavy 后攻击事务保持 Busy，使 AI 停住而不是立刻贴脸重打。 */
+void UPursuerAttackComponent::BeginPostHitRespite()
+{
+	if (!Character.IsValid() || !Config.IsValid() || !IsValid(GetWorld()))
 	{
-		WorldDirection = Character->GetActorForwardVector();
+		CancelAttack();
+		return;
 	}
 
-	FStandingImpactRequest Request;
-	Request.ImpactId = ActiveImpactId;
-	Request.SourceActor = Character.Get();
-	Request.SourceComponent = Character->GetCapsuleComponent();
-	Request.SourceProfile = Config->AttackImpactSourceProfile;
-	Request.WorldDirection = WorldDirection;
-	Request.ImpactPoint = Target->GetActorLocation() + FVector::UpVector * 60.0f;
-	Request.NormalizedStrength = Config->AttackImpactStrength;
+	Phase = EPursuerAttackPhase::PostHitRespite;
+	if (AAIController* Controller = Cast<AAIController>(Character->GetController()))
+	{
+		Controller->StopMovement();
+	}
+	if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+	}
 
-	const EStandingImpactSubmitResult Result =
-		ICharacterImpactReceiver::Execute_SubmitStandingImpact(Target, Request);
-	UE_LOG(LogPursuerAttack, Verbose,
-		TEXT("%s attack hit %s (Damage=%.1f, StandingImpact=%d)."),
-		*GetNameSafe(Character.Get()), *GetNameSafe(Target), Damage, static_cast<int32>(Result));
+	GetWorld()->GetTimerManager().SetTimer(
+		TimeoutTimerHandle,
+		this,
+		&UPursuerAttackComponent::BeginPostHitGrace,
+		Config->PostHitMaximumHoldSeconds,
+		false);
+
+	if (!TargetHeavyImpact.IsValid() || !TargetHeavyImpact->IsBusy())
+	{
+		BeginPostHitGrace();
+	}
+}
+
+/** 只关心完整回到 Inactive；中间 Simulating/Settling/Downed/Recovering 均继续给玩家喘息。 */
+void UPursuerAttackComponent::HandleTargetHeavyStateChanged(
+	const EHeavyImpactState Previous,
+	const EHeavyImpactState Current)
+{
+	(void)Previous;
+	if (Phase == EPursuerAttackPhase::PostHitRespite && Current == EHeavyImpactState::Inactive)
+	{
+		BeginPostHitGrace();
+	}
+}
+
+/** 起身完成或保险超时后统一进入可调额外停顿；该路径可重复调用。 */
+void UPursuerAttackComponent::BeginPostHitGrace()
+{
+	if (Phase != EPursuerAttackPhase::PostHitRespite || !Config.IsValid() || !IsValid(GetWorld()))
+	{
+		return;
+	}
+
+	UnbindTargetHeavyImpact();
+	GetWorld()->GetTimerManager().ClearTimer(TimeoutTimerHandle);
+	GetWorld()->GetTimerManager().ClearTimer(RecoveryTimerHandle);
+	NextAttackAllowedWorldTime = FMath::Max(
+		NextAttackAllowedWorldTime,
+		static_cast<double>(GetWorld()->GetTimeSeconds() + Config->SuccessfulHitCooldownSeconds));
+	if (Config->PostHitRecoveryGraceSeconds <= KINDA_SMALL_NUMBER)
+	{
+		FinishPostHitRespite();
+		return;
+	}
+
+	GetWorld()->GetTimerManager().SetTimer(
+		RecoveryTimerHandle,
+		this,
+		&UPursuerAttackComponent::FinishPostHitRespite,
+		Config->PostHitRecoveryGraceSeconds,
+		false);
+}
+
+/** 喘息结束复用正常攻击清理，成功冷却截止时间保持不变。 */
+void UPursuerAttackComponent::FinishPostHitRespite()
+{
+	FinishAttack();
+}
+
+/** 关闭物理前先清碰撞，避免在回挂角色时制造第二次 Heavy 接触。 */
+void UPursuerAttackComponent::DeactivateAttackImpactBody()
+{
+	if (!AttackImpactBody.IsValid())
+	{
+		return;
+	}
+
+	USphereComponent* Body = AttackImpactBody.Get();
+	if (Body->IsAnySimulatingPhysics())
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector, false, NAME_None);
+	}
+	Body->SetSimulatePhysics(false);
+	Body->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Body->SetEnableGravity(false);
+	if (Character.IsValid() && IsValid(Character->GetRootComponent()))
+	{
+		Body->AttachToComponent(
+			Character->GetRootComponent(),
+			FAttachmentTransformRules::SnapToTargetNotIncludingScale);
+	}
+}
+
+/** 原生委托按订阅者精确移除，不影响玩家或磁力系统的其他监听。 */
+void UPursuerAttackComponent::UnbindTargetHeavyImpact()
+{
+	if (TargetHeavyImpact.IsValid())
+	{
+		TargetHeavyImpact->OnImpactCommitted.RemoveAll(this);
+		TargetHeavyImpact->OnStateChanged.RemoveAll(this);
+	}
+	TargetHeavyImpact.Reset();
 }
 
 /** 攻击结算后只等待恢复 Timer；冷却和追击是否可用由各自独立条件决定。 */
@@ -553,5 +876,6 @@ void UPursuerAttackComponent::ClearAttackTimers()
 		TimerManager.ClearTimer(ActionTimerHandle);
 		TimerManager.ClearTimer(RecoveryTimerHandle);
 		TimerManager.ClearTimer(TimeoutTimerHandle);
+		TimerManager.ClearTimer(CommitFinalizeTimerHandle);
 	}
 }

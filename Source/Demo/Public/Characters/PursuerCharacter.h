@@ -27,6 +27,7 @@ class UPhysicsControlComponent;
 class UPhysicsControlHitResponseComponent;
 class UPhysicsControlHitTuningData;
 class UPursuerAttackComponent;
+class USphereComponent;
 
 /** 物理命中在角色本地空间的简化方向（由 PhysicsControlHitResponseComponent 广播）。 */
 enum class EPhysicsHitDirection : uint8;
@@ -60,6 +61,9 @@ public:
 	/** 返回追猎者攻击事务的唯一 Owner；构造后始终存在，配置无效时组件自行拒绝攻击。 */
 	UPursuerAttackComponent* GetAttackComponent() const { return PursuerAttack; }
 
+	/** 返回攻击组件短时驱动的隐藏真实刚体；平时无碰撞，不承担命中查询。 */
+	USphereComponent* GetAttackImpactBody() const { return AttackImpactBody; }
+
 	/** Heavy 或 Light Stop 是否阻断追击移动。 */
 	bool IsImpactMovementBlocked() const;
 
@@ -91,6 +95,13 @@ private:
 	/** 近战与预判跑跳攻击阶段、计时器、命中和恢复的唯一运行时 Owner。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UPursuerAttackComponent> PursuerAttack;
+
+	/**
+	 * 只在既有近战 Sweep 或落地范围先选中玩家后短时启用的真实 Chaos 球体。
+	 * 它比可见斧刃更宽容，但仍须由同一刚体真实接触才能提交 Heavy Impact。
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USphereComponent> AttackImpactBody;
 
 	/** 官方 Physics Control 求解组件；当前只由重冲击响应组件创建和驱动运行时记录。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|物理受击", meta = (AllowPrivateAccess = "true"))

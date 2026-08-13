@@ -17,7 +17,12 @@
 class APawn;
 class APursuerCharacter;
 class UAnimMontage;
+class UHeavyImpactResponseComponent;
 class UPursuerConfig;
+class UPrimitiveComponent;
+class USphereComponent;
+enum class EHeavyImpactState : uint8;
+struct FHeavyImpactPreparationRequest;
 
 /** 本项目追猎者攻击内部阶段；不是 UE 官方枚举，不向蓝图暴露。 */
 enum class EPursuerAttackPhase : uint8
@@ -26,6 +31,8 @@ enum class EPursuerAttackPhase : uint8
 	CloseSwing,
 	JumpWindup,
 	JumpAirborne,
+	ImpactPending,
+	PostHitRespite,
 	Recovery
 };
 
@@ -79,6 +86,22 @@ public:
 		float GravityZ,
 		FVector& OutVelocity);
 
+	/** 组合成功 Heavy 后的水平远离与竖直击飞速度变化，供运行时和无世界测试共用。 */
+	static FVector ComputeKnockbackVelocity(
+		const FVector& SourceLocation,
+		const FVector& TargetLocation,
+		const FVector& SourceForward,
+		float HorizontalVelocity,
+		float UpwardVelocity);
+
+	/** 根据目标中心、攻击方向、半径、速度与 ETA 计算攻击刚体安全起点。 */
+	static FVector ComputeImpactBodyStart(
+		const FVector& TargetPoint,
+		const FVector& AttackDirection,
+		float BodyRadius,
+		float BodySpeed,
+		float ContactEtaSeconds);
+
 protected:
 	/** 组件结束时解除落地委托并清理 Timer，避免世界销毁后的悬挂回调。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -115,8 +138,45 @@ private:
 	/** 做一次 Visibility 遮挡检测，防止斧击或落地范围隔墙命中玩家。 */
 	bool HasClearLineToTarget(const FVector& ImpactOrigin, const APawn* Target) const;
 
-	/** 对单一活动目标提交伤害和现有 StandingImpact；同一攻击只调用一次。 */
-	void ApplyAttackResult(APawn* Target, const FVector& ImpactOrigin, float Damage);
+	/**
+	 * 既有宽容查询通过后，提前把目标切到 Heavy Prepared，并发射短时隐藏刚体。
+	 * 只有该刚体产生真实 Chaos 接触并由接收端提交后，才结算伤害和额外击飞。
+	 */
+	bool ArmHeavyStrike(
+		APawn* Target,
+		const FVector& ImpactOrigin,
+		float Damage,
+		float BodyRadius,
+		float HorizontalVelocity,
+		float UpwardVelocity,
+		float MissRecoverySeconds);
+
+	/** 目标 Heavy 确认同一 ImpactId 与真实来源刚体后广播；下一帧完成伤害、加成冲量和喘息。 */
+	void HandleHeavyImpactCommitted(const FHeavyImpactPreparationRequest& Request);
+
+	/** 目标 Heavy 状态变化监听；只有完整恢复到 Inactive 后才开始额外喘息。 */
+	void HandleTargetHeavyStateChanged(EHeavyImpactState Previous, EHeavyImpactState Current);
+
+	/** 在 Heavy 广播后的下一帧关闭攻击刚体并提交一次伤害与速度变化。 */
+	void FinalizeCommittedHeavyHit();
+
+	/** 攻击刚体未在准备窗口内真实命中时，按原攻击类型进入普通落空恢复。 */
+	void HandleHeavyStrikeMiss();
+
+	/** 成功命中后停住追猎者，等待玩家起身；异常超时只释放 AI，不重复伤害。 */
+	void BeginPostHitRespite();
+
+	/** 玩家 Heavy 已恢复，开始配置的额外喘息时间。 */
+	void BeginPostHitGrace();
+
+	/** 喘息或保险超时结束，释放攻击事务。 */
+	void FinishPostHitRespite();
+
+	/** 把隐藏攻击球恢复为无碰撞、非模拟并重新挂回追猎者。 */
+	void DeactivateAttackImpactBody();
+
+	/** 解除目标 Heavy 的原生委托；取消、落空、完成和 EndPlay 都走此路径。 */
+	void UnbindTargetHeavyImpact();
 
 	/** 从命中/落空转入恢复，并在配置时长后释放攻击事务。 */
 	void BeginRecovery(float RecoverySeconds);
@@ -139,6 +199,12 @@ private:
 	/** 本次攻击起手时选定的 Pawn；跑跳只追踪其最终范围命中资格，不更新锁定落点。 */
 	TWeakObjectPtr<APawn> ActiveTarget;
 
+	/** 当前 Heavy 事务的目标响应组件；按类型查找并只用于委托和状态读取。 */
+	TWeakObjectPtr<UHeavyImpactResponseComponent> TargetHeavyImpact;
+
+	/** 角色装配的持久隐藏刚体；组件只切换它的短时物理状态，不动态创建对象。 */
+	TWeakObjectPtr<USphereComponent> AttackImpactBody;
+
 	/** 仅记录本组件成功启动的 Montage，取消时不会误停受击或起身 Montage。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UAnimMontage> ActiveMontage = nullptr;
@@ -146,8 +212,20 @@ private:
 	/** 本次跑跳在离地时确定的世界空间落点；Launch 之后保持不变。 */
 	FVector LockedImpactPoint = FVector::ZeroVector;
 
-	/** 本次命中的唯一 StandingImpact Id；近战或落地成功时复用，事务结束时失效。 */
+	/** 本次攻击唯一 Heavy Impact Id；准备、真实提交与去重必须复用。 */
 	FGuid ActiveImpactId;
+
+	/** Heavy 真实提交后下一帧写入的伤害，避免在预测阶段提前扣血。 */
+	float PendingDamage = 0.0f;
+
+	/** Heavy 真实提交后施加给目标物理 Mesh 的额外速度变化，强化斧击反馈。 */
+	FVector PendingKnockbackVelocity = FVector::ZeroVector;
+
+	/** Heavy 未真实接触时回到近战或下砸各自恢复时间。 */
+	float PendingMissRecoverySeconds = 0.0f;
+
+	/** 防止同一求解接触的重复 Heavy 广播或计时器重复结算。 */
+	bool bHeavyCommitQueued = false;
 
 	/** 当前攻击阶段；只有本组件的开始、落地、恢复、取消路径可写。 */
 	EPursuerAttackPhase Phase = EPursuerAttackPhase::Idle;
@@ -163,4 +241,7 @@ private:
 
 	/** 防止异常 Montage/落地状态永久占用攻击的保险 Timer。 */
 	FTimerHandle TimeoutTimerHandle;
+
+	/** Heavy 提交广播后延迟到下一帧完成伤害与额外击飞。 */
+	FTimerHandle CommitFinalizeTimerHandle;
 };

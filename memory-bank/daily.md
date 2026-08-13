@@ -40,3 +40,12 @@
 - 追猎者 Timer 状态机、locomotion、基础受击、地刺、磁力抓取与玩家生命链路形成；第三方 SFCorridors 只读筛选，删除仍需依赖闭包和用户授权。
 
 <!-- compacted by Codex nightly at 2026-08-13 01:08 +08:00 -->
+
+<!-- written by shiqiqiwang at 2026-08-13 07:38 UTC -->
+
+## 2026-08-13 — 追猎者 Heavy 攻击与喘息
+
+- 跑跳下砸和近战挥斧统一接入玩家现有 Heavy Impact：候选命中由既有 Sweep/落点范围选取，最终必须由追猎者持有的短时隐藏真实 Chaos 刚体接触后提交；追猎者攻击侧不再提交轻受击。
+- 保留跑跳起跳前对移动玩家的一次性落点预测；成功 Heavy 后等待玩家完整恢复，再额外停顿 0.75 秒，并从恢复时开始计算 5 秒攻击冷却（均由 DA_Pursuer 调整）。
+- 玩家 BP_ZeroEscapeCharacter 最大生命值调整为 1000；修正 AttackImpactBody 停用时先退出物理模拟再关闭碰撞，避免 Invalid Simulate Options 警告。
+- DemoEditor Win64 Development 构建成功；PursuerAttack 与 HeavyImpact 自动化 6/6 通过、0 警告。用户已在 PIE 看到真实击飞效果。

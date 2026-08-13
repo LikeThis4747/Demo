@@ -18,6 +18,7 @@
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/Physics/PhysicsControlHitResponseComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/SphereComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "PhysicsControlComponent.h"
@@ -32,6 +33,21 @@ APursuerCharacter::APursuerCharacter()
 	PrimaryActorTick.bCanEverTick = false;
 
 	PursuerAttack = CreateDefaultSubobject<UPursuerAttackComponent>(TEXT("PursuerAttack"));
+	AttackImpactBody = CreateDefaultSubobject<USphereComponent>(TEXT("AttackImpactBody"));
+	AttackImpactBody->SetupAttachment(GetRootComponent());
+	AttackImpactBody->SetMobility(EComponentMobility::Movable);
+	AttackImpactBody->SetCanEverAffectNavigation(false);
+	AttackImpactBody->SetSphereRadius(90.0f);
+	AttackImpactBody->SetCollisionObjectType(ECC_WorldDynamic);
+	AttackImpactBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	AttackImpactBody->SetCollisionResponseToAllChannels(ECR_Ignore);
+	AttackImpactBody->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+	AttackImpactBody->SetGenerateOverlapEvents(false);
+	AttackImpactBody->SetNotifyRigidBodyCollision(true);
+	AttackImpactBody->SetUseCCD(true);
+	AttackImpactBody->SetEnableGravity(false);
+	AttackImpactBody->SetHiddenInGame(true);
+	AttackImpactBody->SetVisibility(false);
 	PhysicsControl = CreateDefaultSubobject<UPhysicsControlComponent>(TEXT("PhysicsControl"));
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));

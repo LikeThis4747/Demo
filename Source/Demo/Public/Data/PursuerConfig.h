@@ -15,7 +15,6 @@
 #include "PursuerConfig.generated.h"
 
 class UAnimMontage;
-class UCharacterImpactSourceProfile;
 
 /** 单一追猎者原型的行为调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
 UCLASS(BlueprintType)
@@ -139,13 +138,56 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.1", ClampMax = "3.0"))
 	float JumpAttackPlayRate = 1.3f;
 
-	/** 攻击命中后提交给玩家现有 StandingImpact 的来源 Profile；不属于 Heavy Impact。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|反馈")
-	TObjectPtr<UCharacterImpactSourceProfile> AttackImpactSourceProfile = nullptr;
+	/**
+	 * Heavy Impact 隐藏刚体从准备到预计真实接触的时间，单位 s；初始值 0.10。
+	 * 组件还会按当前帧长自动抬高到至少 1.5 帧，确保接收端完成 Prepared。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|重冲击", meta = (ClampMin = "0.03", ClampMax = "0.45", Units = "s"))
+	float HeavyImpactLeadSeconds = 0.10f;
 
-	/** StandingImpact 的归一化表现强度；初始值 1，范围 0~1。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|反馈", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float AttackImpactStrength = 1.0f;
+	/** 攻击刚体线速度，单位 cm/s；初始值 2200。提高会增大真实 Chaos 接触冲量。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|重冲击", meta = (ClampMin = "500.0", ClampMax = "5000.0", Units = "cm/s"))
+	float HeavyImpactBodySpeed = 2200.0f;
+
+	/** 攻击刚体质量，单位 kg；初始值 80。它只在命中窗口短暂参与物理。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|重冲击", meta = (ClampMin = "1.0", ClampMax = "500.0", Units = "kg"))
+	float HeavyImpactBodyMassKg = 80.0f;
+
+	/** 近战斧击的隐藏物理命中半径，单位 cm；初始值 90，比可见斧刃更宽容。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "20.0", ClampMax = "200.0", Units = "cm"))
+	float CloseHeavyImpactBodyRadius = 90.0f;
+
+	/** 跑跳下砸的隐藏物理命中半径，单位 cm；初始值 150，覆盖落点周围的合理砸击范围。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "40.0", ClampMax = "300.0", Units = "cm"))
+	float JumpHeavyImpactBodyRadius = 150.0f;
+
+	/** 近战成功 Heavy 后额外施加的水平速度变化，单位 cm/s；初始值 700。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.0", ClampMax = "2500.0", Units = "cm/s"))
+	float CloseKnockbackHorizontalVelocity = 700.0f;
+
+	/** 近战成功 Heavy 后额外施加的向上速度变化，单位 cm/s；初始值 350。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.0", ClampMax = "1500.0", Units = "cm/s"))
+	float CloseKnockbackUpwardVelocity = 350.0f;
+
+	/** 跑跳下砸成功 Heavy 后额外施加的水平速度变化，单位 cm/s；初始值 950。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.0", ClampMax = "3000.0", Units = "cm/s"))
+	float JumpKnockbackHorizontalVelocity = 950.0f;
+
+	/** 跑跳下砸成功 Heavy 后额外施加的向上速度变化，单位 cm/s；初始值 480。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|跑跳", meta = (ClampMin = "0.0", ClampMax = "1800.0", Units = "cm/s"))
+	float JumpKnockbackUpwardVelocity = 480.0f;
+
+	/** 玩家 Heavy 起身或保险超时后开始计算的攻击冷却，单位 s；AI 可恢复追逐，但暂时不能再次攻击。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|喘息", meta = (ClampMin = "0.0", ClampMax = "20.0", Units = "s"))
+	float SuccessfulHitCooldownSeconds = 5.0f;
+
+	/** 玩家完成 Heavy 起身后，追猎者继续停顿的额外喘息时间，单位 s；初始值 0.75。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|喘息", meta = (ClampMin = "0.0", ClampMax = "5.0", Units = "s"))
+	float PostHitRecoveryGraceSeconds = 0.75f;
+
+	/** Heavy 状态异常未恢复时的最长停顿，单位 s；初始值 8，超时后安全释放 AI。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|喘息", meta = (ClampMin = "1.0", ClampMax = "30.0", Units = "s"))
+	float PostHitMaximumHoldSeconds = 8.0f;
 
 	/**
 	 * 无攻击可启动时寻路贴近的目标距离，单位 cm；必须 < AttackRange。

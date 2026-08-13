@@ -8,10 +8,53 @@
 
 #include "Data/PursuerConfig.h"
 
-#include "Data/Physics/CharacterImpactSourceProfile.h"
-
 bool UPursuerConfig::IsConfigured(FString& OutError) const
 {
+	const float FiniteValues[] = {
+		MaxWalkSpeed,
+		SenseRadius,
+		LoseSightRadius,
+		AttackRange,
+		AttackCooldown,
+		CloseAttackPlayRate,
+		CloseAttackHitDelay,
+		CloseAttackReach,
+		CloseAttackSweepRadius,
+		CloseAttackDamage,
+		CloseAttackRecoverySeconds,
+		JumpAttackMinRange,
+		JumpAttackMaxRange,
+		JumpAttackLeadSeconds,
+		JumpAttackLaunchDelay,
+		JumpAttackFlightSeconds,
+		JumpAttackImpactRadius,
+		JumpAttackDamage,
+		JumpAttackRecoverySeconds,
+		JumpAttackPlayRate,
+		HeavyImpactLeadSeconds,
+		HeavyImpactBodySpeed,
+		HeavyImpactBodyMassKg,
+		CloseHeavyImpactBodyRadius,
+		JumpHeavyImpactBodyRadius,
+		CloseKnockbackHorizontalVelocity,
+		CloseKnockbackUpwardVelocity,
+		JumpKnockbackHorizontalVelocity,
+		JumpKnockbackUpwardVelocity,
+		SuccessfulHitCooldownSeconds,
+		PostHitRecoveryGraceSeconds,
+		PostHitMaximumHoldSeconds,
+		AttackApproachRadius,
+		ThinkInterval
+	};
+	for (const float Value : FiniteValues)
+	{
+		if (!FMath::IsFinite(Value))
+		{
+			OutError = TEXT("追猎者配置包含 NaN 或无穷值。");
+			return false;
+		}
+	}
+
 	if (LoseSightRadius < SenseRadius)
 	{
 		OutError = TEXT("LoseSightRadius 必须 ≥ SenseRadius，否则追击会在边界抖动。");
@@ -49,6 +92,8 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 		|| JumpAttackLaunchDelay <= 0.0f
 		|| JumpAttackFlightSeconds <= 0.0f
 		|| JumpAttackRecoverySeconds <= 0.0f
+		|| HeavyImpactLeadSeconds <= 0.0f
+		|| PostHitMaximumHoldSeconds <= 0.0f
 		|| AttackCooldown <= 0.0f;
 	if (bInvalidTiming)
 	{
@@ -62,11 +107,18 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 		|| JumpAttackLeadSeconds < 0.0f
 		|| CloseAttackDamage < 0.0f
 		|| JumpAttackDamage < 0.0f
-		|| !FMath::IsFinite(AttackImpactStrength)
-		|| AttackImpactStrength < 0.0f
-		|| AttackImpactStrength > 1.0f)
+		|| HeavyImpactBodySpeed <= 0.0f
+		|| HeavyImpactBodyMassKg <= 0.0f
+		|| CloseHeavyImpactBodyRadius <= 0.0f
+		|| JumpHeavyImpactBodyRadius <= 0.0f
+		|| CloseKnockbackHorizontalVelocity < 0.0f
+		|| CloseKnockbackUpwardVelocity < 0.0f
+		|| JumpKnockbackHorizontalVelocity < 0.0f
+		|| JumpKnockbackUpwardVelocity < 0.0f
+		|| SuccessfulHitCooldownSeconds < 0.0f
+		|| PostHitRecoveryGraceSeconds < 0.0f)
 	{
-		OutError = TEXT("攻击距离、命中范围、预判、伤害或 AttackImpactStrength 含非法值。");
+		OutError = TEXT("攻击距离、命中范围、预判、伤害、重冲击刚体或喘息参数含非法值。");
 		return false;
 	}
 
@@ -79,12 +131,6 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 	if (JumpAttackMontage.IsNull())
 	{
 		OutError = TEXT("JumpAttackMontage 未指定；请先将跑跳攻击重定向到追猎者骨骼并创建 Montage。");
-		return false;
-	}
-
-	if (!IsValid(AttackImpactSourceProfile))
-	{
-		OutError = TEXT("AttackImpactSourceProfile 未指定；攻击不得用 Heavy Impact 代替站立命中反馈。");
 		return false;
 	}
 
