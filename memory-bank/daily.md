@@ -102,3 +102,14 @@
 <!-- written by shiqiqiwang at 2026-08-13 14:07 UTC -->
 
 - 刺轮现场展示调整：因开放地面不利于观察路线压力，Level0 实例已移至冲锤测试区最前方的独立空房间，改用一格闭环路线；室内边界回读、运行时持续移动及无刺轮警告验证通过，视口已对准该房间。
+
+<!-- written by shiqiqiwang at 2026-08-13 14:32 UTC -->
+
+
+<!-- written by Codex at 2026-08-13 22:32 +08:00 -->
+
+## 2026-08-13 — 玩家 Stop 三方向动画补齐
+
+- 复用追猎者正面/左侧/右侧 Sequence 制作玩家 Skeleton 副本；三条均为非 Additive、无 Root Motion，并装配到 `DA_PlayerStandingImpact`。
+- 地刺玩家配置保持 Stop 0.25 秒、无局部物理，只开启方向动画；追猎者配置、C++、AnimBP、HeavyImpact 与 Level0 均未修改。
+- CharacterImpact 自动化 2/2 通过；官方 MCP 持久回读与 Level0 地刺触发检查无相关错误。用户现场确认当前版本可用，少量观感细节留待次日调整。

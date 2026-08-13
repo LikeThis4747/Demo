@@ -94,3 +94,12 @@
 - [x] 完成 Blueprint/StandingImpact Profile/默认调参资产和 Level0 两格实例；玩家 Stop + 20 伤害、追猎者 None、局部防重复命中技术验证通过。
 - [x] Demo 项目模块 UHT、编译和链接通过；Blueprint Warning-as-error 编译、官方资产回读、移动与玩家接触 PIE 通过。
 - [ ] 用户验收路线覆盖、速度、危险性与穿越手感；Population/PCG 跨格投放和与其他机关组合不在本轮。
+
+<!-- written by shiqiqiwang at 2026-08-13 14:32 UTC -->
+
+
+## 2026-08-13 — 玩家 Stop 三方向动画完成
+
+- 从追猎者三条方向受击 Sequence 创建玩家 Skeleton 副本，并装配 `DA_PlayerStandingImpact` 的 Front/Left/Right。
+- 地刺玩家结果保持 Stop 0.25 秒、无局部物理，只开启方向动画；CharacterImpact 自动化 2/2，官方资产回读与 Level0 地刺触发检查通过。
+- 用户现场确认当前版本可用；少量观感细节次日单独调整，不修改 CharacterImpact/HeavyImpact 核心。
