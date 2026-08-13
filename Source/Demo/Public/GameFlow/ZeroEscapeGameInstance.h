@@ -2,9 +2,9 @@
 
 /**
  * @file ZeroEscapeGameInstance.h
- * 职责：跨关卡持有“下一局”的生成请求（Seed + 难度）与有限自动重试次数。
- * 边界：只原子更新请求和重试计数，不驱动生成、不管胜负、不做存档或统计。
- * 状态 Owner：本类是待开始一局的请求与跨 World 自动重试次数的唯一持有者。
+ * 职责：跨关卡持有“下一局”的不可变生成请求身份（公开 Seed + 难度）。
+ * 边界：只响应菜单等显式调用更新请求，不驱动生成、不管胜负、不做存档或统计。
+ * 状态 Owner：本类是待开始一局生成请求的唯一持有者；运行时失败不得改写请求。
  */
 
 #pragma once
@@ -15,7 +15,7 @@
 
 #include "ZeroEscapeGameInstance.generated.h"
 
-/** 单机会话级 GameInstance：在关卡切换间保留本局请求与有限自动重试次数。 */
+/** 单机会话级 GameInstance：在关卡切换间保留玩家确认的本局请求。 */
 UCLASS()
 class DEMO_API UZeroEscapeGameInstance final : public UGameInstance
 {
@@ -38,23 +38,8 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "ZeroEscape|Round")
 	void SetPendingDifficulty(EZeroEscapeDifficulty InDifficulty);
 
-	/**
-	 * 为可恢复的开局失败原子地推进 Seed 与次数；达到上限时不修改任何状态。
-	 * 返回的 RetryNumber 从 1 开始，由 GameMode 记录后重载正式游戏关卡。
-	 */
-	bool TryAdvancePendingRequestForAutomaticRetry(
-		int32& OutRetryNumber,
-		int32& OutPreviousSeed,
-		int32& OutNextSeed);
-
-	static constexpr int32 MaxAutomaticGenerationRetryCount = 3;
-
 private:
 	/** 待开始一局的 Seed 与难度；默认值来自 FZeroEscapeGenerationRequest。 */
 	UPROPERTY(VisibleAnywhere, Category = "ZeroEscape|Round")
 	FZeroEscapeGenerationRequest PendingRequest;
-
-	/** 仅统计当前 PendingRequest 已执行的跨关卡自动重试；任一显式 Setter 都会归零。 */
-	UPROPERTY(Transient)
-	int32 AutomaticGenerationRetryCount = 0;
 };

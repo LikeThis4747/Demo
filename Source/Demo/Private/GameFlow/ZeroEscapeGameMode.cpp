@@ -3,7 +3,7 @@
 /**
  * @file ZeroEscapeGameMode.cpp
  * 职责：把正式 PCG、导航、玩家、追猎者、Exit 与 Population 原子编排成一局。
- * 边界：只对换 Seed 可能改变结果的失败做有限跨 World 重试；其他失败回到配置的主菜单。
+ * 边界：生成失败只做清理并返回主菜单；不得改写公开 Seed 或重载游戏关卡重试。
  */
 
 #include "GameFlow/ZeroEscapeGameMode.h"
@@ -56,11 +56,6 @@ void AZeroEscapeGameMode::BeginPlay()
 	if (MainMenuLevel.IsNull())
 	{
 		AbortSetupAndReturnToMainMenu(TEXT("MainMenuLevelUnset"));
-		return;
-	}
-	if (GameLevel.IsNull())
-	{
-		AbortSetupAndReturnToMainMenu(TEXT("GameLevelUnset"));
 		return;
 	}
 	if (PursuerClass == nullptr || ExitActorClass == nullptr
@@ -178,10 +173,6 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 
 	if (!bSuccess || ActiveGenerator->State != EZeroEscapeRuntimeGenerationState::Ready)
 	{
-		if (TryScheduleAutomaticGenerationRetry(Report))
-		{
-			return;
-		}
 		AbortSetupAndReturnToMainMenu(TEXT("GenerationFinalFailure"));
 		return;
 	}
@@ -402,49 +393,6 @@ void AZeroEscapeGameMode::AbortSetupAndReturnToMainMenu(const TCHAR* Reason)
 		*FailureReason,
 		static_cast<long long>(LastHandledGenerationOperationId));
 	BeginSetupTransition(*FailureReason, MainMenuLevel);
-}
-
-bool AZeroEscapeGameMode::TryScheduleAutomaticGenerationRetry(
-	const FZeroEscapeGenerationReport& Report)
-{
-	if (!ZeroEscape::GameFlow::FGameSetupGate::IsRecoverableGenerationFailure(Report)
-		|| GameLevel.IsNull())
-	{
-		return false;
-	}
-
-	UZeroEscapeGameInstance* GameInstancePtr =
-		GetGameInstance<UZeroEscapeGameInstance>();
-	if (!IsValid(GameInstancePtr))
-	{
-		return false;
-	}
-
-	int32 RetryNumber = 0;
-	int32 PreviousSeed = 0;
-	int32 NextSeed = 0;
-	if (!GameInstancePtr->TryAdvancePendingRequestForAutomaticRetry(
-			RetryNumber, PreviousSeed, NextSeed))
-	{
-		UE_LOG(LogZeroEscapeGameMode, Warning,
-			TEXT("ZE_GAME_SETUP state=RetryExhausted max_retry=%d seed=%d stage=%d failure=%d"),
-			UZeroEscapeGameInstance::MaxAutomaticGenerationRetryCount,
-			GameInstancePtr->GetPendingRequest().Seed,
-			static_cast<int32>(Report.Stage),
-			static_cast<int32>(Report.Failure));
-		return false;
-	}
-
-	UE_LOG(LogZeroEscapeGameMode, Warning,
-		TEXT("ZE_GAME_SETUP state=AutomaticRetry retry=%d max_retry=%d previous_seed=%d next_seed=%d stage=%d failure=%d"),
-		RetryNumber,
-		UZeroEscapeGameInstance::MaxAutomaticGenerationRetryCount,
-		PreviousSeed,
-		NextSeed,
-		static_cast<int32>(Report.Stage),
-		static_cast<int32>(Report.Failure));
-	BeginSetupTransition(TEXT("RecoverableGenerationFailure"), GameLevel);
-	return true;
 }
 
 void AZeroEscapeGameMode::BeginSetupTransition(

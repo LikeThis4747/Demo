@@ -33,6 +33,7 @@ struct DEMO_API FZeroEscapeSharedRouteConstraints
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1.0", Units = "cm"))
 	double FloorHeightCm = 450.0;
 
+	/** 直线长度软偏好；超出后降低候选权重，但不会判定地图失败。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
 	int32 MaxConsecutiveStraightTiles = 4;
 
@@ -159,8 +160,8 @@ struct DEMO_API FZeroEscapeSharedGenerationBudget
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "25000"))
 	int32 MaxWfcBacktrackCountPerFloor = 25000;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "10"))
-	int32 MaxWfcSolveAttemptsPerFloor = 10;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Budget", meta = (ClampMin = "1", ClampMax = "3"))
+	int32 MaxWfcSolveAttemptsPerFloor = 3;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Navigation", meta = (ClampMin = "0.1", ClampMax = "10.0", Units = "s"))
 	double NavigationBuildTimeoutSeconds = 10.0;
@@ -175,7 +176,7 @@ struct DEMO_API FZeroEscapeWfcShapeWeights
 {
 	GENERATED_BODY()
 
-	/** Empty 权重不能直接换算为空格比例；Count 仍是最终数量硬约束。 */
+	/** 基础 Empty 权重；求解前会按当前楼层的软密度目标重新校准。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "WFC", meta = (ClampMin = "1"))
 	int32 EmptyWeight = 12000;
 
@@ -234,8 +235,8 @@ struct DEMO_API FZeroEscapeHighCeilingRoomSettings
 {
 	GENERATED_BODY()
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "0"))
-	int32 MinimumTotalCount = 0;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "2"))
+	int32 MinimumTotalCount = 2;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "High Ceiling Rooms", meta = (ClampMin = "0"))
 	int32 MaxCountPerFloor = 2;
@@ -256,21 +257,17 @@ struct DEMO_API FZeroEscapeFloorCountOption
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Floors", meta = (ClampMin = "0"))
 	int32 SelectionWeight = 1;
 
-	/** 整栋总可走格下限，包含所有楼层的普通格和结构自带 Walkable Cell。 */
+	/** 整栋总可走格软目标下界；历史字段名保留用于资产兼容。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
 	int32 MinTotalWalkableCellCount = 1;
 
-	/** 整栋总可走格上限，包含所有楼层的普通格和结构自带 Walkable Cell。 */
+	/** 整栋总可走格软目标上界；历史字段名保留用于资产兼容。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
 	int32 MaxTotalWalkableCellCount = 1;
 
-	/** 每层由普通二维 WFC 提供的最低内容量，不被楼梯或高厅替代。 */
+	/** 每层普通格软目标；真正硬下限仅为一层 2 格、其他层 1 格。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Size", meta = (ClampMin = "1"))
 	int32 MinOrdinaryWalkableCellCountPerFloor = 1;
-
-	/** 玩家出生点到顶层 Exit 的整栋逻辑最短路上限。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Route", meta = (ClampMin = "1"))
-	int32 MaxPlayerToExitRouteLengthTiles = 1;
 
 	/** 整栋额外双层楼梯上限，不包含每对相邻楼层必需的一座。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Stairs", meta = (ClampMin = "0"))
@@ -325,10 +322,6 @@ class DEMO_API UZeroEscapeLevelGenerationProfile final : public UPrimaryDataAsse
 	GENERATED_BODY()
 
 public:
-	/** 任何改变纯逻辑结果的配置修改都必须递增。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Version", meta = (ClampMin = "1"))
-	int32 ProfileVersion = 1;
-
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
 	FZeroEscapeSharedRouteConstraints SharedRouteConstraints;
 

@@ -16,6 +16,8 @@ namespace ZeroEscape::LevelGeneration
 	{
 		inline constexpr uint64 HashOffset = 1469598103934665603ull;
 		inline constexpr uint64 HashPrime = 1099511628211ull;
+		/** 移除版本字段后保留既有随机序列；这是内部混合盐，不是版本协议。 */
+		inline constexpr uint32 RandomSequenceCompatibilitySalt = 0x5384540Fu;
 
 		/** 按字节混入整数，避免结构体填充和平台内存布局进入 Hash。 */
 		void HashUInt64(uint64& Hash, const uint64 Value)
@@ -234,20 +236,17 @@ namespace ZeroEscape::LevelGeneration
 		OutInput.WfcShapeWeights = Difficulty->WfcShapeWeights;
 		OutInput.Signature.Seed = Request.Seed;
 		OutInput.Signature.Difficulty = Request.Difficulty;
-		OutInput.Signature.AlgorithmVersion = GAlgorithmVersion;
-		OutInput.Signature.GenerationProfileVersion = Profile.ProfileVersion;
 		return true;
 	}
 
 	FRandomStream FGenerationCore::MakeRandomStream(
 		const int32 MasterSeed,
-		const int32 AlgorithmVersion,
 		const ERandomDomain Domain,
 		const int32 Salt)
 	{
 		// SplitMix 风格整数混合只派生 Seed；实际随机序列仍由 UE FRandomStream 提供。
 		uint32 Mixed = static_cast<uint32>(MasterSeed);
-		Mixed ^= static_cast<uint32>(AlgorithmVersion) * 0x9E3779B9u;
+		Mixed ^= GenerationCorePrivate::RandomSequenceCompatibilitySalt;
 		Mixed ^= static_cast<uint32>(Domain);
 		Mixed ^= static_cast<uint32>(Salt) * 0x85EBCA6Bu;
 		Mixed ^= Mixed >> 16;
@@ -261,9 +260,7 @@ namespace ZeroEscape::LevelGeneration
 	int64 FGenerationCore::ComputeCanonicalLayoutHash(
 		const FZeroEscapeGeneratedLevelPlan& Plan)
 	{
-		if (Plan.Signature.AlgorithmVersion <= 0
-			|| Plan.Signature.GenerationProfileVersion <= 0
-			|| Plan.FloorCount < GenerationLimits::MinFloorCount
+		if (Plan.FloorCount < GenerationLimits::MinFloorCount
 			|| Plan.FloorCount > GenerationLimits::MaxFloorCount
 			|| Plan.GridSize.X <= 0 || Plan.GridSize.Y <= 0
 			|| !FMath::IsFinite(Plan.LogicalTileSizeCm)
@@ -301,8 +298,6 @@ namespace ZeroEscape::LevelGeneration
 		uint64 Hash = GenerationCorePrivate::HashOffset;
 		HashUInt64(Hash, Plan.Signature.Seed);
 		HashUInt64(Hash, static_cast<uint8>(Plan.Signature.Difficulty));
-		HashUInt64(Hash, Plan.Signature.AlgorithmVersion);
-		HashUInt64(Hash, Plan.Signature.GenerationProfileVersion);
 		HashUInt64(Hash, Plan.FloorCount);
 		HashUInt64(Hash, Plan.GridSize.X);
 		HashUInt64(Hash, Plan.GridSize.Y);

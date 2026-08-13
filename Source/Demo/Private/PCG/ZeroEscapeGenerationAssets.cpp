@@ -179,11 +179,6 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		return false;
 	};
 
-	if (ProfileVersion <= 0)
-	{
-		return Fail(TEXT("GenerationProfile.ProfileVersion 必须大于 0。"));
-	}
-
 	const FZeroEscapeSharedRouteConstraints& Route = SharedRouteConstraints;
 	const FIntPoint GridSize = Route.GridSize;
 	const int64 GridCellCount = static_cast<int64>(GridSize.X) * GridSize.Y;
@@ -640,10 +635,10 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 		bAnyThreeFloorStairwellRequested |=
 			Definition.ThreeFloorStairwellChancePercent > 0;
 		const FZeroEscapeHighCeilingRoomSettings& HighRooms = Definition.HighCeilingRooms;
-		if (HighRooms.MinimumTotalCount < 0 || HighRooms.MaxCountPerFloor < 0
+		if (HighRooms.MinimumTotalCount < 2 || HighRooms.MaxCountPerFloor < 0
 			|| !IsRatio(HighRooms.MinimumSeparationRatio))
 		{
-			return Fail(TEXT("高天花板房间的最低数量、每层上限或间距比例非法。"));
+			return Fail(TEXT("高厅整栋最低数量必须至少为 2，且每层上限和间距比例必须合法。"));
 		}
 		bAnyHighCeilingRoomRequested |= HighRooms.MinimumTotalCount > 0;
 
@@ -682,7 +677,6 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 				|| Option.MinOrdinaryWalkableCellCountPerFloor <= 0
 				|| Option.MinOrdinaryWalkableCellCountPerFloor > GridCellCount
 				|| Option.MinTotalWalkableCellCount < RequiredOrdinaryMinimum
-				|| Option.MaxPlayerToExitRouteLengthTiles <= 0
 				|| Option.MaxAdditionalTwoFloorStairCount < 0
 				|| Option.MaxAdditionalTwoFloorStairCount > 2 * (Option.FloorCount - 1))
 			{

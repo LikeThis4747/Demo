@@ -18,6 +18,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "PCG/ZeroEscapeGenerationCore.h"
+#include "PCG/ZeroEscapeGridLayoutSolver.h"
 #include "PCG/ZeroEscapeWfcConstraints.h"
 #include "PCG/ZeroEscapeWfcSolver.h"
 
@@ -112,6 +113,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Settings.MinWalkableCellCount = MinWalkable;
 			Settings.MaxWalkableCellCount = MaxWalkable;
 			Settings.MaxConsecutiveStraightTiles = MaxConsecutive;
+			Settings.PreferredMaxConsecutiveStraightTiles = 0;
 			Settings.MaxCandidateAttempts = 100000;
 			Settings.MaxBacktrackCount = 25000;
 			return Settings;
@@ -203,6 +205,106 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestEqual(TEXT("N+S 必须读取 Straight 权重"), Weights.GetWeightForMask(0x5), Weights.StraightWeight);
 		TestEqual(TEXT("N+E 必须读取 Corner 权重"), Weights.GetWeightForMask(0x3), Weights.CornerWeight);
 		TestEqual(TEXT("使用高位的非法 Mask 必须返回零权重"), Weights.GetWeightForMask(0x10), 0);
+		return true;
+	}
+
+	/** 验证直线长度偏好只改变抽样顺序，不会拒绝唯一合法的过长直线。 */
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeWfcSoftStraightPreferenceTest,
+		"Demo.PCG.WFC.SoftStraightPreference",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeWfcSoftStraightPreferenceTest::RunTest(const FString& Parameters)
+	{
+		using namespace WfcLayoutTestsPrivate;
+		(void)Parameters;
+		auto AcceptEveryLeaf = [](const TConstArrayView<uint8>)
+		{
+			return FWfcCollapsedCandidateEvaluation::Accept();
+		};
+		const TArray<FTileVariant> Variants =
+			MakeCanonicalVariantArray(FZeroEscapeWfcShapeWeights());
+
+		const FIntPoint RequiredLineGrid(6, 3);
+		TArray<FGridCellConstraint> RequiredLineConstraints =
+			MakeDenseConstraints(RequiredLineGrid, EGridCellDomain::Outside);
+		AddRequiredEdge(RequiredLineGrid, FIntPoint(1, 1), FIntPoint(2, 1), RequiredLineConstraints);
+		AddRequiredEdge(RequiredLineGrid, FIntPoint(2, 1), FIntPoint(3, 1), RequiredLineConstraints);
+		AddRequiredEdge(RequiredLineGrid, FIntPoint(3, 1), FIntPoint(4, 1), RequiredLineConstraints);
+		FZeroEscapeWfcSolveSettings RequiredLineSettings =
+			MakeWfcSettings(FIntPoint(1, 1), 4, 4, 4);
+		RequiredLineSettings.PreferredMaxConsecutiveStraightTiles = 1;
+		FRandomStream RequiredLineRandom(112233);
+		TArray<uint8> RequiredLineOutput;
+		FZeroEscapeGenerationReport RequiredLineReport;
+		const bool bRequiredLineSolved = FWfcSolver::Solve(
+			RequiredLineGrid,
+			RequiredLineConstraints,
+			RequiredLineSettings,
+			Variants,
+			RequiredLineRandom,
+			AcceptEveryLeaf,
+			RequiredLineOutput,
+			RequiredLineReport);
+		TestTrue(TEXT("超过软偏好长度的唯一 Required 直线仍必须成功"), bRequiredLineSolved);
+		if (bRequiredLineSolved)
+		{
+			TestEqual(TEXT("软偏好不得删除唯一的水平贯通候选"),
+				RequiredLineOutput[Grid::ToIndex(FIntPoint(2, 1), RequiredLineGrid)],
+				static_cast<uint8>(Grid::DirectionBit(1) | Grid::DirectionBit(3)));
+		}
+
+		// 固定两格水平贯通后，第三格可收尾或继续直行；跨固定 Seed 比较候选排序倾向。
+		const FIntPoint ChoiceGrid(4, 1);
+		TArray<FGridCellConstraint> ChoiceConstraints =
+			MakeDenseConstraints(ChoiceGrid, EGridCellDomain::Optional);
+		AddRequiredEdge(ChoiceGrid, FIntPoint(0, 0), FIntPoint(1, 0), ChoiceConstraints);
+		AddRequiredEdge(ChoiceGrid, FIntPoint(1, 0), FIntPoint(2, 0), ChoiceConstraints);
+		FZeroEscapeWfcShapeWeights ChoiceWeights;
+		ChoiceWeights.EmptyWeight = 20;
+		ChoiceWeights.DeadEndWeight = 35;
+		ChoiceWeights.StraightWeight = 90;
+		const TArray<FTileVariant> ChoiceVariants = MakeCanonicalVariantArray(ChoiceWeights);
+		auto CountStraightExtensions = [this,
+			&ChoiceConstraints,
+			&ChoiceVariants,
+			AcceptEveryLeaf,
+			ChoiceGrid](const int32 PreferredMaximum)
+		{
+			int32 ExtensionCount = 0;
+			for (int32 Seed = 0; Seed < 128; ++Seed)
+			{
+				FZeroEscapeWfcSolveSettings Settings =
+					MakeWfcSettings(FIntPoint(0, 0), 3, 4, 4);
+				Settings.PreferredMaxConsecutiveStraightTiles = PreferredMaximum;
+				FRandomStream Random(Seed);
+				TArray<uint8> Output;
+				FZeroEscapeGenerationReport Report;
+				if (!FWfcSolver::Solve(
+						ChoiceGrid,
+						ChoiceConstraints,
+						Settings,
+						ChoiceVariants,
+						Random,
+						AcceptEveryLeaf,
+						Output,
+						Report))
+				{
+					AddError(FString::Printf(TEXT("软直线偏好比较 Seed=%d 求解失败。"), Seed));
+					continue;
+				}
+				const uint8 ThirdMask = Output[Grid::ToIndex(FIntPoint(2, 0), ChoiceGrid)];
+				const uint8 HorizontalMask = static_cast<uint8>(
+					Grid::DirectionBit(1) | Grid::DirectionBit(3));
+				ExtensionCount += (ThirdMask & HorizontalMask) == HorizontalMask ? 1 : 0;
+			}
+			return ExtensionCount;
+		};
+
+		const int32 UnbiasedExtensionCount = CountStraightExtensions(0);
+		const int32 PreferredExtensionCount = CountStraightExtensions(1);
+		TestTrue(TEXT("启用软偏好后固定 Seed 集合中的长直线首选次数必须下降"),
+			PreferredExtensionCount < UnbiasedExtensionCount);
 		return true;
 	}
 
@@ -594,12 +696,14 @@ namespace ZeroEscape::LevelGeneration::Tests
 	{
 		using namespace WfcLayoutTestsPrivate;
 		(void)Parameters;
-		const FIntPoint GridSize(3, 1);
+		const FIntPoint GridSize(4, 1);
 		TArray<FGridCellConstraint> Constraints =
 			MakeDenseConstraints(GridSize, EGridCellDomain::Optional);
 		AddRequiredEdge(GridSize, FIntPoint(0, 0), FIntPoint(1, 0), Constraints);
-		const FZeroEscapeWfcSolveSettings Settings =
-			MakeWfcSettings(FIntPoint(0, 0), 2, 3, 3);
+		AddRequiredEdge(GridSize, FIntPoint(1, 0), FIntPoint(2, 0), Constraints);
+		FZeroEscapeWfcSolveSettings Settings =
+			MakeWfcSettings(FIntPoint(0, 0), 3, 4, 4);
+		Settings.PreferredMaxConsecutiveStraightTiles = 1;
 		FZeroEscapeWfcShapeWeights Weights;
 		Weights.EmptyWeight = 20;
 		Weights.DeadEndWeight = 35;
@@ -616,9 +720,9 @@ namespace ZeroEscape::LevelGeneration::Tests
 		for (int32 Seed = 0; Seed < 16; ++Seed)
 		{
 			FRandomStream FirstRandom = FGenerationCore::MakeRandomStream(
-				Seed, GAlgorithmVersion, ERandomDomain::WfcLayout);
+				Seed, ERandomDomain::WfcLayout);
 			FRandomStream SecondRandom = FGenerationCore::MakeRandomStream(
-				Seed, GAlgorithmVersion, ERandomDomain::WfcLayout);
+				Seed, ERandomDomain::WfcLayout);
 			TArray<uint8> FirstOutput;
 			TArray<uint8> SecondOutput;
 			FZeroEscapeGenerationReport FirstReport;
@@ -644,6 +748,66 @@ namespace ZeroEscape::LevelGeneration::Tests
 					&& FirstReport.Metrics.WfcBacktrackCount
 						== SecondReport.Metrics.WfcBacktrackCount);
 		}
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeDeterministicFloorFallbackTest,
+		"Demo.PCG.Unit.Grid.DeterministicFallback",
+		EAutomationTestFlags_ApplicationContextMask
+			| EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeDeterministicFloorFallbackTest::RunTest(
+		const FString& Parameters)
+	{
+		using namespace WfcLayoutTestsPrivate;
+		(void)Parameters;
+		FZeroEscapeConstrainedFloorInput Input;
+		Input.Signature.Seed = 240813;
+		Input.Signature.Difficulty = EZeroEscapeDifficulty::Hard;
+		Input.GridSize = FIntPoint(6, 6);
+		Input.RequiredEnterCoordinate = FIntPoint(0, 0);
+		Input.RequiredLeaveCoordinate = FIntPoint(5, 5);
+		Input.Constraints = MakeDenseConstraints(
+			Input.GridSize, EGridCellDomain::Optional);
+		Input.StructureWalkableByCell.Init(0, Input.Constraints.Num());
+		Input.Constraints[Grid::ToIndex(
+			Input.RequiredEnterCoordinate, Input.GridSize)].Domain =
+			EGridCellDomain::Required;
+		Input.Constraints[Grid::ToIndex(
+			Input.RequiredLeaveCoordinate, Input.GridSize)].Domain =
+			EGridCellDomain::Required;
+		Input.MinTotalWalkableCellCount = 2;
+		Input.MaxTotalWalkableCellCount = Input.Constraints.Num();
+		Input.MinOrdinaryWalkableCellCount = 2;
+		Input.MaxConsecutiveStraightTiles = 6;
+		Input.MaxSolveAttemptsForThisFloor = 3;
+		Input.PreferredTotalWalkableCellCount = 20;
+		Input.PreferredOrdinaryWalkableCellCount = 20;
+		Input.PreferredMaxConsecutiveStraightTiles = 4;
+		Input.PreferredRouteCoverageRatio = 0.75;
+
+		FZeroEscapeSharedWfcBudget FirstBudget;
+		FZeroEscapeSharedWfcBudget ReplayBudget;
+		FZeroEscapeConstrainedFloorResult First;
+		FZeroEscapeConstrainedFloorResult Replay;
+		FZeroEscapeGenerationReport FirstReport;
+		FZeroEscapeGenerationReport ReplayReport;
+		const FZeroEscapeWfcShapeWeights Weights;
+		const bool bFirstSolved = FGridLayoutSolver::SolveConstrainedFloor(
+			Input, Weights, FirstBudget, First, FirstReport);
+		const bool bReplaySolved = FGridLayoutSolver::SolveConstrainedFloor(
+			Input, Weights, ReplayBudget, Replay, ReplayReport);
+		TestTrue(TEXT("WFC 工作预算为零时必须提交确定性硬合法楼层兜底"),
+			bFirstSolved && bReplaySolved);
+		TestEqual(TEXT("兜底必须保持同 Seed OpeningMask 重放"),
+			First.OpeningMaskByCell, Replay.OpeningMaskByCell);
+		TestEqual(TEXT("兜底应向软密度目标生长"),
+			First.TotalWalkableCellCount, 20);
+		TestTrue(TEXT("兜底必须连接进入点和离开点"),
+			First.RequiredRouteLengthTiles > 0);
+		TestEqual(TEXT("兜底不得伪造 WFC 搜索树消耗"),
+			FirstReport.Metrics.WfcSolveAttemptCount, 0);
 		return true;
 	}
 }

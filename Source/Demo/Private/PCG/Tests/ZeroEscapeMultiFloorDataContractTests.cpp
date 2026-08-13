@@ -139,15 +139,14 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Option.MinTotalWalkableCellCount = FloorCount * 24;
 			Option.MaxTotalWalkableCellCount = FloorCount * 80;
 			Option.MinOrdinaryWalkableCellCountPerFloor = 20;
-			Option.MaxPlayerToExitRouteLengthTiles = 160;
 			Option.MaxAdditionalTwoFloorStairCount = MaxAdditionalStairs;
-			FZeroEscapeWeightedCount NoRoom;
-			NoRoom.Count = 0;
-			NoRoom.Weight = 1;
-			FZeroEscapeWeightedCount OneRoom;
-			OneRoom.Count = 1;
-			OneRoom.Weight = 1;
-			Option.HighCeilingRoomTargetCounts = {NoRoom, OneRoom};
+			FZeroEscapeWeightedCount TwoRooms;
+			TwoRooms.Count = 2;
+			TwoRooms.Weight = 1;
+			FZeroEscapeWeightedCount ThreeRooms;
+			ThreeRooms.Count = 3;
+			ThreeRooms.Weight = 1;
+			Option.HighCeilingRoomTargetCounts = {TwoRooms, ThreeRooms};
 			return Option;
 		}
 
@@ -162,7 +161,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 				MakeFloorOption(3, 60, 3),
 				MakeFloorOption(4, 20, 4)};
 			Definition.ThreeFloorStairwellChancePercent = 10;
-			Definition.HighCeilingRooms.MinimumTotalCount = 0;
+			Definition.HighCeilingRooms.MinimumTotalCount = 2;
 			Definition.HighCeilingRooms.MaxCountPerFloor = 2;
 			Definition.HighCeilingRooms.MinimumSeparationRatio = 0.2;
 			return Definition;
@@ -170,7 +169,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 
 		void BuildValidProfile(UZeroEscapeLevelGenerationProfile& Profile)
 		{
-			Profile.ProfileVersion = 6;
 			Profile.SharedRouteConstraints = FZeroEscapeSharedRouteConstraints();
 			Profile.SharedRouteConstraints.GridSize = FIntPoint(20, 12);
 			Profile.SharedRouteConstraints.LogicalTileSizeCm = 600.0;
@@ -345,8 +343,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FZeroEscapeGeneratedLevelPlan Plan;
 			Plan.Signature.Seed = 24680;
 			Plan.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
-			Plan.Signature.AlgorithmVersion = GAlgorithmVersion;
-			Plan.Signature.GenerationProfileVersion = 6;
 			Plan.FloorCount = 2;
 			Plan.GridSize = FIntPoint(6, 6);
 			Plan.LogicalTileSizeCm = 600.0;

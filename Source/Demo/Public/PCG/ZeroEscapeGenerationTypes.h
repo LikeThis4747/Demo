@@ -24,7 +24,7 @@ namespace ZeroEscape::GenerationLimits
 	inline constexpr int32 MaxStructureCandidateEvaluations = 250000;
 	inline constexpr int32 MaxWfcCandidateAttemptsPerFloor = 100000;
 	inline constexpr int32 MaxWfcBacktrackCountPerFloor = 25000;
-	inline constexpr int32 MaxWfcSolveAttemptsPerFloor = 10;
+	inline constexpr int32 MaxWfcSolveAttemptsPerFloor = 3;
 	inline constexpr int32 MaxNavigationValidationPoints = 20;
 	inline constexpr double MaxNavigationBuildTimeoutSeconds = 10.0;
 }
@@ -144,7 +144,7 @@ struct DEMO_API FZeroEscapeGenerationRequest
 {
 	GENERATED_BODY()
 
-	/** 同一算法/Profile 版本下，相同 Seed 必须得到相同逻辑布局。 */
+	/** 同一生成配置下，相同 Seed 与难度必须得到相同逻辑布局。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation")
 	int32 Seed = 12345;
 
@@ -165,18 +165,10 @@ struct DEMO_API FZeroEscapeGenerationSignature
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
 	EZeroEscapeDifficulty Difficulty = EZeroEscapeDifficulty::Normal;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 AlgorithmVersion = 0;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generation")
-	int32 GenerationProfileVersion = 0;
-
 	bool operator==(const FZeroEscapeGenerationSignature& Other) const
 	{
 		return Seed == Other.Seed
-			&& Difficulty == Other.Difficulty
-			&& AlgorithmVersion == Other.AlgorithmVersion
-			&& GenerationProfileVersion == Other.GenerationProfileVersion;
+			&& Difficulty == Other.Difficulty;
 	}
 };
 

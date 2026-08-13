@@ -66,6 +66,12 @@ namespace ZeroEscape::LevelGeneration
 		int32 MaxConsecutiveStraightTiles = 1;
 
 		/**
+		 * Candidate ordering 的软偏好；0 表示禁用。
+		 * 它不得参与约束传播或把任何合法 OpeningMask 的权重降为零。
+		 */
+		int32 PreferredMaxConsecutiveStraightTiles = 0;
+
+		/**
 		 * Solver 可把某个决策 Cell 赋为 singleton 的最大候选尝试次数。
 		 * 约束层只参与一次性校验，不自行消费该预算。
 		 */

@@ -1,12 +1,8 @@
 # 当前任务
 
-- 当前受击系统新机关接入权威：`DOC/Outputs/Physics/CHARACTER_IMPACT_INTEGRATION_GUIDE.md`。
-- 2026-08-13 用户已接受制导/磁力轻受击收口：异常前冲已修复；`Slow + 局部物理` 方向成立，物理反馈偏弱但当前勉强够用，不再扩大本轮物理架构。
-- Light 接入使用命中后的 `ICharacterImpactReceiver::SubmitStandingImpact`，来源 Profile 分别映射玩家/追猎者的 None、Slow、Stop；新增机关不应修改角色接收核心。
-- Heavy 使用接触前 `IHeavyImpactReceiver::PrepareForHeavyImpact`；机关必须提供自身几何/运动的预测并随后发生真实 Chaos 接触，不能只配枚举。
-- 玩家 Stop 的 Front/Left/Right 动画已补齐：复用追猎者三条方向 Sequence，按已验收 GetUp 工作流制作玩家 Skeleton 副本并装配 `DA_PlayerStandingImpact`。
-- 地刺玩家结果保持 Stop 0.25 秒并已开启方向动画；用户现场确认当前版本可用。任务 `TASK-20260813-005` 已归档，少量观感细节留待次日单独调整。
-
-<!-- written by shiqiqiwang at 2026-08-13 13:40 UTC -->
-
-- 并行交付状态：Level0 刺轮技术初版已完成 C++、Blueprint/DataAsset、两格实例与 PIE 验证，玩家映射 Stop、追猎者映射 None；仍待用户验收路线压力与穿越手感，不接入 PCG；其玩家 Stop 已可复用本次补齐的三方向动画。任务卡：`TASK-20260813-003-刺轮机关设计评估`。
+- 当前 PCG 权威任务：`claude/tasks/active/TASK-20260813-006-PCG种子稳定性与结构出现率诊断.md`。
+- 固定 Seed 与软质量目标实现已完成，正式报告：`DOC/DailyReport/2026-08-13-PCG固定Seed与软质量目标实施报告.md`。
+- 当前产品合同：公开 Seed 不自动改变；质量规则从搜索开始提供偏好但不终局拒绝；WFC 最多三候选择优并有同层确定性硬合法兜底；每栋至少两个高厅且至少一个非顶层。
+- 最终验证：DemoEditor 构建通过；Unit 10/10、WFC 8/8、Population 8/8、GameFlow 1/1、Navigation Gate 1/1；正式 Profile 三档各 300 Seed、每个重放两次，共 1800 次整栋求解全部通过。
+- 待办：最终 Git 提交/推送与远端哈希核验；之后等待用户次日验收困难档加载、地图密度/长直线/高厅观感、同 Seed 重进，以及真实一局动态 Recast 和追猎者跨层。
+- 排除项继续有效：楼梯 Opening Set、三层楼梯表现、机关资源规则、高厅灯光、Loading UI 均未修改。

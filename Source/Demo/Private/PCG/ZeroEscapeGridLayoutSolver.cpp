@@ -82,9 +82,7 @@ namespace ZeroEscape::LevelGeneration
 			const int64 CellCount64 =
 				static_cast<int64>(Input.GridSize.X) * Input.GridSize.Y;
 			FString WeightError;
-			if (Input.Signature.AlgorithmVersion <= 0
-				|| Input.Signature.GenerationProfileVersion <= 0
-				|| Input.WholeLayoutAttemptIndex < 0
+			if (Input.WholeLayoutAttemptIndex < 0
 				|| Input.FloorIndex < 0
 				|| Input.GridSize.X < GenerationLimits::MinGridAxis
 				|| Input.GridSize.Y < GenerationLimits::MinGridAxis
@@ -104,9 +102,12 @@ namespace ZeroEscape::LevelGeneration
 				|| Input.MaxConsecutiveStraightTiles
 					> FMath::Max(Input.GridSize.X, Input.GridSize.Y)
 				|| Input.MaxSolveAttemptsForThisFloor <= 0
-				|| !FMath::IsFinite(Input.MinRouteCoverageRatio)
-				|| Input.MinRouteCoverageRatio < 0.0
-				|| Input.MinRouteCoverageRatio > 1.0
+				|| Input.PreferredTotalWalkableCellCount <= 0
+				|| Input.PreferredOrdinaryWalkableCellCount <= 0
+				|| Input.PreferredMaxConsecutiveStraightTiles < 0
+				|| !FMath::IsFinite(Input.PreferredRouteCoverageRatio)
+				|| Input.PreferredRouteCoverageRatio < 0.0
+				|| Input.PreferredRouteCoverageRatio > 1.0
 				|| Budget.RemainingSolveAttempts < 0
 				|| Budget.RemainingCandidateAttempts < 0
 				|| Budget.RemainingBacktracks < 0
@@ -273,6 +274,315 @@ namespace ZeroEscape::LevelGeneration
 				OpeningMasks.Num());
 			return true;
 		}
+
+		struct FFloorSoftQualityScore
+		{
+			int32 OrdinaryDeficit = 0;
+			int32 TotalDeviation = 0;
+			int32 RouteCoverageDeficitMicros = 0;
+			int32 LongStraightExcessSquared = 0;
+
+			bool IsBetterThan(const FFloorSoftQualityScore& Other) const
+			{
+				if (OrdinaryDeficit != Other.OrdinaryDeficit)
+				{
+					return OrdinaryDeficit < Other.OrdinaryDeficit;
+				}
+				if (TotalDeviation != Other.TotalDeviation)
+				{
+					return TotalDeviation < Other.TotalDeviation;
+				}
+				if (RouteCoverageDeficitMicros != Other.RouteCoverageDeficitMicros)
+				{
+					return RouteCoverageDeficitMicros
+						< Other.RouteCoverageDeficitMicros;
+				}
+				return LongStraightExcessSquared
+					< Other.LongStraightExcessSquared;
+			}
+		};
+
+		int32 MeasureLongestStraightRun(
+			const FIntPoint GridSize,
+			const TConstArrayView<uint8> OpeningMasks)
+		{
+			int32 Longest = 0;
+			const uint8 HorizontalMask =
+				Grid::DirectionBit(1) | Grid::DirectionBit(3);
+			const uint8 VerticalMask =
+				Grid::DirectionBit(0) | Grid::DirectionBit(2);
+			for (int32 Y = 0; Y < GridSize.Y; ++Y)
+			{
+				int32 Run = 0;
+				for (int32 X = 0; X < GridSize.X; ++X)
+				{
+					const uint8 Mask = OpeningMasks[Grid::ToIndex(FIntPoint(X, Y), GridSize)];
+					Run = (Mask & HorizontalMask) == HorizontalMask ? Run + 1 : 0;
+					Longest = FMath::Max(Longest, Run);
+				}
+			}
+			for (int32 X = 0; X < GridSize.X; ++X)
+			{
+				int32 Run = 0;
+				for (int32 Y = 0; Y < GridSize.Y; ++Y)
+				{
+					const uint8 Mask = OpeningMasks[Grid::ToIndex(FIntPoint(X, Y), GridSize)];
+					Run = (Mask & VerticalMask) == VerticalMask ? Run + 1 : 0;
+					Longest = FMath::Max(Longest, Run);
+				}
+			}
+			return Longest;
+		}
+
+		FFloorSoftQualityScore ScoreCandidate(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const FZeroEscapeConstrainedFloorResult& Candidate)
+		{
+			FFloorSoftQualityScore Score;
+			Score.OrdinaryDeficit = FMath::Max(
+				0,
+				Input.PreferredOrdinaryWalkableCellCount
+					- Candidate.OrdinaryWalkableCellCount);
+			Score.TotalDeviation = FMath::Abs(
+				Candidate.TotalWalkableCellCount
+					- Input.PreferredTotalWalkableCellCount);
+			Score.RouteCoverageDeficitMicros = FMath::Max(
+				0,
+				FMath::RoundToInt(
+					(Input.PreferredRouteCoverageRatio
+						- Candidate.RouteCoverageRatio) * 1000000.0));
+			const int32 Longest = MeasureLongestStraightRun(
+				Input.GridSize,
+				Candidate.OpeningMaskByCell);
+			const int32 Excess = Input.PreferredMaxConsecutiveStraightTiles > 0
+				? FMath::Max(
+					0, Longest - Input.PreferredMaxConsecutiveStraightTiles)
+				: 0;
+			Score.LongStraightExcessSquared = Excess * Excess;
+			return Score;
+		}
+
+		FZeroEscapeWfcShapeWeights BuildDensityBiasedWeights(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const FZeroEscapeWfcShapeWeights& Weights,
+			const int32 FixedStructureWalkableCount,
+			const int32 PossibleWalkableCount)
+		{
+			FZeroEscapeWfcShapeWeights Result = Weights;
+			const int32 OptionalCapacity = FMath::Max(
+				1, PossibleWalkableCount - FixedStructureWalkableCount);
+			const int32 PreferredOptional = FMath::Clamp(
+				FMath::Max(
+					Input.PreferredOrdinaryWalkableCellCount,
+					Input.PreferredTotalWalkableCellCount
+						- FixedStructureWalkableCount),
+				Input.MinOrdinaryWalkableCellCount,
+				OptionalCapacity);
+			const int64 NonEmptyWeight = Weights.GetTotalNonEmptyVariantWeight();
+			const int64 EmptyWeight = FMath::DivideAndRoundNearest<int64>(
+				NonEmptyWeight * (OptionalCapacity - PreferredOptional),
+				FMath::Max(1, PreferredOptional));
+			const int64 MaxEmptyWeight = FMath::Max<int64>(
+				1, static_cast<int64>(MAX_int32) - NonEmptyWeight);
+			Result.EmptyWeight = static_cast<int32>(FMath::Clamp<int64>(
+				EmptyWeight, 1, MaxEmptyWeight));
+			return Result;
+		}
+
+		bool BuildDeterministicFallbackFloor(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			FRandomStream& Random,
+			FZeroEscapeConstrainedFloorResult& OutResult,
+			FString& OutError)
+		{
+			const int32 CellCount = Input.Constraints.Num();
+			const int32 StartIndex = Grid::ToIndex(
+				Input.RequiredEnterCoordinate, Input.GridSize);
+			TArray<int32> Parent;
+			Parent.Init(INDEX_NONE, CellCount);
+			TArray<uint8> Reachable;
+			Reachable.Init(0, CellCount);
+
+			const auto IsAllowedEdge = [&Input](
+				const int32 FromIndex,
+				const uint8 Direction,
+				int32& OutNeighborIndex)
+			{
+				const FGridCellConstraint& From = Input.Constraints[FromIndex];
+				const FIntPoint NeighborCoordinate = Grid::Step(
+					From.Coordinate, Direction);
+				if (From.Domain == EGridCellDomain::Outside
+					|| !Grid::IsInside(NeighborCoordinate, Input.GridSize))
+				{
+					return false;
+				}
+				OutNeighborIndex = Grid::ToIndex(
+					NeighborCoordinate, Input.GridSize);
+				const FGridCellConstraint& To = Input.Constraints[OutNeighborIndex];
+				const uint8 FromBit = Grid::DirectionBit(Direction);
+				const uint8 ToBit = Grid::DirectionBit(
+					Grid::OppositeDirectionIndex(Direction));
+				return To.Domain != EGridCellDomain::Outside
+					&& (From.RequiredClosedMask & FromBit) == 0
+					&& (To.RequiredClosedMask & ToBit) == 0;
+			};
+
+			TQueue<int32> Queue;
+			Reachable[StartIndex] = 1;
+			Queue.Enqueue(StartIndex);
+			int32 CurrentIndex = INDEX_NONE;
+			while (Queue.Dequeue(CurrentIndex))
+			{
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					int32 NeighborIndex = INDEX_NONE;
+					if (!IsAllowedEdge(CurrentIndex, Direction, NeighborIndex)
+						|| Reachable[NeighborIndex] != 0)
+					{
+						continue;
+					}
+					Reachable[NeighborIndex] = 1;
+					Parent[NeighborIndex] = CurrentIndex;
+					Queue.Enqueue(NeighborIndex);
+				}
+			}
+
+			TArray<uint8> Selected;
+			Selected.Init(0, CellCount);
+			TArray<uint8> OpeningMasks;
+			OpeningMasks.Init(0, CellCount);
+			const auto OpenEdge = [&Input, &OpeningMasks](
+				const int32 FirstIndex,
+				const int32 SecondIndex)
+			{
+				const FIntPoint Delta = Input.Constraints[SecondIndex].Coordinate
+					- Input.Constraints[FirstIndex].Coordinate;
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					if (Grid::Step(FIntPoint::ZeroValue, Direction) != Delta)
+					{
+						continue;
+					}
+					OpeningMasks[FirstIndex] |= Grid::DirectionBit(Direction);
+					OpeningMasks[SecondIndex] |= Grid::DirectionBit(
+						Grid::OppositeDirectionIndex(Direction));
+					return true;
+				}
+				return false;
+			};
+			const auto AddPathToRoot = [&Parent, &Selected, &OpenEdge, StartIndex](
+				int32 Index)
+			{
+				while (Index != StartIndex)
+				{
+					const int32 ParentIndex = Parent[Index];
+					if (ParentIndex == INDEX_NONE || !OpenEdge(Index, ParentIndex))
+					{
+						return false;
+					}
+					Selected[Index] = 1;
+					Index = ParentIndex;
+				}
+				Selected[StartIndex] = 1;
+				return true;
+			};
+
+			for (int32 Index = 0; Index < CellCount; ++Index)
+			{
+				const FGridCellConstraint& Cell = Input.Constraints[Index];
+				if ((Cell.RequiredOpenMask & Cell.RequiredClosedMask) != 0)
+				{
+					OutError = TEXT("楼层兜底发现同一公共边同时被要求开启和关闭。");
+					return false;
+				}
+				if (Cell.Domain == EGridCellDomain::Required
+					&& (Reachable[Index] == 0 || !AddPathToRoot(Index)))
+				{
+					OutError = TEXT("结构投影的必需格在允许边图中不连通。");
+					return false;
+				}
+			}
+
+			for (int32 Index = 0; Index < CellCount; ++Index)
+			{
+				const FGridCellConstraint& Cell = Input.Constraints[Index];
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					if ((Cell.RequiredOpenMask & Grid::DirectionBit(Direction)) == 0)
+					{
+						continue;
+					}
+					int32 NeighborIndex = INDEX_NONE;
+					if (!IsAllowedEdge(Index, Direction, NeighborIndex)
+						|| Reachable[NeighborIndex] == 0
+						|| !AddPathToRoot(NeighborIndex)
+						|| !OpenEdge(Index, NeighborIndex))
+					{
+						OutError = TEXT("结构投影的必开边无法并入兜底连通图。");
+						return false;
+					}
+				}
+			}
+
+			int32 FixedStructureWalkableCount = 0;
+			int32 SelectedCount = 0;
+			int32 ReachableCount = 0;
+			for (int32 Index = 0; Index < CellCount; ++Index)
+			{
+				FixedStructureWalkableCount +=
+					Input.StructureWalkableByCell[Index] != 0 ? 1 : 0;
+				SelectedCount += Selected[Index] != 0 ? 1 : 0;
+				ReachableCount += Reachable[Index] != 0 ? 1 : 0;
+			}
+			const int32 TargetCount = FMath::Clamp(
+				FMath::Max3(
+					Input.PreferredTotalWalkableCellCount,
+					FixedStructureWalkableCount
+						+ Input.PreferredOrdinaryWalkableCellCount,
+					Input.MinTotalWalkableCellCount),
+				SelectedCount,
+				FMath::Min(Input.MaxTotalWalkableCellCount, ReachableCount));
+
+			struct FFrontierEdge
+			{
+				int32 FromIndex = INDEX_NONE;
+				int32 ToIndex = INDEX_NONE;
+			};
+			while (SelectedCount < TargetCount)
+			{
+				TArray<FFrontierEdge> Frontier;
+				for (int32 Index = 0; Index < CellCount; ++Index)
+				{
+					if (Selected[Index] == 0)
+					{
+						continue;
+					}
+					for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+					{
+						int32 NeighborIndex = INDEX_NONE;
+						if (IsAllowedEdge(Index, Direction, NeighborIndex)
+							&& Selected[NeighborIndex] == 0)
+						{
+							Frontier.Add({ Index, NeighborIndex });
+						}
+					}
+				}
+				if (Frontier.IsEmpty())
+				{
+					break;
+				}
+				const FFrontierEdge& Chosen = Frontier[Random.RandHelper(Frontier.Num())];
+				Selected[Chosen.ToIndex] = 1;
+				++SelectedCount;
+				if (!OpenEdge(Chosen.FromIndex, Chosen.ToIndex))
+				{
+					OutError = TEXT("楼层兜底无法提交前沿公共边。");
+					return false;
+				}
+			}
+
+			return BuildRouteMetrics(Input, OpeningMasks, OutResult, OutError);
+		}
 	}
 
 	bool FGridLayoutSolver::SolveConstrainedFloor(
@@ -290,26 +600,6 @@ namespace ZeroEscape::LevelGeneration
 			return false;
 		}
 
-		if (InOutBudget.RemainingSolveAttempts <= 0
-			|| InOutBudget.RemainingCandidateAttempts <= 0
-			|| InOutBudget.RemainingBacktracks <= 0)
-		{
-			return FailFloor(
-				OutReport,
-				EZeroEscapeGenerationStage::WfcLayout,
-				EZeroEscapeGenerationFailure::SolverBudgetExhausted,
-				TEXT("进入本层 WFC 前整栋共享预算已经耗尽。"));
-		}
-
-		TStaticArray<FTileVariant, 16> StaticVariants;
-		FWfcSolver::BuildCanonicalVariants(Weights, StaticVariants);
-		TArray<FTileVariant> Variants;
-		Variants.Reserve(StaticVariants.Num());
-		for (const FTileVariant& Variant : StaticVariants)
-		{
-			Variants.Add(Variant);
-		}
-
 		int32 FixedStructureWalkableCount = 0;
 		int32 PossibleWalkableCount = 0;
 		for (int32 DenseIndex = 0; DenseIndex < Input.Constraints.Num(); ++DenseIndex)
@@ -318,6 +608,20 @@ namespace ZeroEscape::LevelGeneration
 				Input.StructureWalkableByCell[DenseIndex] != 0 ? 1 : 0;
 			PossibleWalkableCount +=
 				Input.Constraints[DenseIndex].Domain != EGridCellDomain::Outside ? 1 : 0;
+		}
+
+		const FZeroEscapeWfcShapeWeights EffectiveWeights = BuildDensityBiasedWeights(
+			Input,
+			Weights,
+			FixedStructureWalkableCount,
+			PossibleWalkableCount);
+		TStaticArray<FTileVariant, 16> StaticVariants;
+		FWfcSolver::BuildCanonicalVariants(EffectiveWeights, StaticVariants);
+		TArray<FTileVariant> Variants;
+		Variants.Reserve(StaticVariants.Num());
+		for (const FTileVariant& Variant : StaticVariants)
+		{
+			Variants.Add(Variant);
 		}
 
 		FZeroEscapeWfcSolveSettings Settings;
@@ -329,8 +633,12 @@ namespace ZeroEscape::LevelGeneration
 			PossibleWalkableCount,
 			Input.MaxTotalWalkableCellCount);
 		Settings.MaxConsecutiveStraightTiles = Input.MaxConsecutiveStraightTiles;
+		Settings.PreferredMaxConsecutiveStraightTiles =
+			Input.PreferredMaxConsecutiveStraightTiles;
 
 		FZeroEscapeGenerationMetrics AggregateMetrics;
+		TOptional<FZeroEscapeConstrainedFloorResult> BestCandidate;
+		FFloorSoftQualityScore BestScore;
 		const int32 MaxTreesThisCall = FMath::Min(
 			Input.MaxSolveAttemptsForThisFloor,
 			InOutBudget.RemainingSolveAttempts);
@@ -340,12 +648,7 @@ namespace ZeroEscape::LevelGeneration
 				|| InOutBudget.RemainingCandidateAttempts <= 0
 				|| InOutBudget.RemainingBacktracks <= 0)
 			{
-				OutReport.Metrics = AggregateMetrics;
-				return FailFloor(
-					OutReport,
-					EZeroEscapeGenerationStage::WfcLayout,
-					EZeroEscapeGenerationFailure::SolverBudgetExhausted,
-					TEXT("本层 WFC 消耗完整栋共享预算。"));
+				break;
 			}
 
 			Settings.MaxCandidateAttempts = FMath::Max(
@@ -365,7 +668,6 @@ namespace ZeroEscape::LevelGeneration
 				LocalAttempt);
 			FRandomStream Random = FGenerationCore::MakeRandomStream(
 				Input.Signature.Seed,
-				Input.Signature.AlgorithmVersion,
 				ERandomDomain::WfcLayout,
 				Salt);
 
@@ -382,15 +684,6 @@ namespace ZeroEscape::LevelGeneration
 						FatalCandidateError = MoveTemp(CandidateError);
 						return FWfcCollapsedCandidateEvaluation::Fatal(
 							FatalCandidateError);
-					}
-
-					if (Candidate.RouteCoverageRatio + UE_DOUBLE_SMALL_NUMBER
-						< Input.MinRouteCoverageRatio)
-					{
-						return FWfcCollapsedCandidateEvaluation::Reject(
-							TEXT("本层进入点到离开点没有覆盖配置要求的路线深度。"),
-							FMath::RoundToInt(Candidate.RouteCoverageRatio * 1000000.0),
-							FMath::RoundToInt(Input.MinRouteCoverageRatio * 1000000.0));
 					}
 
 					AcceptedCandidate = MoveTemp(Candidate);
@@ -437,25 +730,57 @@ namespace ZeroEscape::LevelGeneration
 						TEXT("WFC 提交结果与已验收候选不一致。"));
 				}
 
-				OutResult = MoveTemp(AcceptedCandidate);
-				OutReport = MoveTemp(AttemptReport);
-				OutReport.Stage = EZeroEscapeGenerationStage::None;
-				OutReport.Failure = EZeroEscapeGenerationFailure::None;
-				OutReport.RelatedStableId = INDEX_NONE;
-				OutReport.ActualValue = 0;
-				OutReport.LimitValue = 0;
-				OutReport.Message.Reset();
-				OutReport.Metrics = AggregateMetrics;
-				return true;
+				const FFloorSoftQualityScore Score = ScoreCandidate(
+					Input, AcceptedCandidate);
+				if (!BestCandidate.IsSet() || Score.IsBetterThan(BestScore))
+				{
+					BestCandidate = MoveTemp(AcceptedCandidate);
+					BestScore = Score;
+				}
+				if (Score.OrdinaryDeficit == 0
+					&& Score.TotalDeviation == 0
+					&& Score.RouteCoverageDeficitMicros == 0
+					&& Score.LongStraightExcessSquared == 0)
+				{
+					break;
+				}
+				continue;
 			}
 
 			OutReport = MoveTemp(AttemptReport);
 			OutReport.Metrics = AggregateMetrics;
 			if (!FatalCandidateError.IsEmpty()
-				|| OutReport.Failure != EZeroEscapeGenerationFailure::SolverBudgetExhausted)
+				|| (OutReport.Failure != EZeroEscapeGenerationFailure::SolverBudgetExhausted
+					&& OutReport.Failure
+						!= EZeroEscapeGenerationFailure::NoValidWfcSolution))
 			{
 				return false;
 			}
+		}
+
+		if (BestCandidate.IsSet())
+		{
+			OutResult = MoveTemp(BestCandidate.GetValue());
+			OutReport = {};
+			OutReport.Metrics = AggregateMetrics;
+			return true;
+		}
+
+		const int32 FallbackSalt = MakeFloorWfcSalt(
+			Input.WholeLayoutAttemptIndex,
+			Input.FloorIndex,
+			3);
+		FRandomStream FallbackRandom = FGenerationCore::MakeRandomStream(
+			Input.Signature.Seed,
+			ERandomDomain::WfcLayout,
+			FallbackSalt);
+		FString FallbackError;
+		if (BuildDeterministicFallbackFloor(
+				Input, FallbackRandom, OutResult, FallbackError))
+		{
+			OutReport = {};
+			OutReport.Metrics = AggregateMetrics;
+			return true;
 		}
 
 		OutReport.Metrics = AggregateMetrics;
@@ -463,7 +788,9 @@ namespace ZeroEscape::LevelGeneration
 			OutReport,
 			EZeroEscapeGenerationStage::WfcLayout,
 			EZeroEscapeGenerationFailure::NoValidWfcSolution,
-			TEXT("本层已用完允许的确定性 WFC 搜索树。"),
+			FString::Printf(
+				TEXT("WFC 搜索未得到硬合法候选，确定性楼层兜底也无法连接结构端点：%s"),
+				*FallbackError),
 			AggregateMetrics.WfcSolveAttemptCount,
 			Input.MaxSolveAttemptsForThisFloor);
 	}

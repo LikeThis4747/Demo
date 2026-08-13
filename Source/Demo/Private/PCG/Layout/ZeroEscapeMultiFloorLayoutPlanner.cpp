@@ -85,6 +85,20 @@ namespace ZeroEscape::LevelGeneration
 			FZeroEscapeSharedWfcBudget Wfc;
 		};
 
+		void RestoreBudgetAvailability(
+			const FWholeLayoutBudget& Snapshot,
+			FWholeLayoutBudget& InOutBudget)
+		{
+			InOutBudget.RemainingStructureCandidateEvaluations =
+				Snapshot.RemainingStructureCandidateEvaluations;
+			InOutBudget.Wfc.RemainingSolveAttempts =
+				Snapshot.Wfc.RemainingSolveAttempts;
+			InOutBudget.Wfc.RemainingCandidateAttempts =
+				Snapshot.Wfc.RemainingCandidateAttempts;
+			InOutBudget.Wfc.RemainingBacktracks =
+				Snapshot.Wfc.RemainingBacktracks;
+		}
+
 		struct FFloorSolveRecord
 		{
 			FZeroEscapeConstrainedFloorInput Input;
@@ -300,7 +314,8 @@ namespace ZeroEscape::LevelGeneration
 		{
 			uint64 Hash = 1469598103934665603ull;
 			Hash = HashStableInteger(Hash, Input.Signature.Seed);
-			Hash = HashStableInteger(Hash, Input.Signature.AlgorithmVersion);
+			// 保留删除 AlgorithmVersion 前 V7 对结构 tie-break 的固定混合贡献。
+			Hash = HashStableInteger(Hash, 7);
 			Hash = HashStableInteger(Hash, WholeAttempt);
 			Hash = HashStableInteger(Hash, SequenceIndex);
 			Hash = HashStableString(Hash, DefinitionId.ToString());
@@ -724,7 +739,6 @@ namespace ZeroEscape::LevelGeneration
 
 			FRandomStream Random = FGenerationCore::MakeRandomStream(
 				Input.Signature.Seed,
-				Input.Signature.AlgorithmVersion,
 				Domain,
 				MakeCandidateSalt(
 					Input,
@@ -810,8 +824,7 @@ namespace ZeroEscape::LevelGeneration
 
 		bool PreservesOrdinaryCapacity(
 			const FStructureCandidate& Candidate,
-			const FPlacementState& State,
-			const int32 MinOrdinaryPerFloor)
+			const FPlacementState& State)
 		{
 			TArray<int32> Available;
 			Available.Init(0, State.FloorCount);
@@ -846,9 +859,10 @@ namespace ZeroEscape::LevelGeneration
 			SubtractCells(Candidate.WalkableCells);
 			SubtractCells(Candidate.SolidCells);
 			SubtractCells(Candidate.ClearanceCells);
-			for (const int32 Count : Available)
+			for (int32 Floor = 0; Floor < Available.Num(); ++Floor)
 			{
-				if (Count < MinOrdinaryPerFloor)
+				const int32 HardMinimum = Floor == 0 ? 2 : 1;
+				if (Available[Floor] < HardMinimum)
 				{
 					return false;
 				}
@@ -858,8 +872,7 @@ namespace ZeroEscape::LevelGeneration
 
 		bool CanPlaceCandidate(
 			const FStructureCandidate& Candidate,
-			const FPlacementState& State,
-			const int32 MinOrdinaryPerFloor)
+			const FPlacementState& State)
 		{
 			const auto AllFree = [&State](const TArray<FIntVector>& Cells)
 			{
@@ -895,8 +908,7 @@ namespace ZeroEscape::LevelGeneration
 					return false;
 				}
 			}
-			return PreservesOrdinaryCapacity(
-				Candidate, State, MinOrdinaryPerFloor);
+			return PreservesOrdinaryCapacity(Candidate, State);
 		}
 
 		bool CommitCandidate(
@@ -1205,10 +1217,7 @@ namespace ZeroEscape::LevelGeneration
 									}
 									continue;
 								}
-								if (CanPlaceCandidate(
-										Candidate,
-										State,
-										FloorOption.MinOrdinaryWalkableCellCountPerFloor))
+								if (CanPlaceCandidate(Candidate, State))
 								{
 									OutCandidates.Add(MoveTemp(Candidate));
 								}
@@ -1281,14 +1290,6 @@ namespace ZeroEscape::LevelGeneration
 				return A.TieBreak < B.TieBreak;
 			});
 			if (Candidates.IsEmpty())
-			{
-				return false;
-			}
-
-			const double Ratio = FMath::Sqrt(
-				Candidates[0].DistanceSquared / GridDiagonalSquared(State.GridSize));
-			if (Ratio + UE_DOUBLE_SMALL_NUMBER
-				< Input.Difficulty.MinRequiredEndpointSpatialSeparationRatio)
 			{
 				return false;
 			}
@@ -1372,21 +1373,12 @@ namespace ZeroEscape::LevelGeneration
 				return A.StableTieBreak < B.StableTieBreak;
 			});
 
-			const double DiagonalSquared = GridDiagonalSquared(State.GridSize);
 			for (const FStructureCandidate& Candidate : Candidates)
 			{
 				if (Candidate.PrimaryDistanceSquared < 0.0)
 				{
 					continue;
 				}
-				const double Ratio = FMath::Sqrt(
-					Candidate.PrimaryDistanceSquared / DiagonalSquared);
-				if (Ratio + UE_DOUBLE_SMALL_NUMBER
-					< Input.Difficulty.MinRequiredEndpointSpatialSeparationRatio)
-				{
-					break;
-				}
-
 				FIntVector LowerLanding;
 				FIntVector UpperLanding;
 				if (!FindUniqueLandingOnFloor(Candidate, LowerFloor, LowerLanding)
@@ -1545,7 +1537,6 @@ namespace ZeroEscape::LevelGeneration
 			const int32 TotalWeight = static_cast<int32>(TotalWeight64);
 			FRandomStream Random = FGenerationCore::MakeRandomStream(
 				Input.Signature.Seed,
-				Input.Signature.AlgorithmVersion,
 				ERandomDomain::AdditionalTwoFloorStairCount,
 				LowerFloor);
 			int32 Roll = Random.RandHelper(TotalWeight);
@@ -1580,7 +1571,6 @@ namespace ZeroEscape::LevelGeneration
 				Salt ^= static_cast<uint32>(AdditionalRound) * 0x85EBCA6Bu;
 				FRandomStream Random = FGenerationCore::MakeRandomStream(
 					Input.Signature.Seed,
-					Input.Signature.AlgorithmVersion,
 					ERandomDomain::AdditionalTwoFloorStairPlacement,
 					static_cast<int32>(Salt));
 				const int32 FirstLowerFloor = Random.RandHelper(FloorPairCount);
@@ -1654,10 +1644,14 @@ namespace ZeroEscape::LevelGeneration
 					Candidates,
 					OutReport))
 			{
-				return OutReport.Failure
-					== EZeroEscapeGenerationFailure::SolverBudgetExhausted
-					? EOptionalPlacementResult::Fatal
-					: EOptionalPlacementResult::Skipped;
+				if (OutReport.Failure == EZeroEscapeGenerationFailure::None
+					|| OutReport.Failure
+						== EZeroEscapeGenerationFailure::SolverBudgetExhausted)
+				{
+					OutReport = {};
+					return EOptionalPlacementResult::Skipped;
+				}
+				return EOptionalPlacementResult::Fatal;
 			}
 
 			for (FStructureCandidate& Candidate : Candidates)
@@ -1774,7 +1768,6 @@ namespace ZeroEscape::LevelGeneration
 			{
 				FRandomStream Random = FGenerationCore::MakeRandomStream(
 					Input.Signature.Seed,
-					Input.Signature.AlgorithmVersion,
 					ERandomDomain::ThreeFloorStairwellPlacement,
 					-1);
 				if (Random.RandRange(1, 100)
@@ -1820,7 +1813,6 @@ namespace ZeroEscape::LevelGeneration
 
 			FRandomStream Random = FGenerationCore::MakeRandomStream(
 				Input.Signature.Seed,
-				Input.Signature.AlgorithmVersion,
 				ERandomDomain::HighCeilingRoomCount,
 				FloorOption.FloorCount);
 			int32 Roll = Random.RandHelper(static_cast<int32>(TotalWeight));
@@ -1896,8 +1888,20 @@ namespace ZeroEscape::LevelGeneration
 				return false;
 			}
 
+			bool bHasPlacedHighRoom = false;
+			for (const FZeroEscapeGeneratedStructure& Structure : State.Structures)
+			{
+				bHasPlacedHighRoom |=
+					Structure.Kind == EZeroEscapeStructureKind::HighCeilingRoom;
+			}
 			for (FStructureCandidate& Candidate : Candidates)
 			{
+				if (!bHasPlacedHighRoom
+					&& Candidate.BaseCoordinate.Z == State.FloorCount - 1)
+				{
+					Candidate.PrimaryDistanceSquared = -1.0;
+					continue;
+				}
 				if (State.HighCeilingRoomCountByFloor[Candidate.BaseCoordinate.Z]
 					>= Input.Difficulty.HighCeilingRooms.MaxCountPerFloor)
 				{
@@ -1918,21 +1922,12 @@ namespace ZeroEscape::LevelGeneration
 				return A.StableTieBreak < B.StableTieBreak;
 			});
 
-			const double MinimumSquared = FMath::Square(
-				Input.Difficulty.HighCeilingRooms.MinimumSeparationRatio)
-				* GridDiagonalSquared(State.GridSize);
 			for (const FStructureCandidate& Candidate : Candidates)
 			{
 				if (Candidate.PrimaryDistanceSquared < 0.0)
 				{
 					continue;
 				}
-				if (Candidate.PrimaryDistanceSquared + UE_DOUBLE_SMALL_NUMBER
-					< MinimumSquared)
-				{
-					break;
-				}
-
 				const int32 PreviousProtectedCount = State.ProtectedEndpoints.Num();
 				int32 StableId = INDEX_NONE;
 				if (!CommitCandidate(Candidate, State, StableId, OutReport))
@@ -1972,9 +1967,12 @@ namespace ZeroEscape::LevelGeneration
 			FWholeLayoutBudget& Budget,
 			FZeroEscapeGenerationReport& OutReport)
 		{
-			const int32 Minimum =
-				Input.Difficulty.HighCeilingRooms.MinimumTotalCount;
-			const int32 Target = DrawHighCeilingRoomTarget(Input, FloorOption);
+			const int32 Minimum = FMath::Max(
+				2,
+				Input.Difficulty.HighCeilingRooms.MinimumTotalCount);
+			const int32 Target = FMath::Max(
+				Minimum,
+				DrawHighCeilingRoomTarget(Input, FloorOption));
 			if (Minimum < 0 || Target < Minimum)
 			{
 				return FailLayout(
@@ -2100,7 +2098,6 @@ namespace ZeroEscape::LevelGeneration
 
 		bool BuildFloorProjection(
 			const FResolvedGenerationInput& Input,
-			const FZeroEscapeFloorCountOption& FloorOption,
 			const int32 WholeAttempt,
 			const FPlacementState& State,
 			const int32 FloorIndex,
@@ -2122,13 +2119,16 @@ namespace ZeroEscape::LevelGeneration
 			FloorInput.MinTotalWalkableCellCount = 1;
 			FloorInput.MaxTotalWalkableCellCount =
 				State.GridSize.X * State.GridSize.Y;
-			FloorInput.MinOrdinaryWalkableCellCount =
-				FloorOption.MinOrdinaryWalkableCellCountPerFloor;
+			FloorInput.MinOrdinaryWalkableCellCount = FloorIndex == 0 ? 2 : 1;
 			FloorInput.MaxConsecutiveStraightTiles =
+				FMath::Max(State.GridSize.X, State.GridSize.Y);
+			FloorInput.PreferredMaxConsecutiveStraightTiles =
 				Input.SharedRules.MaxConsecutiveStraightTiles;
 			FloorInput.MaxSolveAttemptsForThisFloor =
-				Input.Budget.MaxWfcSolveAttemptsPerFloor;
-			FloorInput.MinRouteCoverageRatio =
+				FMath::Min(
+					Input.Budget.MaxWfcSolveAttemptsPerFloor,
+					GenerationLimits::MaxWfcSolveAttemptsPerFloor);
+			FloorInput.PreferredRouteCoverageRatio =
 				Input.Difficulty.MinRequiredRouteCoverageRatio;
 
 			const int32 CellCount = State.GridSize.X * State.GridSize.Y;
@@ -2290,7 +2290,6 @@ namespace ZeroEscape::LevelGeneration
 					|| !State.FloorEndpoints[Floor].bHasLeave
 					|| !BuildFloorProjection(
 						Input,
-						FloorOption,
 						WholeAttempt,
 						State,
 						Floor,
@@ -2300,6 +2299,42 @@ namespace ZeroEscape::LevelGeneration
 					return false;
 				}
 				SolveOrder.Add(Floor);
+			}
+
+			const int32 PreferredBuildingTotal =
+				(FloorOption.MinTotalWalkableCellCount
+					+ FloorOption.MaxTotalWalkableCellCount) / 2;
+			const int32 PreferredPerFloor = FMath::Max(
+				1, PreferredBuildingTotal / State.FloorCount);
+			for (int32 Floor = 0; Floor < State.FloorCount; ++Floor)
+			{
+				FZeroEscapeConstrainedFloorInput& FloorInput = OutRecords[Floor].Input;
+				int32 FixedStructureWalkableCount = 0;
+				int32 PossibleWalkableCount = 0;
+				for (int32 DenseIndex = 0;
+					DenseIndex < FloorInput.Constraints.Num();
+					++DenseIndex)
+				{
+					FixedStructureWalkableCount +=
+						FloorInput.StructureWalkableByCell[DenseIndex] != 0 ? 1 : 0;
+					PossibleWalkableCount +=
+						FloorInput.Constraints[DenseIndex].Domain
+							!= EGridCellDomain::Outside ? 1 : 0;
+				}
+				FloorInput.PreferredOrdinaryWalkableCellCount = FMath::Clamp(
+					FloorOption.MinOrdinaryWalkableCellCountPerFloor,
+					FloorInput.MinOrdinaryWalkableCellCount,
+					FMath::Max(
+						FloorInput.MinOrdinaryWalkableCellCount,
+						PossibleWalkableCount - FixedStructureWalkableCount));
+				FloorInput.PreferredTotalWalkableCellCount = FMath::Clamp(
+					FMath::Max(
+						PreferredPerFloor,
+						FixedStructureWalkableCount
+							+ FloorInput.PreferredOrdinaryWalkableCellCount),
+					FixedStructureWalkableCount
+						+ FloorInput.MinOrdinaryWalkableCellCount,
+					PossibleWalkableCount);
 			}
 
 			SolveOrder.Sort([&OutRecords](const int32 A, const int32 B)
@@ -2328,7 +2363,7 @@ namespace ZeroEscape::LevelGeneration
 						!= EGridCellDomain::Outside ? 1 : 0;
 				}
 				BaseMinimumByFloor[Floor] = FixedStructureWalkableCount
-					+ FloorOption.MinOrdinaryWalkableCellCountPerFloor;
+					+ OutRecords[Floor].Input.MinOrdinaryWalkableCellCount;
 				if (BaseMinimumByFloor[Floor] > PossibleMaximumByFloor[Floor])
 				{
 					return FailLayout(
@@ -2341,34 +2376,12 @@ namespace ZeroEscape::LevelGeneration
 				}
 			}
 
-			TArray<uint8> SolvedByFloor;
-			SolvedByFloor.Init(0, State.FloorCount);
-			int32 SolvedTotalWalkable = 0;
 			for (const int32 Floor : SolveOrder)
 			{
-				int32 OtherMinimum = 0;
-				int32 OtherMaximum = 0;
-				for (int32 OtherFloor = 0;
-					OtherFloor < State.FloorCount;
-					++OtherFloor)
-				{
-					if (OtherFloor == Floor || SolvedByFloor[OtherFloor] != 0)
-					{
-						continue;
-					}
-					OtherMinimum += BaseMinimumByFloor[OtherFloor];
-					OtherMaximum += PossibleMaximumByFloor[OtherFloor];
-				}
 				FZeroEscapeConstrainedFloorInput& FloorInput =
 					OutRecords[Floor].Input;
-				FloorInput.MinTotalWalkableCellCount = FMath::Max(
-					BaseMinimumByFloor[Floor],
-					FloorOption.MinTotalWalkableCellCount
-						- SolvedTotalWalkable - OtherMaximum);
-				FloorInput.MaxTotalWalkableCellCount = FMath::Min(
-					PossibleMaximumByFloor[Floor],
-					FloorOption.MaxTotalWalkableCellCount
-						- SolvedTotalWalkable - OtherMinimum);
+				FloorInput.MinTotalWalkableCellCount = BaseMinimumByFloor[Floor];
+				FloorInput.MaxTotalWalkableCellCount = PossibleMaximumByFloor[Floor];
 				if (FloorInput.MaxTotalWalkableCellCount
 					< FloorInput.MinTotalWalkableCellCount)
 				{
@@ -2406,20 +2419,6 @@ namespace ZeroEscape::LevelGeneration
 					OutReport = MoveTemp(FloorReport);
 					return false;
 				}
-				SolvedTotalWalkable +=
-					OutRecords[Floor].Result.TotalWalkableCellCount;
-				SolvedByFloor[Floor] = 1;
-			}
-			if (SolvedTotalWalkable < FloorOption.MinTotalWalkableCellCount
-				|| SolvedTotalWalkable > FloorOption.MaxTotalWalkableCellCount)
-			{
-				return FailLayout(
-					OutReport,
-					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("动态分配的单层 WFC 上下限未保证整栋总可走量。"),
-					SolvedTotalWalkable,
-					FloorOption.MaxTotalWalkableCellCount);
 			}
 			return true;
 		}
@@ -2561,19 +2560,13 @@ namespace ZeroEscape::LevelGeneration
 				Summary.CycleRank = CountHorizontalEdges(
 						Record.Result.OpeningMaskByCell)
 					- Summary.TotalWalkableCellCount + 1;
-				if (Summary.CycleRank < 0
-					|| Summary.SpatialSeparationRatio + UE_DOUBLE_SMALL_NUMBER
-						< Input.Difficulty.MinRequiredEndpointSpatialSeparationRatio)
+				if (Summary.CycleRank < 0)
 				{
 					return FailLayout(
 						OutReport,
 						EZeroEscapeGenerationStage::GlobalValidation,
 						EZeroEscapeGenerationFailure::SolverInvariantViolation,
-						TEXT("单层图的环路数或必经端点间距与前置约束不一致。"),
-						FMath::RoundToInt(Summary.SpatialSeparationRatio * 1000000.0),
-						FMath::RoundToInt(
-							Input.Difficulty.MinRequiredEndpointSpatialSeparationRatio
-							* 1000000.0));
+						TEXT("单层图的环路数与连通图不变量不一致。"));
 				}
 				AddJunctionMetrics(InOutPlan.JunctionMetrics, Summary.JunctionMetrics);
 			}
@@ -2664,7 +2657,6 @@ namespace ZeroEscape::LevelGeneration
 		}
 
 		bool BuildAndValidateWholeGraph(
-			const FZeroEscapeFloorCountOption& FloorOption,
 			const FPlacementState& State,
 			const TArray<FFloorSolveRecord>& Records,
 			FWholeGraphResult& OutGraph,
@@ -2830,20 +2822,6 @@ namespace ZeroEscape::LevelGeneration
 					ReachableCount,
 					OutGraph.TotalWalkableCellCount);
 			}
-			if (OutGraph.TotalWalkableCellCount
-					< FloorOption.MinTotalWalkableCellCount
-				|| OutGraph.TotalWalkableCellCount
-					> FloorOption.MaxTotalWalkableCellCount)
-			{
-				return FailLayout(
-					OutReport,
-					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::SolverInvariantViolation,
-					TEXT("整栋 BFS 统计的总可走格数超出当前楼层数选项范围。"),
-					OutGraph.TotalWalkableCellCount,
-					FloorOption.MaxTotalWalkableCellCount);
-			}
-
 			for (const FZeroEscapeGeneratedStructure& Structure : State.Structures)
 			{
 				for (const FZeroEscapeGeneratedStructureLanding& Landing :
@@ -2952,7 +2930,9 @@ namespace ZeroEscape::LevelGeneration
 			int32 BestDenseIndex = INDEX_NONE;
 			int32 BestRouteDistance = MAX_int32;
 			uint32 BestTieBreak = MAX_uint32;
-			int32 FarthestOrdinaryDistance = 0;
+			int32 FallbackDenseIndex = INDEX_NONE;
+			int32 FallbackRouteDistance = INDEX_NONE;
+			uint32 FallbackTieBreak = MAX_uint32;
 			const FFloorSolveRecord& GroundFloor = Records[0];
 			for (int32 DenseIndex = 0;
 				DenseIndex < GroundFloor.Result.OpeningMaskByCell.Num();
@@ -2975,8 +2955,19 @@ namespace ZeroEscape::LevelGeneration
 				}
 				const int32 RouteDistance =
 					Graph.DistanceFromPursuerByNode[DenseIndex];
-				FarthestOrdinaryDistance = FMath::Max(
-					FarthestOrdinaryDistance, RouteDistance);
+				FRandomStream TieRandom = FGenerationCore::MakeRandomStream(
+					Input.Signature.Seed,
+					ERandomDomain::PlayerPursuerSpawn,
+					DenseIndex);
+				const uint32 TieBreak = TieRandom.GetUnsignedInt();
+				if (RouteDistance > FallbackRouteDistance
+					|| (RouteDistance == FallbackRouteDistance
+						&& TieBreak < FallbackTieBreak))
+				{
+					FallbackDenseIndex = DenseIndex;
+					FallbackRouteDistance = RouteDistance;
+					FallbackTieBreak = TieBreak;
+				}
 				const double RouteDistanceCm =
 					RouteDistance * Input.SharedRules.LogicalTileSizeCm;
 				if (RouteDistanceCm + UE_DOUBLE_SMALL_NUMBER
@@ -2984,12 +2975,6 @@ namespace ZeroEscape::LevelGeneration
 				{
 					continue;
 				}
-				FRandomStream TieRandom = FGenerationCore::MakeRandomStream(
-					Input.Signature.Seed,
-					Input.Signature.AlgorithmVersion,
-					ERandomDomain::PlayerPursuerSpawn,
-					DenseIndex);
-				const uint32 TieBreak = TieRandom.GetUnsignedInt();
 				if (RouteDistance < BestRouteDistance
 					|| (RouteDistance == BestRouteDistance && TieBreak < BestTieBreak))
 				{
@@ -3001,16 +2986,15 @@ namespace ZeroEscape::LevelGeneration
 
 			if (BestDenseIndex == INDEX_NONE)
 			{
+				BestDenseIndex = FallbackDenseIndex;
+			}
+			if (BestDenseIndex == INDEX_NONE)
+			{
 				return FailLayout(
 					OutReport,
 					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::RequiredRouteTooShort,
-					TEXT("一层没有普通可走格能满足玩家与追猎者的实际路线距离下限。"),
-					FMath::RoundToInt(
-						FarthestOrdinaryDistance
-						* Input.SharedRules.LogicalTileSizeCm),
-					FMath::RoundToInt(
-						Input.Difficulty.MinPlayerPursuerRouteDistanceCm));
+					EZeroEscapeGenerationFailure::GlobalConnectivityFailed,
+					TEXT("一层没有可用于玩家出生点的普通可走格。"));
 			}
 
 			InOutPlan.PlayerSpawnCoordinate = FIntVector(
@@ -3021,7 +3005,6 @@ namespace ZeroEscape::LevelGeneration
 		}
 
 		bool ValidatePlayerToExitRoute(
-			const FZeroEscapeFloorCountOption& FloorOption,
 			const FPlacementState& State,
 			const FWholeGraphResult& Graph,
 			FZeroEscapeGeneratedLevelPlan& InOutPlan,
@@ -3050,17 +3033,6 @@ namespace ZeroEscape::LevelGeneration
 			}
 
 			const int32 RouteLength = DistanceByNode[ExitNode];
-			if (RouteLength > FloorOption.MaxPlayerToExitRouteLengthTiles)
-			{
-				return FailLayout(
-					OutReport,
-					EZeroEscapeGenerationStage::GlobalValidation,
-					EZeroEscapeGenerationFailure::RequiredRouteTooLong,
-					TEXT("玩家出生点到顶层终点的整栋最短路超过配置上限。"),
-					RouteLength,
-					FloorOption.MaxPlayerToExitRouteLengthTiles);
-			}
-
 			InOutPlan.PlayerToExitRouteLengthTiles = RouteLength;
 			InOutPlan.VerticalTransitionCountOnShortestRoute =
 				VerticalTransitionsByNode[ExitNode];
@@ -3113,7 +3085,6 @@ namespace ZeroEscape::LevelGeneration
 
 			FRandomStream Random = FGenerationCore::MakeRandomStream(
 				Input.Signature.Seed,
-				Input.Signature.AlgorithmVersion,
 				ERandomDomain::FloorCount,
 				static_cast<int32>(Input.Signature.Difficulty));
 			int32 Roll = Random.RandHelper(static_cast<int32>(TotalWeight));
@@ -3190,9 +3161,7 @@ namespace ZeroEscape::LevelGeneration
 					|| OpeningSetWeightTotal > MAX_int32;
 			}
 			FString WeightError;
-			if (Input.Signature.AlgorithmVersion <= 0
-				|| Input.Signature.GenerationProfileVersion <= 0
-				|| Input.SharedRules.GridSize.X < GenerationLimits::MinGridAxis
+			if (Input.SharedRules.GridSize.X < GenerationLimits::MinGridAxis
 				|| Input.SharedRules.GridSize.Y < GenerationLimits::MinGridAxis
 				|| Input.SharedRules.GridSize.X > GenerationLimits::MaxGridAxis
 				|| Input.SharedRules.GridSize.Y > GenerationLimits::MaxGridAxis
@@ -3211,7 +3180,6 @@ namespace ZeroEscape::LevelGeneration
 					< static_cast<int64>(
 						FloorOption.MinOrdinaryWalkableCellCountPerFloor)
 						* FloorOption.FloorCount
-				|| FloorOption.MaxPlayerToExitRouteLengthTiles <= 0
 				|| FloorOption.MaxAdditionalTwoFloorStairCount < 0
 				|| Input.Difficulty.AdditionalTwoFloorStairsPerFloorPair.ZeroAdditionalWeight < 0
 				|| Input.Difficulty.AdditionalTwoFloorStairsPerFloorPair.OneAdditionalWeight < 0
@@ -3221,7 +3189,7 @@ namespace ZeroEscape::LevelGeneration
 				|| bInvalidOpeningSetWeight
 				|| Input.Difficulty.ThreeFloorStairwellChancePercent < 0
 				|| Input.Difficulty.ThreeFloorStairwellChancePercent > 100
-				|| Input.Difficulty.HighCeilingRooms.MinimumTotalCount < 0
+				|| Input.Difficulty.HighCeilingRooms.MinimumTotalCount < 2
 				|| Input.Difficulty.HighCeilingRooms.MaxCountPerFloor < 0
 				|| Input.Difficulty.HighCeilingRooms.MinimumTotalCount
 					> Input.Difficulty.HighCeilingRooms.MaxCountPerFloor
@@ -3239,6 +3207,8 @@ namespace ZeroEscape::LevelGeneration
 				|| Input.Budget.MaxWfcCandidateAttemptsPerFloor <= 0
 				|| Input.Budget.MaxWfcBacktrackCountPerFloor <= 0
 				|| Input.Budget.MaxWfcSolveAttemptsPerFloor <= 0
+				|| Input.Budget.MaxWfcSolveAttemptsPerFloor
+					> GenerationLimits::MaxWfcSolveAttemptsPerFloor
 				|| TotalCandidateBudget > MAX_int32
 				|| TotalBacktrackBudget > MAX_int32
 				|| TotalSolveBudget > MAX_int32
@@ -3269,19 +3239,22 @@ namespace ZeroEscape::LevelGeneration
 			}
 
 			bool bHasTwoFloorDefinition = false;
+			bool bHasHighCeilingDefinition = false;
 			for (const FZeroEscapeStructureDefinition& Definition :
 				Input.StructureDefinitions)
 			{
 				bHasTwoFloorDefinition |=
 					Definition.Kind == EZeroEscapeStructureKind::TwoFloorStair;
+				bHasHighCeilingDefinition |=
+					Definition.Kind == EZeroEscapeStructureKind::HighCeilingRoom;
 			}
-			if (!bHasTwoFloorDefinition)
+			if (!bHasTwoFloorDefinition || !bHasHighCeilingDefinition)
 			{
 				return FailLayout(
 					OutReport,
 					EZeroEscapeGenerationStage::Configuration,
 					EZeroEscapeGenerationFailure::InvalidConfiguration,
-					TEXT("配置没有任何可供必需楼层对使用的双层楼梯定义。"));
+					TEXT("配置必须同时提供必需双层楼梯和高厅定义。"));
 			}
 			return true;
 		}
@@ -3308,8 +3281,6 @@ namespace ZeroEscape::LevelGeneration
 			return Report.Failure == EZeroEscapeGenerationFailure::None
 				|| Report.Failure == EZeroEscapeGenerationFailure::StructurePlacementFailed
 				|| Report.Failure == EZeroEscapeGenerationFailure::NoValidWfcSolution
-				|| Report.Failure == EZeroEscapeGenerationFailure::RequiredRouteTooLong
-				|| Report.Failure == EZeroEscapeGenerationFailure::RequiredRouteTooShort
 				|| Report.Failure == EZeroEscapeGenerationFailure::GlobalConnectivityFailed;
 		}
 
@@ -3373,14 +3344,6 @@ namespace ZeroEscape::LevelGeneration
 		FWholeLayoutBudget Budget;
 		Budget.MaxStructureCandidateEvaluations =
 			Input.Budget.MaxStructureCandidateEvaluations;
-		Budget.RemainingStructureCandidateEvaluations =
-			Input.Budget.MaxStructureCandidateEvaluations;
-		Budget.Wfc.RemainingCandidateAttempts =
-			Input.Budget.MaxWfcCandidateAttemptsPerFloor * FloorOption->FloorCount;
-		Budget.Wfc.RemainingBacktracks =
-			Input.Budget.MaxWfcBacktrackCountPerFloor * FloorOption->FloorCount;
-		Budget.Wfc.RemainingSolveAttempts =
-			Input.Budget.MaxWfcSolveAttemptsPerFloor * FloorOption->FloorCount;
 
 		FZeroEscapeGenerationMetrics AggregateMetrics;
 		AggregateMetrics.FloorWfcMetrics.SetNum(FloorOption->FloorCount);
@@ -3395,6 +3358,14 @@ namespace ZeroEscape::LevelGeneration
 			++WholeAttempt)
 		{
 			AttemptsExecuted = WholeAttempt + 1;
+			Budget.RemainingStructureCandidateEvaluations =
+				Input.Budget.MaxStructureCandidateEvaluations;
+			Budget.Wfc.RemainingCandidateAttempts =
+				Input.Budget.MaxWfcCandidateAttemptsPerFloor * FloorOption->FloorCount;
+			Budget.Wfc.RemainingBacktracks =
+				Input.Budget.MaxWfcBacktrackCountPerFloor * FloorOption->FloorCount;
+			Budget.Wfc.RemainingSolveAttempts =
+				Input.Budget.MaxWfcSolveAttemptsPerFloor * FloorOption->FloorCount;
 			FPlacementState State;
 			InitializePlacementState(Input, *FloorOption, State);
 			FZeroEscapeGenerationReport AttemptReport;
@@ -3414,22 +3385,6 @@ namespace ZeroEscape::LevelGeneration
 						EZeroEscapeGenerationFailure::StructurePlacementFailed,
 						TEXT("必需双层楼梯链无法在当前整栋尝试中满足端点距离。"));
 				}
-				LastAttemptReport = MoveTemp(AttemptReport);
-				if (!IsRecoverableWholeAttemptFailure(LastAttemptReport))
-				{
-					break;
-				}
-				continue;
-			}
-
-			if (!PlaceOptionalStairs(
-					Input,
-					*FloorOption,
-					WholeAttempt,
-					State,
-					Budget,
-					AttemptReport))
-			{
 				LastAttemptReport = MoveTemp(AttemptReport);
 				if (!IsRecoverableWholeAttemptFailure(LastAttemptReport))
 				{
@@ -3462,8 +3417,28 @@ namespace ZeroEscape::LevelGeneration
 				continue;
 			}
 
+			const FPlacementState RequiredStructureState = State;
+			const FWholeLayoutBudget RequiredStructureBudget = Budget;
+			if (!PlaceOptionalStairs(
+					Input,
+					*FloorOption,
+					WholeAttempt,
+					State,
+					Budget,
+					AttemptReport))
+			{
+				LastAttemptReport = MoveTemp(AttemptReport);
+				if (!IsRecoverableWholeAttemptFailure(LastAttemptReport))
+				{
+					break;
+				}
+				State = RequiredStructureState;
+				RestoreBudgetAvailability(RequiredStructureBudget, Budget);
+				AttemptReport = {};
+			}
+
 			TArray<FFloorSolveRecord> Records;
-			if (!SolveFloors(
+			bool bFloorsSolved = SolveFloors(
 					Input,
 					*FloorOption,
 					WholeAttempt,
@@ -3471,7 +3446,26 @@ namespace ZeroEscape::LevelGeneration
 					Budget,
 					Records,
 					AggregateMetrics,
-					AttemptReport))
+					AttemptReport);
+			if (!bFloorsSolved
+				&& State.Structures.Num() > RequiredStructureState.Structures.Num()
+				&& IsRecoverableWholeAttemptFailure(AttemptReport))
+			{
+				State = RequiredStructureState;
+				RestoreBudgetAvailability(RequiredStructureBudget, Budget);
+				Records.Reset();
+				AttemptReport = {};
+				bFloorsSolved = SolveFloors(
+					Input,
+					*FloorOption,
+					WholeAttempt,
+					State,
+					Budget,
+					Records,
+					AggregateMetrics,
+					AttemptReport);
+			}
+			if (!bFloorsSolved)
 			{
 				LastAttemptReport = MoveTemp(AttemptReport);
 				if (!IsRecoverableWholeAttemptFailure(LastAttemptReport))
@@ -3510,7 +3504,6 @@ namespace ZeroEscape::LevelGeneration
 
 			FWholeGraphResult Graph;
 			if (!BuildAndValidateWholeGraph(
-					*FloorOption,
 					State,
 					Records,
 					Graph,
@@ -3524,7 +3517,6 @@ namespace ZeroEscape::LevelGeneration
 					CandidatePlan,
 					AttemptReport)
 				|| !ValidatePlayerToExitRoute(
-					*FloorOption,
 					State,
 					Graph,
 					CandidatePlan,

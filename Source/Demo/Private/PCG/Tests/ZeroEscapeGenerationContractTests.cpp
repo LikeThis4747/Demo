@@ -3,7 +3,7 @@
 /**
  * @file ZeroEscapeGenerationContractTests.cpp
  * 职责：保留与具体单层 Room 数据无关的 Transform 组合和随机子流隔离回归。
- * 边界：V6 Profile、解析与 Hash 由 ZeroEscapeMultiFloorDataContractTests 覆盖；
+	 * 边界：Profile 解析与 Hash 由 ZeroEscapeMultiFloorDataContractTests 覆盖；
  *       多层求解由 ZeroEscapeMultiFloorLayoutTests 覆盖。
  */
 
@@ -110,9 +110,9 @@ namespace ZeroEscape::LevelGeneration::Tests
 		for (const ERandomDomain Domain : Domains)
 		{
 			FRandomStream First = FGenerationCore::MakeRandomStream(
-				13579, GAlgorithmVersion, Domain, 17);
+				13579, Domain, 17);
 			FRandomStream Replay = FGenerationCore::MakeRandomStream(
-				13579, GAlgorithmVersion, Domain, 17);
+				13579, Domain, 17);
 			for (int32 DrawIndex = 0; DrawIndex < 8; ++DrawIndex)
 			{
 				TestEqual(
@@ -121,11 +121,18 @@ namespace ZeroEscape::LevelGeneration::Tests
 					Replay.GetUnsignedInt());
 			}
 			FRandomStream DomainProbe = FGenerationCore::MakeRandomStream(
-				13579, GAlgorithmVersion, Domain, 17);
+				13579, Domain, 17);
+			if (Domain == ERandomDomain::WfcLayout)
+			{
+				TestEqual(
+					TEXT("移除版本字段后必须保留既有 WFC 派生 Seed"),
+					DomainProbe.GetInitialSeed(),
+					938292507);
+			}
 			FirstValues.Add(DomainProbe.GetUnsignedInt());
 		}
 		TestEqual(
-			TEXT("九个职责随机域的首个派生值必须互不相同"),
+			TEXT("所有职责随机域的首个派生值必须互不相同"),
 			FirstValues.Num(),
 			Domains.Num());
 		return true;

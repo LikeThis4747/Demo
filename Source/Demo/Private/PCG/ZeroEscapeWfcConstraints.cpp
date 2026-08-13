@@ -839,6 +839,11 @@ namespace ZeroEscape::LevelGeneration
 				Settings.MaxConsecutiveStraightTiles);
 			return false;
 		}
+		if (Settings.PreferredMaxConsecutiveStraightTiles < 0)
+		{
+			OutError = TEXT("WFC PreferredMaxConsecutiveStraightTiles 不能小于 0。");
+			return false;
+		}
 
 		if (Settings.MaxCandidateAttempts <= 0 || Settings.MaxBacktrackCount <= 0)
 		{

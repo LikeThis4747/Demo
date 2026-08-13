@@ -14,9 +14,6 @@
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** V7 明确追猎者占主路线起点、玩家按安全路线距离就近出生。 */
-	inline constexpr int32 GAlgorithmVersion = 7;
-
 	/** 相互隔离的随机子流；结构数量或放置变化不会扰动 WFC 的随机序列。 */
 	enum class ERandomDomain : uint32
 	{
@@ -54,10 +51,9 @@ namespace ZeroEscape::LevelGeneration
 			FResolvedGenerationInput& OutInput,
 			FZeroEscapeGenerationReport& OutReport);
 
-		/** 从请求 Seed、算法版本和固定随机域派生确定性子流。 */
+		/** 从请求 Seed、固定随机域和可选 salt 派生确定性子流。 */
 		static FRandomStream MakeRandomStream(
 			int32 MasterSeed,
-			int32 AlgorithmVersion,
 			ERandomDomain Domain,
 			int32 Salt = 0);
 

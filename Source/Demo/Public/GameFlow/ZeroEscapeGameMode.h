@@ -77,8 +77,6 @@ private:
 	void HandleRoundStateChanged(EZeroEscapeRoundState NewState);
 
 	void SetGameplayInputLocked(bool bLocked) const;
-	bool TryScheduleAutomaticGenerationRetry(
-		const FZeroEscapeGenerationReport& Report);
 	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
 	void BeginSetupTransition(
 		const TCHAR* Reason,
@@ -106,10 +104,6 @@ private:
 	/** 失败时返回的主菜单软引用；由正式 GameMode 蓝图显式装配，不按关卡名猜测。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
 	TSoftObjectPtr<UWorld> MainMenuLevel;
-
-	/** 可恢复失败时重载的正式游戏关卡；显式软引用，禁止依赖关卡名或路径约定。 */
-	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
-	TSoftObjectPtr<UWorld> GameLevel;
 
 	/** 结算界面 Widget 类；由正式 GameMode 蓝图指定。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")

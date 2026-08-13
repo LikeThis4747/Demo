@@ -1053,11 +1053,9 @@ namespace ZeroEscape::LevelGeneration
 		}
 		FRandomStream HazardRng = FGenerationCore::MakeRandomStream(
 			LevelPlan.Signature.Seed,
-			GAlgorithmVersion,
 			ERandomDomain::HazardPopulationPlacement);
 		FRandomStream ResourceRng = FGenerationCore::MakeRandomStream(
 			LevelPlan.Signature.Seed,
-			GAlgorithmVersion,
 			ERandomDomain::ResourcePopulationPlacement);
 		FPopulationPlacementPlan WorkingPlan;
 		TSet<FIntVector> ResourceBlockedAddresses;

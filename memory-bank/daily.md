@@ -113,3 +113,13 @@
 - 复用追猎者正面/左侧/右侧 Sequence 制作玩家 Skeleton 副本；三条均为非 Additive、无 Root Motion，并装配到 `DA_PlayerStandingImpact`。
 - 地刺玩家配置保持 Stop 0.25 秒、无局部物理，只开启方向动画；追猎者配置、C++、AnimBP、HeavyImpact 与 Level0 均未修改。
 - CharacterImpact 自动化 2/2 通过；官方 MCP 持久回读与 Level0 地刺触发检查无相关错误。用户现场确认当前版本可用，少量观感细节留待次日调整。
+
+<!-- written by shiqiqiwang at 2026-08-13 15:25 UTC -->
+
+## 2026-08-13 — PCG 固定 Seed 与软质量目标实施
+
+- 删除玩家流程的自动换 Seed/游戏关卡重载，以及 Algorithm/Profile Version 和玩家到 Exit 最大路线字段；旧随机扰动融合为内部盐以保留其他随机域序列。
+- 普通格/总量/路线覆盖/最长直线/端点与出生距离改为软目标；WFC 每层最多三候选择优，首个硬合法候选保底，完美候选提前停止，无解时同层确定性连通兜底。
+- 高厅先于可选楼梯，每栋至少两个且至少一个非顶层；可选楼梯撤销时同步恢复可用预算。
+- DemoEditor 构建通过；Unit 10/10、WFC 8/8、Population 8/8、GameFlow 1/1、Navigation Gate 1/1；三档各 300 Seed、每个重放两次，共 1800 次整栋求解全部通过。
+- 遗留：用户次日验收真实加载、地图观感、同 Seed 重进、动态 Recast 和追猎者跨层；楼梯开口、机关资源、高厅灯光及 Loading UI 未改。

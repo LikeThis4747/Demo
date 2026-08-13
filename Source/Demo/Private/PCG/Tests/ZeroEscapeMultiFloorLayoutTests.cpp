@@ -3,7 +3,8 @@
 /**
  * @file ZeroEscapeMultiFloorLayoutTests.cpp
  * 职责：验证完整结构先放置、逐层二维 WFC、整栋一次 BFS、确定性和共享预算。
- * 边界：只构造纯值定义；不加载项目资产，不创建 World，不把导航当成逻辑连通证明。
+ * 边界：大部分测试构造纯值定义；Seed Sweep 只读正式 Profile，不创建 World，
+ * 不把导航当成逻辑连通证明。
  */
 
 #include "PCG/ZeroEscapeGenerationAssets.h"
@@ -15,7 +16,9 @@
 #include "Algo/Reverse.h"
 #include "Containers/Queue.h"
 #include "Misc/AutomationTest.h"
+#include "UObject/UObjectGlobals.h"
 
+#include "PCG/ZeroEscapeGenerationCore.h"
 #include "PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.h"
 
 namespace ZeroEscape::LevelGeneration::Tests
@@ -147,8 +150,6 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FResolvedGenerationInput Input;
 			Input.Signature.Seed = Seed;
 			Input.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
-			Input.Signature.AlgorithmVersion = GAlgorithmVersion;
-			Input.Signature.GenerationProfileVersion = 6;
 			Input.SharedRules.GridSize = FIntPoint(14, 10);
 			Input.SharedRules.LogicalTileSizeCm = 600.0;
 			Input.SharedRules.FloorHeightCm = 450.0;
@@ -158,7 +159,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Input.Budget.MaxStructureCandidateEvaluations = 250000;
 			Input.Budget.MaxWfcCandidateAttemptsPerFloor = 100000;
 			Input.Budget.MaxWfcBacktrackCountPerFloor = 25000;
-			Input.Budget.MaxWfcSolveAttemptsPerFloor = 10;
+			Input.Budget.MaxWfcSolveAttemptsPerFloor = 3;
 			Input.Difficulty.Difficulty = EZeroEscapeDifficulty::Normal;
 			Input.Difficulty.WfcShapeWeights = FZeroEscapeWfcShapeWeights();
 			Input.Difficulty.AdditionalTwoFloorStairsPerFloorPair.ZeroAdditionalWeight = 0;
@@ -169,7 +170,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Input.Difficulty.MinRequiredRouteCoverageRatio = 0.10;
 			Input.Difficulty.MinAdditionalStairSeparationRatio = 1.0;
 			Input.Difficulty.MinPlayerPursuerRouteDistanceCm = 1200.0;
-			Input.Difficulty.HighCeilingRooms.MinimumTotalCount = 0;
+			Input.Difficulty.HighCeilingRooms.MinimumTotalCount = 2;
 			Input.Difficulty.HighCeilingRooms.MaxCountPerFloor = 2;
 			Input.Difficulty.HighCeilingRooms.MinimumSeparationRatio = 0.0;
 
@@ -179,12 +180,11 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FloorOption.MinTotalWalkableCellCount = 84;
 			FloorOption.MaxTotalWalkableCellCount = 192;
 			FloorOption.MinOrdinaryWalkableCellCountPerFloor = 22;
-			FloorOption.MaxPlayerToExitRouteLengthTiles = 220;
 			FloorOption.MaxAdditionalTwoFloorStairCount = 4;
-			FZeroEscapeWeightedCount NoHighRooms;
-			NoHighRooms.Count = 0;
-			NoHighRooms.Weight = 1;
-			FloorOption.HighCeilingRoomTargetCounts = { NoHighRooms };
+			FZeroEscapeWeightedCount TwoHighRooms;
+			TwoHighRooms.Count = 2;
+			TwoHighRooms.Weight = 1;
+			FloorOption.HighCeilingRoomTargetCounts = { TwoHighRooms };
 			Input.Difficulty.FloorCountOptions = { FloorOption };
 			Input.StructureDefinitions = {
 				MakeHighCeilingRoomDefinition(),
@@ -454,27 +454,31 @@ namespace ZeroEscape::LevelGeneration::Tests
 			CountStructures(
 				FirstPlan, EZeroEscapeStructureKind::ThreeFloorStairwell) <= 1
 				&& FirstPlan.RequiredTwoFloorStairStableIdByLowerFloor.Num() == 2);
-		TestEqual(TEXT("目标为零时允许每层都没有高天花板房间"),
-			CountStructures(FirstPlan, EZeroEscapeStructureKind::HighCeilingRoom), 0);
+		const int32 HighRoomCount = CountStructures(
+			FirstPlan, EZeroEscapeStructureKind::HighCeilingRoom);
+		bool bHasNonTopHighRoom = false;
+		for (const FZeroEscapeGeneratedStructure& Structure : FirstPlan.Structures)
+		{
+			bHasNonTopHighRoom |=
+				Structure.Kind == EZeroEscapeStructureKind::HighCeilingRoom
+				&& Structure.BaseCoordinate.Z < FirstPlan.FloorCount - 1;
+		}
+		TestTrue(TEXT("整栋至少生成两个高天花板房间"), HighRoomCount >= 2);
+		TestTrue(TEXT("高天花板房间不能全部位于顶层"), bHasNonTopHighRoom);
 
-		const FZeroEscapeFloorCountOption& FloorOption =
-			Input.Difficulty.FloorCountOptions[0];
 		int32 SummedWalkable = 0;
 		for (const FZeroEscapeGeneratedFloorSummary& Floor : FirstPlan.Floors)
 		{
 			SummedWalkable += Floor.TotalWalkableCellCount;
-			TestTrue(TEXT("每层必须保留配置的普通 WFC 内容下限"),
+			const int32 HardOrdinaryMinimum = Floor.FloorIndex == 0 ? 2 : 1;
+			TestTrue(TEXT("每层只保留玩家可用性所需的普通格硬下限"),
 				Floor.OrdinaryWalkableCellCount
-					>= FloorOption.MinOrdinaryWalkableCellCountPerFloor);
-			TestTrue(TEXT("每层必经端点的空间与路线覆盖比例必须达标"),
-				Floor.SpatialSeparationRatio + UE_DOUBLE_SMALL_NUMBER
-					>= Input.Difficulty.MinRequiredEndpointSpatialSeparationRatio
-				&& Floor.RouteCoverageRatio + UE_DOUBLE_SMALL_NUMBER
-					>= Input.Difficulty.MinRequiredRouteCoverageRatio);
+					>= HardOrdinaryMinimum);
+			TestTrue(TEXT("软质量指标必须仍可测量"),
+				FMath::IsFinite(Floor.SpatialSeparationRatio)
+					&& FMath::IsFinite(Floor.RouteCoverageRatio));
 		}
-		TestTrue(TEXT("整栋总可走量必须直接落在 DataAsset 的整栋范围内"),
-			SummedWalkable >= FloorOption.MinTotalWalkableCellCount
-				&& SummedWalkable <= FloorOption.MaxTotalWalkableCellCount);
+		TestTrue(TEXT("整栋硬合法结果必须包含可走格"), SummedWalkable > 0);
 		TestEqual(TEXT("报告必须按楼层保留 WFC 指标"),
 			FirstReport.Metrics.FloorWfcMetrics.Num(), FirstPlan.FloorCount);
 		int32 FloorSolveAttempts = 0;
@@ -665,6 +669,108 @@ namespace ZeroEscape::LevelGeneration::Tests
 		}
 		TestTrue(TEXT("三间配合每层上限一间时顶层必须出现房间"),
 			bFoundTopFloorRoom);
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapePublicSeedStabilitySweepTest,
+		"Demo.PCG.Stress.PublicSeedStability900",
+		EAutomationTestFlags_ApplicationContextMask
+			| EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapePublicSeedStabilitySweepTest::RunTest(
+		const FString& Parameters)
+	{
+		using namespace MultiFloorLayoutTestsPrivate;
+		(void)Parameters;
+		const UZeroEscapeLevelGenerationProfile* Profile =
+			LoadObject<UZeroEscapeLevelGenerationProfile>(
+				nullptr,
+				TEXT("/Game/ZeroEscape/Generation/Data/DA_LevelGenerationProfile.DA_LevelGenerationProfile"));
+		if (!TestNotNull(TEXT("Seed Sweep 必须加载正式生成 Profile"), Profile))
+		{
+			return true;
+		}
+
+		constexpr EZeroEscapeDifficulty Difficulties[] = {
+			EZeroEscapeDifficulty::Easy,
+			EZeroEscapeDifficulty::Normal,
+			EZeroEscapeDifficulty::Hard };
+		for (const EZeroEscapeDifficulty Difficulty : Difficulties)
+		{
+			for (int32 Seed = 0; Seed < 300; ++Seed)
+			{
+				FZeroEscapeGenerationRequest Request;
+				Request.Seed = Seed;
+				Request.Difficulty = Difficulty;
+				FResolvedGenerationInput FirstInput;
+				FResolvedGenerationInput ReplayInput;
+				FZeroEscapeGenerationReport FirstResolveReport;
+				FZeroEscapeGenerationReport ReplayResolveReport;
+				if (!FGenerationCore::ResolveGenerationInput(
+						*Profile, Request, FirstInput, FirstResolveReport)
+					|| !FGenerationCore::ResolveGenerationInput(
+						*Profile, Request, ReplayInput, ReplayResolveReport))
+				{
+					AddError(FString::Printf(
+						TEXT("Difficulty=%d Seed=%d Profile 解析失败：%s / %s"),
+						static_cast<int32>(Difficulty),
+						Seed,
+						*FirstResolveReport.Message,
+						*ReplayResolveReport.Message));
+					return true;
+				}
+
+				FZeroEscapeGeneratedLevelPlan FirstPlan;
+				FZeroEscapeGeneratedLevelPlan ReplayPlan;
+				FZeroEscapeGenerationReport FirstReport;
+				FZeroEscapeGenerationReport ReplayReport;
+				if (!FMultiFloorLayoutPlanner::Solve(
+						FirstInput, FirstPlan, FirstReport)
+					|| !FMultiFloorLayoutPlanner::Solve(
+						ReplayInput, ReplayPlan, ReplayReport))
+				{
+					AddError(FString::Printf(
+						TEXT("Difficulty=%d Seed=%d 出现玩家可见生成失败：%s / %s"),
+						static_cast<int32>(Difficulty),
+						Seed,
+						*FirstReport.Message,
+						*ReplayReport.Message));
+					return true;
+				}
+
+				int32 HighRoomCount = 0;
+				bool bHasNonTopHighRoom = false;
+				for (const FZeroEscapeGeneratedStructure& Structure : FirstPlan.Structures)
+				{
+					if (Structure.Kind != EZeroEscapeStructureKind::HighCeilingRoom)
+					{
+						continue;
+					}
+					++HighRoomCount;
+					bHasNonTopHighRoom |=
+						Structure.BaseCoordinate.Z < FirstPlan.FloorCount - 1;
+				}
+				if (FirstPlan.Signature.Seed != Seed
+					|| ReplayPlan.Signature.Seed != Seed
+					|| FirstPlan.CanonicalLayoutHash == 0
+					|| FirstPlan.CanonicalLayoutHash
+						!= ReplayPlan.CanonicalLayoutHash
+					|| HighRoomCount < 2
+					|| !bHasNonTopHighRoom)
+				{
+					AddError(FString::Printf(
+						TEXT("Difficulty=%d Seed=%d 违反 Seed/确定性/高厅合同：FirstSeed=%d ReplaySeed=%d Hash=%lld/%lld HighRooms=%d NonTop=%d"),
+						static_cast<int32>(Difficulty), Seed,
+						FirstPlan.Signature.Seed, ReplayPlan.Signature.Seed,
+						FirstPlan.CanonicalLayoutHash,
+						ReplayPlan.CanonicalLayoutHash,
+						HighRoomCount,
+						bHasNonTopHighRoom ? 1 : 0));
+					return true;
+				}
+			}
+		}
 		return true;
 	}
 

@@ -381,6 +381,74 @@ namespace ZeroEscape::LevelGeneration
 			return FMath::CountBits(static_cast<uint32>(Domain));
 		}
 
+		/** 只把已经折叠且沿给定轴贯通的邻格计入已形成直线。 */
+		int32 CountCollapsedStraightNeighbors(
+			const FIntPoint GridSize,
+			FIntPoint Coordinate,
+			const FIntPoint Step,
+			const uint8 AxisOpeningMask,
+			const TArray<FWfcDomain>& Domains)
+		{
+			int32 Count = 0;
+			Coordinate += Step;
+			while (ZeroEscape::Grid::IsInside(Coordinate, GridSize))
+			{
+				const int32 CellIndex = ZeroEscape::Grid::ToIndex(Coordinate, GridSize);
+				const FWfcDomain Domain = Domains[CellIndex];
+				if (CountDomainVariants(Domain) != 1)
+				{
+					break;
+				}
+				const uint8 OpeningMask = static_cast<uint8>(
+					FMath::CountTrailingZeros(static_cast<uint32>(Domain)));
+				if ((OpeningMask & AxisOpeningMask) != AxisOpeningMask)
+				{
+					break;
+				}
+				++Count;
+				Coordinate += Step;
+			}
+			return Count;
+		}
+
+		/** 超过偏好长度后按超量平方降权；正权重下限 1 保证候选永不被删除。 */
+		int32 CalculatePreferredCandidateWeight(
+			const FIntPoint GridSize,
+			const int32 CellIndex,
+			const FTileVariant& Variant,
+			const TArray<FWfcDomain>& Domains,
+			const FZeroEscapeWfcSolveSettings& Settings)
+		{
+			if (Settings.PreferredMaxConsecutiveStraightTiles <= 0)
+			{
+				return Variant.Weight;
+			}
+
+			const FIntPoint Coordinate(CellIndex % GridSize.X, CellIndex / GridSize.X);
+			const uint8 HorizontalMask = static_cast<uint8>(
+				ZeroEscape::Grid::DirectionBit(1) | ZeroEscape::Grid::DirectionBit(3));
+			const uint8 VerticalMask = static_cast<uint8>(
+				ZeroEscape::Grid::DirectionBit(0) | ZeroEscape::Grid::DirectionBit(2));
+			const int32 HorizontalRun = (Variant.OpeningMask & HorizontalMask) == HorizontalMask
+				? 1 + CountCollapsedStraightNeighbors(
+					GridSize, Coordinate, FIntPoint(1, 0), HorizontalMask, Domains)
+					+ CountCollapsedStraightNeighbors(
+						GridSize, Coordinate, FIntPoint(-1, 0), HorizontalMask, Domains)
+				: 0;
+			const int32 VerticalRun = (Variant.OpeningMask & VerticalMask) == VerticalMask
+				? 1 + CountCollapsedStraightNeighbors(
+					GridSize, Coordinate, FIntPoint(0, 1), VerticalMask, Domains)
+					+ CountCollapsedStraightNeighbors(
+						GridSize, Coordinate, FIntPoint(0, -1), VerticalMask, Domains)
+				: 0;
+
+			const int32 Excess = FMath::Max(0,
+				FMath::Max(HorizontalRun, VerticalRun)
+					- Settings.PreferredMaxConsecutiveStraightTiles);
+			const int64 Divisor = 1 + static_cast<int64>(Excess) * Excess;
+			return FMath::Max(1, static_cast<int32>(Variant.Weight / Divisor));
+		}
+
 		/** 计算带权 Shannon 熵；相同熵时由调用方保留较小稠密下标。 */
 		double CalculateWeightedEntropy(
 			const FWfcDomain Domain,
@@ -409,15 +477,15 @@ namespace ZeroEscape::LevelGeneration
 		/** 从当前 Domain 中按整数权重选择一个 Variant 下标。 */
 		int32 ChooseWeightedVariantIndex(
 			const FWfcDomain Domain,
-			const TArray<FTileVariant>& Variants,
+			const TStaticArray<int32, CanonicalVariantCount>& CandidateWeights,
 			FRandomStream& Random)
 		{
 			int32 TotalWeight = 0;
-			for (int32 VariantIndex = 0; VariantIndex < Variants.Num(); ++VariantIndex)
+			for (int32 VariantIndex = 0; VariantIndex < CanonicalVariantCount; ++VariantIndex)
 			{
 				if ((Domain & static_cast<FWfcDomain>(1u << VariantIndex)) != 0)
 				{
-					TotalWeight += Variants[VariantIndex].Weight;
+					TotalWeight += CandidateWeights[VariantIndex];
 				}
 			}
 			if (TotalWeight <= 0)
@@ -426,14 +494,14 @@ namespace ZeroEscape::LevelGeneration
 			}
 
 			int32 Roll = Random.RandHelper(TotalWeight);
-			for (int32 VariantIndex = 0; VariantIndex < Variants.Num(); ++VariantIndex)
+			for (int32 VariantIndex = 0; VariantIndex < CanonicalVariantCount; ++VariantIndex)
 			{
 				if ((Domain & static_cast<FWfcDomain>(1u << VariantIndex)) == 0)
 				{
 					continue;
 				}
 
-				Roll -= Variants[VariantIndex].Weight;
+				Roll -= CandidateWeights[VariantIndex];
 				if (Roll < 0)
 				{
 					return VariantIndex;
@@ -503,15 +571,34 @@ namespace ZeroEscape::LevelGeneration
 		 */
 		bool BuildWeightedCandidateOrder(
 			FWfcDomain RemainingDomain,
+			const FIntPoint GridSize,
+			const int32 CellIndex,
+			const TArray<FWfcDomain>& Domains,
+			const FZeroEscapeWfcSolveSettings& Settings,
 			const TArray<FTileVariant>& Variants,
 			FRandomStream& Random,
 			TArray<uint8, TInlineAllocator<CanonicalVariantCount>>& OutOrder)
 		{
 			OutOrder.Reset();
+			TStaticArray<int32, CanonicalVariantCount> CandidateWeights;
+			for (int32 VariantIndex = 0;
+				VariantIndex < CanonicalVariantCount;
+				++VariantIndex)
+			{
+				CandidateWeights[VariantIndex] = CalculatePreferredCandidateWeight(
+					GridSize,
+					CellIndex,
+					Variants[VariantIndex],
+					Domains,
+					Settings);
+			}
 			while (CountDomainVariants(RemainingDomain) > 1)
 			{
 				const int32 VariantIndex =
-					ChooseWeightedVariantIndex(RemainingDomain, Variants, Random);
+					ChooseWeightedVariantIndex(
+						RemainingDomain,
+						CandidateWeights,
+						Random);
 				if (!Variants.IsValidIndex(VariantIndex))
 				{
 					return false;
@@ -1141,6 +1228,10 @@ namespace ZeroEscape::LevelGeneration
 					Decision.TrailStart = Trail.Num();
 					if (!BuildWeightedCandidateOrder(
 							Domains[CellIndex],
+							GridSize,
+							CellIndex,
+							Domains,
+							SolveSettings,
 							Variants,
 							Random,
 							Decision.CandidateOrder))

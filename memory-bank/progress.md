@@ -103,3 +103,13 @@
 - 从追猎者三条方向受击 Sequence 创建玩家 Skeleton 副本，并装配 `DA_PlayerStandingImpact` 的 Front/Left/Right。
 - 地刺玩家结果保持 Stop 0.25 秒、无局部物理，只开启方向动画；CharacterImpact 自动化 2/2，官方资产回读与 Level0 地刺触发检查通过。
 - 用户现场确认当前版本可用；少量观感细节次日单独调整，不修改 CharacterImpact/HeavyImpact 核心。
+
+<!-- written by shiqiqiwang at 2026-08-13 15:25 UTC -->
+
+## 2026-08-13 PCG Seed 稳定与质量规则软化
+
+- [x] 删除生成失败后的公开 Seed 替换/关卡重载；同 Seed + Difficulty 确定性重放。
+- [x] 普通格、整栋总量、覆盖、长直线和距离质量改为搜索偏好/候选评分；WFC 搜索预算无解时同层硬合法兜底。
+- [x] 每栋至少两个高厅且至少一个非顶层；正式 Generation Profile 已更新。
+- [x] DemoEditor 构建、Unit 10/10、WFC 8/8、Population 8/8、GameFlow 1/1、Navigation Gate 1/1、三档 900 Seed 压测通过。
+- [ ] 用户验收困难档加载卡顿、密度/长直线/高厅观感、同 Seed 重进，以及真实动态 Recast 与追猎者跨层追逐。

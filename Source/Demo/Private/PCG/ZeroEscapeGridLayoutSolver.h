@@ -16,7 +16,7 @@
 
 namespace ZeroEscape::LevelGeneration
 {
-	/** 所有楼层和完整布局重试共享；调用失败也不会自动刷新。 */
+	/** 同一次整栋候选的所有楼层共享；调用失败也不会自动刷新。 */
 	struct FZeroEscapeSharedWfcBudget
 	{
 		int32 RemainingSolveAttempts = 0;
@@ -38,12 +38,19 @@ namespace ZeroEscape::LevelGeneration
 		FIntPoint RequiredLeaveCoordinate = FIntPoint::ZeroValue;
 		TArray<FGridCellConstraint> Constraints;
 		TArray<uint8> StructureWalkableByCell;
+		/** 仅保留可玩性所需的硬下限：一层 2 格，其他层 1 格。 */
 		int32 MinTotalWalkableCellCount = 1;
 		int32 MaxTotalWalkableCellCount = 1;
 		int32 MinOrdinaryWalkableCellCount = 1;
+		/** 旧硬限制保留为求解器安全边界，调用方应传网格轴长。 */
 		int32 MaxConsecutiveStraightTiles = 1;
 		int32 MaxSolveAttemptsForThisFloor = 1;
-		double MinRouteCoverageRatio = 0.0;
+
+		/** 以下字段只引导候选权重和有限候选择优，不参与硬拒绝。 */
+		int32 PreferredTotalWalkableCellCount = 1;
+		int32 PreferredOrdinaryWalkableCellCount = 1;
+		int32 PreferredMaxConsecutiveStraightTiles = 0;
+		double PreferredRouteCoverageRatio = 0.0;
 	};
 
 	/** 一层成功叶子的稠密 OpeningMask 和同一次 BFS 派生指标。 */
