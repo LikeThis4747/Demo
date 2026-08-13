@@ -55,3 +55,11 @@
 - [x] 制导投射物第一次有效角色阻挡命中接入玩家 Slow + 局部物理；CharacterImpact 2/2、HeavyImpact 5/5，SIE 提交/部位路由/零冲量保底技术证据通过。
 - [x] 磁力追猎者路径保留 Stop + 三方向动画，并增加最低可见物理强度；未修改 HeavyImpact、追猎者攻击、磁力事务或玩家蓝图。
 - [ ] 用户验收制导命中玩家胸/头/左右臂的可见偏转和自然恢复，以及磁力箱子命中追猎者的动画+物理观感。
+
+<!-- written by shiqiqiwang at 2026-08-13 08:43 UTC -->
+
+## 2026-08-13 制导轻受击现场反馈修正
+
+- 已实现制导弹首次 Light 结算后的 Pawn 清场，以及 Light Mesh 对 PhysicsBody 的临时隔离和完整碰撞基线恢复。
+- 已把玩家局部物理满强度冲量调至 13000，Hold 调至 0.11 秒，BlendOut 调至 0.22 秒。
+- DemoEditor 构建成功；CharacterImpact + HeavyImpact 7/7；标准 PIE 技术证据通过。玩家奔跑跳跃手感与最终部位可见度仍待验收。

@@ -14,6 +14,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/Physics/CharacterImpactSourceProfile.h"
 #include "Data/Physics/CharacterImpactTuningData.h"
+#include "Engine/CollisionProfile.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -422,8 +423,18 @@ void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
 
 	if (!bPhysicalReactionActive)
 	{
+		PhysicalBaselineMeshCollisionProfileName = Mesh->GetCollisionProfileName();
 		PhysicalBaselineMeshCollisionEnabled = Mesh->GetCollisionEnabled();
+		PhysicalBaselineMeshCollisionResponses = Mesh->GetCollisionResponseToChannels();
 		bPhysicalMeshCollisionOverridden = false;
+		bPhysicalMeshPhysicsBodyResponseOverridden = false;
+		if (PhysicalBaselineMeshCollisionResponses.GetResponse(ECC_PhysicsBody) != ECR_Ignore)
+		{
+			// Light 的可见反馈由受限 AddImpulse 驱动；普通 PhysicsBody 不应在同一窗口再次挤压表现 Mesh。
+			Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+			bPhysicalMeshPhysicsBodyResponseOverridden =
+				Mesh->GetCollisionResponseToChannel(ECC_PhysicsBody) == ECR_Ignore;
+		}
 		if (PhysicalBaselineMeshCollisionEnabled == ECollisionEnabled::QueryOnly)
 		{
 			// SkeletalMesh 的 BodyInstance 使用组件级 CollisionEnabled；仅开启模拟还不能接收冲量。
@@ -436,13 +447,7 @@ void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
 
 		if (!CollisionEnabledHasPhysics(Mesh->GetCollisionEnabled()))
 		{
-			if (bPhysicalMeshCollisionOverridden
-				&& Mesh->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics)
-			{
-				Mesh->SetCollisionEnabled(PhysicalBaselineMeshCollisionEnabled);
-			}
-			PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
-			bPhysicalMeshCollisionOverridden = false;
+			RestorePhysicalMeshCollisionBaseline();
 			return;
 		}
 
@@ -477,6 +482,49 @@ void UCharacterImpactResponseComponent::TryApplyPhysicalReaction(
 		*AppliedPoint.ToCompactString());
 }
 
+void UCharacterImpactResponseComponent::RestorePhysicalMeshCollisionBaseline()
+{
+	if (IsValid(Mesh)
+		&& (bPhysicalMeshCollisionOverridden || bPhysicalMeshPhysicsBodyResponseOverridden))
+	{
+		const ECollisionEnabled::Type ExpectedCollisionEnabled =
+			bPhysicalMeshCollisionOverridden
+				? ECollisionEnabled::QueryAndPhysics
+				: PhysicalBaselineMeshCollisionEnabled;
+		FCollisionResponseContainer ExpectedCollisionResponses =
+			PhysicalBaselineMeshCollisionResponses;
+		if (bPhysicalMeshPhysicsBodyResponseOverridden)
+		{
+			ExpectedCollisionResponses.SetResponse(ECC_PhysicsBody, ECR_Ignore);
+		}
+
+		if (Mesh->GetCollisionEnabled() == ExpectedCollisionEnabled
+			&& Mesh->GetCollisionResponseToChannels() == ExpectedCollisionResponses)
+		{
+			Mesh->SetCollisionResponseToChannels(PhysicalBaselineMeshCollisionResponses);
+			Mesh->SetCollisionEnabled(PhysicalBaselineMeshCollisionEnabled);
+			if (!PhysicalBaselineMeshCollisionProfileName.IsNone()
+				&& PhysicalBaselineMeshCollisionProfileName != UCollisionProfile::CustomCollisionProfileName)
+			{
+				// Response/Enabled setters mark the BodyInstance as Custom; restore the registered baseline last.
+				Mesh->SetCollisionProfileName(PhysicalBaselineMeshCollisionProfileName);
+			}
+		}
+		else
+		{
+			UE_LOG(LogCharacterImpact, Warning,
+				TEXT("%s did not restore Mesh collision baseline because another system changed it during Light."),
+				*GetNameSafe(GetOwner()));
+		}
+	}
+
+	PhysicalBaselineMeshCollisionProfileName = NAME_None;
+	PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
+	PhysicalBaselineMeshCollisionResponses = FCollisionResponseContainer::GetDefaultResponseContainer();
+	bPhysicalMeshCollisionOverridden = false;
+	bPhysicalMeshPhysicsBodyResponseOverridden = false;
+}
+
 void UCharacterImpactResponseComponent::StopPhysicalReaction()
 {
 	if (IsValid(PhysicalAnimation))
@@ -501,25 +549,11 @@ void UCharacterImpactResponseComponent::StopPhysicalReaction()
 			false,
 			true);
 	}
-	if (bPhysicalMeshCollisionOverridden && IsValid(Mesh))
-	{
-		if (Mesh->GetCollisionEnabled() == ECollisionEnabled::QueryAndPhysics)
-		{
-			Mesh->SetCollisionEnabled(PhysicalBaselineMeshCollisionEnabled);
-		}
-		else
-		{
-			UE_LOG(LogCharacterImpact, Warning,
-				TEXT("%s did not restore Mesh collision because another system changed it during Light."),
-				*GetNameSafe(GetOwner()));
-		}
-	}
+	RestorePhysicalMeshCollisionBaseline();
 
 	PhysicalSessionStartTimeSeconds = 0.0f;
 	LastPhysicalImpactTimeSeconds = 0.0f;
-	PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
 	bPhysicalReactionActive = false;
-	bPhysicalMeshCollisionOverridden = false;
 	SetComponentTickEnabled(false);
 }
 

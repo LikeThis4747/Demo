@@ -36,3 +36,11 @@
 - 局部物理新增 head 路由，并使用受限真实命中点；磁力箱子对追猎者仍为 Stop + 三方向动画 + 局部物理。
 - 构建成功，CharacterImpact + HeavyImpact 自动化 7/7；SIE 真实命中已覆盖 head、upperarm_r 与零冲量保底。
 - 技术接线完成但观感未验收；只允许现场有限参数确认，失败则转 Stop + 受击动画，不再扩共享身体、预测或租约系统。
+
+<!-- written by shiqiqiwang at 2026-08-13 08:43 UTC -->
+
+## 2026-08-13 制导轻受击现场反馈修正
+
+- 第一次制导 Light 命中后，弹体只忽略 Pawn 并继续碰撞环境；Light 窗口内 Mesh 暂时忽略 PhysicsBody，退出时完整恢复碰撞基线。
+- 玩家物理表现参数调整为 13000 / 0.11s Hold / 0.22s BlendOut；CharacterImpact + HeavyImpact 自动化 7/7，标准 PIE 连续命中 Applied 且无相关警告。
+- 尚待用户复测奔跑跳跃异常前冲与头部可见度；不得在此之前继续扩大物理架构或宣称验收完成。

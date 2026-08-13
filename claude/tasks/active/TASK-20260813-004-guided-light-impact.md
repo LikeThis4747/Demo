@@ -45,3 +45,13 @@
 - DemoEditor Win64 Development 构建成功；CharacterImpact 2 项和 HeavyImpact 5 项自动化共 7/7 通过。
 - SIE 已实际观察到制导投射物命中玩家后返回 Applied，并分别路由到 `head`、`upperarm_r`；`NormalImpulse=0` 时保底强度也生效。
 - 技术链路已通过，用户对物理反馈是否足够明显的现场观感验收仍待进行；任务保持 active，不归档。
+
+## 现场反馈后的有限收尾修正
+
+- 用户确认 `Slow + 局部物理` 的方向成立，但发现奔跑跳跃中被制导弹命中会向前异常位移，头部反馈也偏弱。
+- 制导弹在第一次有效角色命中并提交 Light 后，只把自身 `Pawn` 响应切为 Ignore；它仍保留 WorldStatic/WorldDynamic 等环境碰撞，避免后续帧持续顶住角色 Capsule。
+- Light 物理窗口会暂时把角色 Mesh 对 `PhysicsBody` 的响应切为 Ignore，防止同一枚 50 kg 制导弹再次挤压刚启用物理的表现 Mesh；退出时完整恢复 Collision Profile、CollisionEnabled 与响应容器。
+- 玩家局部物理首轮参数调整为：满强度冲量 `13000`、保持 `0.11s`、BlendOut `0.22s`；Heavy 参数、CharacterMovement 速度/Transform 均未修改。
+- 修正后 DemoEditor 模块构建成功；CharacterImpact 2 项与 HeavyImpact 5 项仍为 7/7。
+- 标准 PIE 自动命中确认玩家 `upperarm_l` 收到 `13000` 表现冲量，连续三发制导命中均提交 Applied；日志中没有无效 AddImpulse 或碰撞基线恢复警告。
+- 尚待用户现场复测“奔跑跳跃中命中是否不再突进”以及头/胸/左右臂的最终可见程度；任务继续保持 active。

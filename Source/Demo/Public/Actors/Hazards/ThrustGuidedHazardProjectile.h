@@ -103,8 +103,8 @@ private:
 	/** 关闭碰撞/模拟和全部本地能力并记录明确错误。 */
 	void DisableProjectile(const FString& Reason);
 
-	/** 第一次有效角色阻挡命中复用 LaunchId 提交现有 StandingImpact；不改变弹体物理。 */
-	void TrySubmitStandingImpact(
+	/** 第一次有效角色阻挡命中复用 LaunchId 提交现有 StandingImpact；返回是否已识别并通知接收者。 */
+	bool TrySubmitStandingImpact(
 		AActor* ContactOwner,
 		const FVector& ContactLinearVelocity,
 		const FVector& NormalImpulse,

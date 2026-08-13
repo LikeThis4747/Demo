@@ -58,3 +58,12 @@
 - 局部物理增加 head，并将实际受力点限制在命中 Body 附近；磁力箱子保持追猎者 Stop + 三方向动画，仅提高最低可见强度。
 - DemoEditor 构建成功；CharacterImpact 2 项和 HeavyImpact 5 项共 7/7 通过。SIE 真实制导命中返回 Applied，覆盖 head、upperarm_r 与零冲量保底。
 - 未修改追猎者攻击、DA_Pursuer、BP_ZeroEscapeCharacter、HeavyImpact、磁力事务、地刺、ABP、Level0 或 Config；用户观感验收仍待完成。
+
+<!-- written by shiqiqiwang at 2026-08-13 08:43 UTC -->
+
+## 2026-08-13 — 制导轻受击现场反馈收尾
+
+- 修复制导弹在首次 Light 后持续顶住角色的问题：弹体后续忽略 Pawn，角色局部物理窗口也隔离普通 PhysicsBody，结束时完整恢复原碰撞 Profile。
+- 玩家物理表现参数调为冲量 13000、Hold 0.11 秒、BlendOut 0.22 秒；未修改 Heavy 或 CharacterMovement。
+- DemoEditor 构建成功，CharacterImpact 与 HeavyImpact 自动化 7/7；PIE 三次命中 Applied、无相关物理/恢复警告。
+- 遗留：用户现场复测奔跑跳跃异常前冲与头部反馈强度。

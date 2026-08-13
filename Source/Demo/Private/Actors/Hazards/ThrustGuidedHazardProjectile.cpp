@@ -763,7 +763,7 @@ float AThrustGuidedHazardProjectile::CalculateCapsuleRaySurfaceDistance(
 }
 
 /** 首次有效角色阻挡复用弹体的 LaunchId 提交一次 Light；强度有策划保底但保留真实冲量上浮。 */
-void AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
+bool AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
 	AActor* ContactOwner,
 	const FVector& ContactLinearVelocity,
 	const FVector& NormalImpulse,
@@ -776,7 +776,7 @@ void AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
 		|| !ContactOwner->GetClass()->ImplementsInterface(
 			UCharacterImpactReceiver::StaticClass()))
 	{
-		return;
+		return false;
 	}
 
 	const FVector SafeNormalImpulse =
@@ -814,7 +814,7 @@ void AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
 			TEXT("LaunchId=%s could not resolve a StandingImpact direction for %s."),
 			*LaunchId.ToString(EGuidFormats::DigitsWithHyphensLower),
 			*GetNameSafe(ContactOwner));
-		return;
+		return false;
 	}
 
 	FStandingImpactRequest Request;
@@ -837,6 +837,7 @@ void AThrustGuidedHazardProjectile::TrySubmitStandingImpact(
 		ImpulseMagnitude,
 		MappedStrength,
 		ResponseStrength);
+	return true;
 }
 
 /** 每次接触都记录；首个有效阻挡只切阶段、阻尼和表现，不接管速度。 */
@@ -897,11 +898,16 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 			*GetNameSafe(ContactOwner));
 	}
 
-	TrySubmitStandingImpact(
+	const bool bStandingImpactReceiverHit = TrySubmitStandingImpact(
 		ContactOwner,
 		LinearVelocity,
 		NormalImpulse,
 		Hit);
+	if (bStandingImpactReceiverHit)
+	{
+		// 首次 Light 已结算；弹体继续碰撞环境，但不得在后续帧持续顶住角色 Capsule。
+		ProjectileBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+	}
 
 	ReceiveFirstBlockingImpact(
 		ContactOwner,

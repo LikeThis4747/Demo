@@ -81,6 +81,7 @@ private:
 		FName& OutImpulseBody,
 		FVector& OutWorldPoint) const;
 	void TryApplyPhysicalReaction(const FStandingImpactRequest& Request);
+	void RestorePhysicalMeshCollisionBaseline();
 	void StopPhysicalReaction();
 	void ReleasePhysicalAnimationConfiguration();
 
@@ -122,9 +123,12 @@ private:
 	float PhysicalSessionStartTimeSeconds = 0.0f;
 	float LastPhysicalImpactTimeSeconds = 0.0f;
 	uint64 PhysicalConfigurationFrame = 0;
+	FName PhysicalBaselineMeshCollisionProfileName = NAME_None;
 	ECollisionEnabled::Type PhysicalBaselineMeshCollisionEnabled = ECollisionEnabled::NoCollision;
+	FCollisionResponseContainer PhysicalBaselineMeshCollisionResponses;
 	bool bConfigurationReady = false;
 	bool bPhysicalReactionReady = false;
 	bool bPhysicalReactionActive = false;
 	bool bPhysicalMeshCollisionOverridden = false;
+	bool bPhysicalMeshPhysicsBodyResponseOverridden = false;
 };
