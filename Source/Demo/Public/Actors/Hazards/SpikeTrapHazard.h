@@ -33,13 +33,16 @@ public:
 	/** 创建场景根、固定格栅、升降刺网格、只响应 Pawn 的伤害区与升降 Timeline。 */
 	ASpikeTrapHazard();
 
+	/** 延迟生成专用：在 BeginPlay 前注入 [0,1) 初始相位；失败时保持原同步启动行为。 */
+	bool ConfigurePopulationPhase(float InNormalizedPhase01);
+
 protected:
 	/** 生成升降曲线、绑定 Timeline 与 Overlap，记录刺基准位并从收起相位启动循环。 */
 	virtual void BeginPlay() override;
 
 private:
-	/** 进入收起相位：解除危险并计时后升起。 */
-	void EnterHidden();
+	/** 进入收起相位；非负 Override 只用于 PCG 第一轮启动偏移。 */
+	void EnterHidden(float InitialDelayOverrideSeconds = -1.0f);
 	/** 正向播放 Timeline 使刺升起。 */
 	void StartRising();
 	/** 进入伸出相位：标记危险、对区内 Pawn 结算一次并计时后收起。 */
@@ -138,6 +141,12 @@ private:
 
 	/** 当前是否处于伤害生效的伸出相位。 */
 	bool bIsDangerous = false;
+
+	/** 仅由 ConfigurePopulationPhase 在 BeginPlay 前写入；手摆机关保持 false。 */
+	bool bHasPopulationPhase = false;
+
+	/** PCG 确定性归一化相位；只映射到第一轮安全启动延迟。 */
+	float PopulationNormalizedPhase01 = 0.0f;
 
 	/** Stable for one extended phase so a receiver can reject repeat overlap callbacks. */
 	FGuid ActiveDangerImpactId;

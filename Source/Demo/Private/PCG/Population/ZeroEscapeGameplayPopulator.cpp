@@ -8,6 +8,9 @@
 
 #include "PCG/Population/ZeroEscapeGameplayPopulator.h"
 
+#include "Actors/Hazards/BatteringRamHazard.h"
+#include "Actors/Hazards/PendulumHazard.h"
+#include "Actors/Hazards/SpikeTrapHazard.h"
 #include "Actors/Hazards/SpikeWheelHazard.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
@@ -31,6 +34,7 @@ namespace
 		UClass* ActorClass = nullptr;
 		FTransform WorldTransform = FTransform::Identity;
 		LevelGen::FPopulationSpikeWheelSpawnConfig SpikeWheel;
+		LevelGen::FPopulationPeriodicPhaseConfig PeriodicPhase;
 	};
 
 	const TCHAR* PlacementKindName(const LevelGen::EPopulationPlacementKind Kind)
@@ -188,12 +192,9 @@ namespace
 					Placement.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel;
 				if (bIsSpikeWheel
 					&& (Placement.LocalSpawnTransforms.Num() != 1
-						|| !Placement.SpikeWheel.bIsConfigured
-						|| !FMath::IsFinite(Placement.SpikeWheel.NormalizedPhase01)
-						|| Placement.SpikeWheel.NormalizedPhase01 < 0.0f
-						|| Placement.SpikeWheel.NormalizedPhase01 >= 1.0f))
+						|| !Placement.SpikeWheel.bIsConfigured))
 				{
-					OutError = TEXT("SpikeWheel placement requires one transform and a finite phase in [0,1).");
+					OutError = TEXT("SpikeWheel placement requires one transform and a route configuration.");
 					return false;
 				}
 				if (!bIsSpikeWheel && Placement.SpikeWheel.bIsConfigured)
@@ -215,6 +216,18 @@ namespace
 					Request.ActorClass = *ActorClass;
 					Request.WorldTransform = LocalTransform * GeneratedRootWorldTransform;
 					Request.SpikeWheel = Placement.SpikeWheel;
+					if (LevelGen::IsPeriodicHazardKind(Placement.Kind))
+					{
+						Request.PeriodicPhase.bIsConfigured = true;
+						Request.PeriodicPhase.NormalizedPhase01 =
+							Placement.PeriodicPhase.bIsConfigured
+								&& FMath::IsFinite(
+									Placement.PeriodicPhase.NormalizedPhase01)
+								&& Placement.PeriodicPhase.NormalizedPhase01 >= 0.0f
+								&& Placement.PeriodicPhase.NormalizedPhase01 < 1.0f
+							? Placement.PeriodicPhase.NormalizedPhase01
+							: 0.0f;
+					}
 					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
 							Request.WorldTransform))
 					{
@@ -328,7 +341,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 	for (const FPopulationSpawnRequest& Request : SpawnRequests)
 	{
 		AActor* Spawned = nullptr;
-		if (Request.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel)
+		if (LevelGen::IsPeriodicHazardKind(Request.Kind))
 		{
 			AActor* DeferredActor = World->SpawnActorDeferred<AActor>(
 				Request.ActorClass,
@@ -337,21 +350,55 @@ bool AZeroEscapeGameplayPopulator::Populate(
 				nullptr,
 				ESpawnActorCollisionHandlingMethod::AlwaysSpawn,
 				ESpawnActorScaleMethod::OverrideRootScale);
-			ASpikeWheelHazard* Wheel = Cast<ASpikeWheelHazard>(DeferredActor);
-			if (!IsValid(Wheel)
-				|| !Wheel->ConfigurePopulationPlacement(
-					Request.SpikeWheel.RouteVariantSeed,
-					Request.SpikeWheel.NormalizedPhase01))
+			if (!IsValid(DeferredActor))
 			{
-				if (IsValid(DeferredActor))
+				return Fail(TEXT("PeriodicHazardDeferredSpawnFailed"));
+			}
+
+			bool bPhaseConfigured = false;
+			switch (Request.Kind)
+			{
+			case LevelGen::EPopulationPlacementKind::Pendulum:
+				if (APendulumHazard* Pendulum = Cast<APendulumHazard>(DeferredActor))
 				{
-					DeferredActor->Destroy();
+					bPhaseConfigured = Pendulum->ConfigurePopulationPhase(
+						Request.PeriodicPhase.NormalizedPhase01);
 				}
-				return Fail(TEXT("SpikeWheelConfigurationFailed"));
+				break;
+			case LevelGen::EPopulationPlacementKind::SpikeTrap:
+				if (ASpikeTrapHazard* Spike = Cast<ASpikeTrapHazard>(DeferredActor))
+				{
+					bPhaseConfigured = Spike->ConfigurePopulationPhase(
+						Request.PeriodicPhase.NormalizedPhase01);
+				}
+				break;
+			case LevelGen::EPopulationPlacementKind::BatteringRam:
+				if (ABatteringRamHazard* Ram = Cast<ABatteringRamHazard>(DeferredActor))
+				{
+					bPhaseConfigured = Ram->ConfigurePopulationPhase(
+						Request.PeriodicPhase.NormalizedPhase01);
+				}
+				break;
+			case LevelGen::EPopulationPlacementKind::SpikeWheel:
+				if (ASpikeWheelHazard* Wheel = Cast<ASpikeWheelHazard>(DeferredActor))
+				{
+					bPhaseConfigured = Wheel->ConfigurePopulationPlacement(
+						Request.SpikeWheel.RouteVariantSeed,
+						Request.PeriodicPhase.NormalizedPhase01);
+				}
+				break;
+			default:
+				break;
+			}
+			if (!bPhaseConfigured)
+			{
+				UE_LOG(LogZeroEscapePopulator, Warning,
+					TEXT("Periodic phase fell back to the actor default for type %s."),
+					PlacementKindName(Request.Kind));
 			}
 
 			Spawned = UGameplayStatics::FinishSpawningActor(
-				Wheel,
+				DeferredActor,
 				Request.WorldTransform,
 				ESpawnActorScaleMethod::OverrideRootScale);
 			if (!IsValid(Spawned))
@@ -360,7 +407,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 				{
 					DeferredActor->Destroy();
 				}
-				return Fail(TEXT("SpikeWheelFinishSpawningFailed"));
+				return Fail(TEXT("PeriodicHazardFinishSpawningFailed"));
 			}
 		}
 		else
@@ -393,7 +440,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		const LevelGen::FPopulationPlannedPlacement& Placement =
 			PlacementPlan.HazardPlacements[PlacementIndex];
 		UE_LOG(LogZeroEscapePopulator, Verbose,
-			TEXT("ZE_POPULATION_SCORE index=%d kind=%s anchor=%s total=%.3f position=%.3f progress=%.3f pressure=%.3f combination=%.3f diversity=%.3f diagnostic=%.3f wheel_route_seed=%d wheel_phase=%.6f"),
+			TEXT("ZE_POPULATION_SCORE index=%d kind=%s anchor=%s total=%.3f position=%.3f progress=%.3f pressure=%.3f combination=%.3f diversity=%.3f diagnostic=%.3f phase_configured=%d phase=%.6f wheel_route_seed=%d"),
 			PlacementIndex,
 			PlacementKindName(Placement.Kind),
 			*Placement.AnchorAddress.ToString(),
@@ -404,8 +451,9 @@ bool AZeroEscapeGameplayPopulator::Populate(
 			Placement.Score.Combination,
 			Placement.Score.Diversity,
 			Placement.Score.Diagnostic,
-			Placement.SpikeWheel.RouteVariantSeed,
-			Placement.SpikeWheel.NormalizedPhase01);
+			Placement.PeriodicPhase.bIsConfigured ? 1 : 0,
+			Placement.PeriodicPhase.NormalizedPhase01,
+			Placement.SpikeWheel.RouteVariantSeed);
 	}
 	for (int32 GroupIndex = 0;
 		GroupIndex < PlacementPlan.HazardGroups.Num();

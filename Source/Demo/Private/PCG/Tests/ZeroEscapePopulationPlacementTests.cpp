@@ -203,6 +203,48 @@ namespace ZeroEscape::LevelGeneration::Tests
 			return Plan;
 		}
 
+		/** 四段蛇形单路径在三个转角提供发射器锚点，同时保留可精确计算的图距离。 */
+		FZeroEscapeGeneratedLevelPlan MakeLauncherCombinationPlan()
+		{
+			FZeroEscapeGeneratedLevelPlan Plan;
+			Plan.Signature.Seed = 832000;
+			Plan.Signature.Difficulty = EZeroEscapeDifficulty::Normal;
+			Plan.FloorCount = 2;
+			Plan.GridSize = FIntPoint(10, 6);
+			Plan.LogicalTileSizeCm = 600.0;
+			Plan.FloorHeightCm = 450.0;
+			Plan.AnchorHeightCm = 100.0;
+
+			TArray<FIntVector> Path;
+			for (int32 Row = 0; Row < 4; ++Row)
+			{
+				for (int32 Offset = 0; Offset < 10; ++Offset)
+				{
+					const int32 X = (Row & 1) == 0 ? Offset : 9 - Offset;
+					Path.Add(FIntVector(X, Row, 0));
+				}
+			}
+			for (int32 Index = 0; Index < Path.Num(); ++Index)
+			{
+				uint8 Openings = 0;
+				for (const int32 NeighborIndex : { Index - 1, Index + 1 })
+				{
+					if (Path.IsValidIndex(NeighborIndex))
+					{
+						const FIntVector Delta = Path[NeighborIndex] - Path[Index];
+						Openings |= Delta.X > 0 ? East
+							: Delta.X < 0 ? West
+							: Delta.Y > 0 ? North : South;
+					}
+				}
+				Plan.OrdinaryCells.Add(MakeCell(Path[Index], Openings));
+			}
+			Plan.PlayerSpawnCoordinate = Path[0];
+			Plan.PursuerSpawnCoordinate = Path[15];
+			Plan.ExitCoordinate = Path.Last();
+			return Plan;
+		}
+
 		TArray<FZeroEscapePopulationDifficultySettings> MakeDifficulties(
 			const float HazardDensity = 20.0f,
 			const float ResourceDensity = 20.0f)
@@ -281,9 +323,11 @@ namespace ZeroEscape::LevelGeneration::Tests
 						!= Second[Index].SpikeWheel.bIsConfigured
 					|| First[Index].SpikeWheel.RouteVariantSeed
 						!= Second[Index].SpikeWheel.RouteVariantSeed
+					|| First[Index].PeriodicPhase.bIsConfigured
+						!= Second[Index].PeriodicPhase.bIsConfigured
 					|| !FMath::IsNearlyEqual(
-						First[Index].SpikeWheel.NormalizedPhase01,
-						Second[Index].SpikeWheel.NormalizedPhase01)
+						First[Index].PeriodicPhase.NormalizedPhase01,
+						Second[Index].PeriodicPhase.NormalizedPhase01)
 					|| !ScoresEqual(First[Index].Score, Second[Index].Score))
 				{
 					return false;
@@ -977,6 +1021,157 @@ namespace ZeroEscape::LevelGeneration::Tests
 	}
 
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapePopulationLauncherSoftCombinationTest,
+		"Demo.PCG.Population.LauncherSoftCombination",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapePopulationLauncherSoftCombinationTest::RunTest(
+		const FString& Parameters)
+	{
+		(void)Parameters;
+		FZeroEscapeGeneratedLevelPlan Plan = MakeLauncherCombinationPlan();
+		FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		Hazards.PlacementScoring.TypeContextStrength = 0.0f;
+		Hazards.PlacementScoring.PressureFitLog2Strength = 0.0f;
+		Hazards.PlacementScoring.ProgressLog2Strength = 0.0f;
+		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
+		Hazards.PlacementScoring.MaximumRecentKindPenalty = 0.0f;
+		Hazards.PlacementScoring.LauncherCombinationLog2Bonus = 1.5f;
+		Hazards.PlacementScoring.LauncherCombinationPressureBonus = 0.0f;
+		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
+		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
+			MakeDifficulties(10.0f, 0.0f);
+		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
+		{
+			Difficulty.Hazards.SpikeTrapWeight = 0;
+			Difficulty.Hazards.BatteringRamWeight = 1;
+			Difficulty.Hazards.GuidedLauncherWeight = 1;
+			Difficulty.Hazards.SpikeWheelWeight = 0;
+		}
+
+		int32 PositiveCombinationCount = 0;
+		int32 MultiPeriodicGroupCount = 0;
+		const auto PathIndex = [&Plan](const FIntVector Address)
+		{
+			return Plan.OrdinaryCells.IndexOfByPredicate(
+				[Address](const FZeroEscapeGeneratedOrdinaryCell& Cell)
+				{
+					return Cell.Coordinate == Address;
+				});
+		};
+		for (int32 SeedIndex = 0; SeedIndex < 64; ++SeedIndex)
+		{
+			Plan.Signature.Seed = 832000 + SeedIndex;
+			FPopulationPlacementPlan Result;
+			FPopulationPlacementPlan Replay;
+			FString Error;
+			if (!TestTrue(TEXT("发射器软组合 Seed 规划成功"),
+				FPopulationPlacementPolicy::BuildPlan(
+					Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+					Hazards, Resources, Difficulties, Result, Error)
+					== EPopulationPlacementResult::Success)
+				|| !TestTrue(TEXT("发射器软组合同 Seed 重放成功"),
+					FPopulationPlacementPolicy::BuildPlan(
+						Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+						Hazards, Resources, Difficulties, Replay, Error)
+						== EPopulationPlacementResult::Success))
+			{
+				continue;
+			}
+			TestTrue(TEXT("发射器软组合与相位必须同 Seed 复现"),
+				PlacementsEqual(Result.HazardPlacements, Replay.HazardPlacements));
+
+			for (int32 PlacementIndex = 0;
+				PlacementIndex < Result.HazardPlacements.Num();
+				++PlacementIndex)
+			{
+				const FPopulationPlannedPlacement& Placement =
+					Result.HazardPlacements[PlacementIndex];
+				if (Placement.Kind == EPopulationPlacementKind::GuidedLauncher)
+				{
+					TestEqual(TEXT("发射器只占挂载所在的一个逻辑格"),
+						Placement.ResourceBlockedAddresses.Num(), 1);
+					if (Placement.ResourceBlockedAddresses.Num() == 1)
+					{
+						TestTrue(TEXT("发射器占用格就是自身锚点"),
+							Placement.ResourceBlockedAddresses[0]
+								== Placement.AnchorAddress);
+					}
+					TestFalse(TEXT("玩家触发型发射器不配置周期相位"),
+						Placement.PeriodicPhase.bIsConfigured);
+				}
+				else
+				{
+					TestTrue(TEXT("周期冲锤取得合法确定性相位"),
+						Placement.PeriodicPhase.bIsConfigured
+							&& Placement.PeriodicPhase.NormalizedPhase01 >= 0.0f
+							&& Placement.PeriodicPhase.NormalizedPhase01 < 1.0f);
+				}
+
+				float ExpectedCombination = 0.0f;
+				for (int32 PreviousIndex = 0;
+					PreviousIndex < PlacementIndex;
+					++PreviousIndex)
+				{
+					const FPopulationPlannedPlacement& Previous =
+						Result.HazardPlacements[PreviousIndex];
+					const bool bLauncherPair =
+						(Placement.Kind == EPopulationPlacementKind::GuidedLauncher)
+						!= (Previous.Kind == EPopulationPlacementKind::GuidedLauncher);
+					if (!bLauncherPair)
+					{
+						continue;
+					}
+					const int32 Distance = FMath::Abs(
+						PathIndex(Placement.AnchorAddress)
+							- PathIndex(Previous.AnchorAddress));
+					if (Distance > 1
+						&& Distance <= Hazards.PlacementScoring.GroupRadiusTiles)
+					{
+						const float Signal = static_cast<float>(Distance - 1)
+							/ (Hazards.PlacementScoring.GroupRadiusTiles - 1);
+						ExpectedCombination = FMath::Max(
+							ExpectedCombination,
+							Hazards.PlacementScoring.LauncherCombinationLog2Bonus
+								* Signal);
+					}
+				}
+				TestTrue(TEXT("发射器组合分只按 2-3 格软距离曲线计算"),
+					FMath::IsNearlyEqual(
+						Placement.Score.Combination,
+						ExpectedCombination));
+				PositiveCombinationCount += ExpectedCombination > 0.0f ? 1 : 0;
+			}
+
+			for (const FPopulationHazardGroupRecord& Group : Result.HazardGroups)
+			{
+				TArray<float> PeriodicPhases;
+				for (const int32 PlacementIndex : Group.PlacementIndices)
+				{
+					const FPopulationPlannedPlacement& Placement =
+						Result.HazardPlacements[PlacementIndex];
+					if (Placement.PeriodicPhase.bIsConfigured)
+					{
+						PeriodicPhases.Add(Placement.PeriodicPhase.NormalizedPhase01);
+					}
+				}
+				if (PeriodicPhases.Num() >= 2)
+				{
+					++MultiPeriodicGroupCount;
+					const float Direct = FMath::Abs(PeriodicPhases[0] - PeriodicPhases[1]);
+					TestTrue(TEXT("同组前两个周期机关经软择优明显错相"),
+						FMath::Min(Direct, 1.0f - Direct) >= 0.24f);
+				}
+			}
+		}
+		TestTrue(TEXT("固定 Seed 集必须实际命中发射器远距组合"),
+			PositiveCombinationCount > 0);
+		TestTrue(TEXT("固定 Seed 集必须覆盖同组周期机关错相"),
+			MultiPeriodicGroupCount > 0);
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FZeroEscapePopulationSpikeWheelOneCellContractTest,
 		"Demo.PCG.Population.SpikeWheelOneCellContract",
 		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -1033,9 +1228,10 @@ namespace ZeroEscape::LevelGeneration::Tests
 			}
 			TestTrue(TEXT("刺轮携带生成前配置"), Wheel.SpikeWheel.bIsConfigured);
 			TestTrue(TEXT("归一化相位在半开区间内"),
-				FMath::IsFinite(Wheel.SpikeWheel.NormalizedPhase01)
-					&& Wheel.SpikeWheel.NormalizedPhase01 >= 0.0f
-					&& Wheel.SpikeWheel.NormalizedPhase01 < 1.0f);
+				Wheel.PeriodicPhase.bIsConfigured
+					&& FMath::IsFinite(Wheel.PeriodicPhase.NormalizedPhase01)
+					&& Wheel.PeriodicPhase.NormalizedPhase01 >= 0.0f
+					&& Wheel.PeriodicPhase.NormalizedPhase01 < 1.0f);
 			TestTrue(TEXT("单独刺轮只轻微降权而不归零"),
 				FMath::IsNearlyEqual(
 					Wheel.Score.Combination,
@@ -1308,7 +1504,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 				}
 			}
 		}
-		TestTrue(TEXT("固定 Seed 集必须实际覆盖发射器前方操作格"),
+		TestTrue(TEXT("固定 Seed 集必须实际覆盖发射器单格占用合同"),
 			TotalLauncherCount > 0);
 		return true;
 	}

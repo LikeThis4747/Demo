@@ -53,6 +53,22 @@ ASpikeTrapHazard::ASpikeTrapHazard()
 	RiseTimeline = CreateDefaultSubobject<UTimelineComponent>(TEXT("RiseTimeline"));
 }
 
+/** PCG 延迟生成只写第一轮相位；运行后不允许重排伤害窗口。 */
+bool ASpikeTrapHazard::ConfigurePopulationPhase(
+	const float InNormalizedPhase01)
+{
+	if (HasActorBegunPlay()
+		|| !FMath::IsFinite(InNormalizedPhase01)
+		|| InNormalizedPhase01 < 0.0f
+		|| InNormalizedPhase01 >= 1.0f)
+	{
+		return false;
+	}
+	bHasPopulationPhase = true;
+	PopulationNormalizedPhase01 = InNormalizedPhase01;
+	return true;
+}
+
 /** 生成升降曲线、绑定 Timeline 委托与 Overlap，记录刺伸出基准位，初始收起并启动循环。 */
 void ASpikeTrapHazard::BeginPlay()
 {
@@ -89,15 +105,26 @@ void ASpikeTrapHazard::BeginPlay()
 
 	// 初始把刺沉入格栅下方并启动循环。
 	SpikeMesh->SetRelativeLocation(SpikeBaseLocation - FVector(0.0f, 0.0f, HideDepth));
-	EnterHidden();
+	const float CycleSeconds = HiddenDuration + ExtendedDuration + 2.0f * RiseDuration;
+	EnterHidden(bHasPopulationPhase
+		? PopulationNormalizedPhase01 * CycleSeconds
+		: -1.0f);
 }
 
 /** 收起相位：解除危险，计时后升起。 */
-void ASpikeTrapHazard::EnterHidden()
+void ASpikeTrapHazard::EnterHidden(const float InitialDelayOverrideSeconds)
 {
 	bIsDangerous = false;
 	GetWorldTimerManager().SetTimer(
-		PhaseTimerHandle, this, &ASpikeTrapHazard::StartRising, FMath::Max(HiddenDuration, 0.01f), false);
+		PhaseTimerHandle,
+		this,
+		&ASpikeTrapHazard::StartRising,
+		FMath::Max(
+			InitialDelayOverrideSeconds >= 0.0f
+				? InitialDelayOverrideSeconds
+				: HiddenDuration,
+			0.01f),
+		false);
 }
 
 /** 正向播放使刺升起。 */

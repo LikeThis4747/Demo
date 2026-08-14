@@ -3,7 +3,7 @@
 /**
  * @file PendulumHazard.h
  * 职责：创建世界约束的宽面物理摆锤，按初始角度自由释放，并在中线穿越时仅补回缺失能量。
- * 边界：不按碰撞物类别改写冲量，只经共享接口请求接收者提前准备，不加载美术资产，不接入 PCG。
+ * 边界：不按碰撞物类别改写冲量，只经共享接口请求接收者提前准备，不加载美术资产；PCG 只可在 BeginPlay 前注入初始相位。
  * 状态 Owner：拥有自身中线侧别、半摆 ImpactId、预测候选、补能 Timer 与物理组件生命周期。
  */
 
@@ -36,6 +36,9 @@ public:
 	/** 根据 DataAsset 在编辑器里预览初始释放姿态；不建立约束或启动物理。 */
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	/** 延迟生成专用：在 BeginPlay 前注入 [0,1) 初始相位；失败时保持原侧边释放。 */
+	bool ConfigurePopulationPhase(float InNormalizedPhase01);
+
 protected:
 	/** 校验配置，以最低点建立约束，再设置一次初始释放姿态并启动中线检测。 */
 	virtual void BeginPlay() override;
@@ -53,7 +56,7 @@ private:
 	/** 锁定线性自由度、配置主/副轴硬限位并明确关闭全部驱动。 */
 	void ConfigureConstraint(const UPendulumHazardTuningData& Tuning);
 
-	/** 仅在 BeginPlay 初始化时绕世界约束 X 轴瞬移到目标摆幅，然后由重力自然释放。 */
+	/** 仅在 BeginPlay 初始化时按可选 PCG 相位设置姿态与切向速度，然后由重力自然摆动。 */
 	void SetInitialReleasePose(const UPendulumHazardTuningData& Tuning);
 
 	/** 以低成本采样主轴角度和预测候选；跨中线时更新半摆 ID，并至多请求一次补能。 */
@@ -139,6 +142,12 @@ private:
 
 	/** 最近一次确认位于中线哪一侧：-1 / +1；0 表示尚未取得稳定侧别。 */
 	int8 LastObservedSide = 0;
+
+	/** 仅由 ConfigurePopulationPhase 在 BeginPlay 前写入；手摆机关保持 false。 */
+	bool bHasPopulationPhase = false;
+
+	/** PCG 确定性归一化相位；映射为近似自由摆初始角度与角速度。 */
+	float PopulationNormalizedPhase01 = 0.0f;
 
 	/** 当前半摆共用的请求 ID；玩家和 AI 以同一 ID 分别、独立地接受。 */
 	FGuid CurrentSwingImpactId;

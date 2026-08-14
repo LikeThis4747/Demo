@@ -93,3 +93,7 @@
 - [x] 隔层时使用严格位置寻路，不再让双方胶囊重叠提前结束移动。
 - [x] DemoEditor 完整构建成功；`Demo.Combat.PursuerAttack.PredictionAndBallistics` 1/1 Success。
 - [ ] 用户在原折返楼梯验收持续爬楼与追近后挥斧手感。
+
+<!-- written by shiqiqiwang at 2026-08-14 15:34 UTC -->
+
+- [x] PCG 发射器收敛为一格占用，增加转角/远距组合软奖励并将正式权重调为 3/4/6；周期机关确定性错相已完成构建、Population 15/15、运行门禁和同 Seed L_Game 重放，待用户手感验收。

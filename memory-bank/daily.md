@@ -100,3 +100,15 @@
 - 在首次真实 Chaos 接触后，只削减沿来源方向新增的全身共同平移速度，保留局部相对运动与角速度；随后立即结束 Mesh 对 PhysicsBody 的后续阻挡，防止同一运动学锤头持续顶推。
 - 官方回读冲锤参数为 `0.60`，原盒体/行程/时序未改；相关三个 Blueprint warning-as-error 编译通过；DemoEditor 最终增量构建成功；Heavy 5 + CharacterImpact 2 自动化 `7/7 Success`。
 - 遗留：用户在冲锤侧撞和墙边复现点验收位移、翻滚与单次顶推手感；摆锤效果需保持不变。
+
+<!-- written by shiqiqiwang at 2026-08-14 15:34 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-14 -->
+## 2026-08-14 夜间：PCG 投掷物远距组合与周期相位
+
+- 发射器从两格硬占用改为只占自身锚点；新增距离 2～3 格的组合软奖励，正式权重 3/4/6，未改投掷物行为或 WFC。
+- 摆锤、地刺、冲锤、刺轮在 BeginPlay 前接收公开 Seed 派生的确定性相位，同组错相仅做软择优，不增加任何失败路径。
+- Demo 模块构建成功；Population 15/15、Runtime Navigation 1/1；五个相关 Blueprint warning-as-error 编译通过。
+- L_Game Seed 12345 两次生成均为布局哈希 3542287860646786879、机关 45/45、发射器 17、资源 19/19，首摆锤相位均 0.592642；无 Population Failure/相位回退。
+- 遗留：用户验收投掷物密度、远距组合观感及周期错相节奏。

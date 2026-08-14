@@ -92,10 +92,10 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 		meta = (ClampMin = "0.0", ClampMax = "2.0"))
 	float ProgressLog2Strength = 0.25f;
 
-	/** 发射器位于转角并能提前被观察时的轻度位置奖励。 */
+	/** 发射器位于转角并能提前被观察时的位置奖励。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
 		meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float LauncherCornerLog2Bonus = 0.5f;
+	float LauncherCornerLog2Bonus = 1.5f;
 
 	/**
 	 * 候选远离最近已放机关时的最大 log2 位置奖励；只鼓励覆盖空白路线，
@@ -114,6 +114,14 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float WheelSpikeLog2Bonus = 2.25f;
+
+	/**
+	 * 发射器与另一类机关在组半径内形成远距配合时的最大 log2 奖励。
+	 * 实际奖励随图距离递增；没有搭档只是不加分，绝不拒绝候选。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	float LauncherCombinationLog2Bonus = 1.5f;
 
 	/** 刺轮没有冲锤或地刺搭档时的轻微贡献；保持有限且不归零。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
@@ -159,6 +167,11 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Pressure",
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float WheelSpikePressureBonus = 0.5f;
+
+	/** 发射器远距组合的最大额外压力；按同一距离信号缩放且至多计一个搭档。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Pressure",
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	float LauncherCombinationPressureBonus = 0.5f;
 };
 
 /** 一档难度中的机关密度、普通机关构成与变化压力目标。 */

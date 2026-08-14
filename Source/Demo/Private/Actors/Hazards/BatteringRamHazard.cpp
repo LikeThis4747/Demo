@@ -94,6 +94,22 @@ void ABatteringRamHazard::OnConstruction(const FTransform& Transform)
 	}
 }
 
+/** PCG 延迟生成只写第一轮相位；运行后不允许重排机械状态。 */
+bool ABatteringRamHazard::ConfigurePopulationPhase(
+	const float InNormalizedPhase01)
+{
+	if (HasActorBegunPlay()
+		|| !FMath::IsFinite(InNormalizedPhase01)
+		|| InNormalizedPhase01 < 0.0f
+		|| InNormalizedPhase01 >= 1.0f)
+	{
+		return false;
+	}
+	bHasPopulationPhase = true;
+	PopulationNormalizedPhase01 = InNormalizedPhase01;
+	return true;
+}
+
 /** 建立运行时碰撞和重叠候选，然后从完全缩回的安全期开始。 */
 void ABatteringRamHazard::BeginPlay()
 {
@@ -123,7 +139,13 @@ void ABatteringRamHazard::BeginPlay()
 	RamBody->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	PreparationVolume->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 
-	EnterWaiting();
+	const float CycleSeconds = TuningData->RetractedWaitSeconds
+		+ TuningData->WarningSeconds
+		+ TuningData->ExtensionSeconds
+		+ TuningData->RetractionSeconds;
+	EnterWaiting(bHasPopulationPhase
+		? PopulationNormalizedPhase01 * CycleSeconds
+		: -1.0f);
 }
 
 /** 只推进当前运动阶段；等待和预警由一次性 Timer 驱动。 */
@@ -186,7 +208,7 @@ void ABatteringRamHazard::ApplyGeometry(const UBatteringRamHazardTuningData& Tun
 }
 
 /** 关闭运动 Tick，回到原点并在安全期结束后进入预警。 */
-void ABatteringRamHazard::EnterWaiting()
+void ABatteringRamHazard::EnterWaiting(const float InitialDelayOverrideSeconds)
 {
 	Phase = EBatteringRamPhase::Waiting;
 	MotionElapsedSeconds = 0.0f;
@@ -200,7 +222,11 @@ void ABatteringRamHazard::EnterWaiting()
 		PhaseTimerHandle,
 		this,
 		&ABatteringRamHazard::EnterWarning,
-		TuningData->RetractedWaitSeconds,
+		FMath::Max(
+			InitialDelayOverrideSeconds >= 0.0f
+				? InitialDelayOverrideSeconds
+				: TuningData->RetractedWaitSeconds,
+			0.01f),
 		false);
 }
 

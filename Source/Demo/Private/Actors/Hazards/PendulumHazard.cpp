@@ -110,6 +110,22 @@ void APendulumHazard::OnConstruction(const FTransform& Transform)
 	}
 }
 
+/** PCG 延迟生成只写初始物理相位；运行后不允许瞬移摆锤。 */
+bool APendulumHazard::ConfigurePopulationPhase(
+	const float InNormalizedPhase01)
+{
+	if (HasActorBegunPlay()
+		|| !FMath::IsFinite(InNormalizedPhase01)
+		|| InNormalizedPhase01 < 0.0f
+		|| InNormalizedPhase01 >= 1.0f)
+	{
+		return false;
+	}
+	bHasPopulationPhase = true;
+	PopulationNormalizedPhase01 = InNormalizedPhase01;
+	return true;
+}
+
 /** 在最低点绑定世界约束，再设置一次释放姿态；之后不创建任何目标轨迹。 */
 void APendulumHazard::BeginPlay()
 {
@@ -297,7 +313,14 @@ void APendulumHazard::SetInitialReleasePose(const UPendulumHazardTuningData& Tun
 	const FVector PivotLocation = ConstraintTransform.GetLocation();
 	const FVector MainAxis = ConstraintTransform.GetUnitAxis(EAxis::X);
 	const FVector RestRadius = BobBody->GetComponentLocation() - PivotLocation;
-	const FQuat ReleaseRotation(MainAxis, FMath::DegreesToRadians(Tuning.TargetAmplitudeDegrees));
+	const float PhaseRadians = bHasPopulationPhase
+		? 2.0f * UE_PI * PopulationNormalizedPhase01
+		: 0.0f;
+	const float TargetAmplitudeRadians =
+		FMath::DegreesToRadians(Tuning.TargetAmplitudeDegrees);
+	const float ReleaseAngleRadians =
+		TargetAmplitudeRadians * FMath::Cos(PhaseRadians);
+	const FQuat ReleaseRotation(MainAxis, ReleaseAngleRadians);
 
 	const FVector ReleasedLocation = PivotLocation + ReleaseRotation.RotateVector(RestRadius);
 	const FQuat ReleasedBodyRotation = ReleaseRotation * BobBody->GetComponentQuat();
@@ -308,8 +331,21 @@ void APendulumHazard::SetInitialReleasePose(const UPendulumHazardTuningData& Tun
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
-	BobBody->SetPhysicsLinearVelocity(FVector::ZeroVector, false);
-	BobBody->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector, false);
+	// 简谐摆只用于给 Chaos 一个连续初态；离开这一帧后仍由真实重力、约束和碰撞演化。
+	const UWorld* World = GetWorld();
+	const float NaturalAngularFrequency = bHasPopulationPhase && IsValid(World)
+		? FMath::Sqrt(FMath::Abs(World->GetGravityZ()) / Tuning.PendulumLength)
+		: 0.0f;
+	const float InitialAngularSpeed = -TargetAmplitudeRadians
+		* NaturalAngularFrequency
+		* FMath::Sin(PhaseRadians);
+	const FVector InitialAngularVelocity = MainAxis * InitialAngularSpeed;
+	BobBody->SetPhysicsLinearVelocity(
+		FVector::CrossProduct(
+			InitialAngularVelocity,
+			ReleasedLocation - PivotLocation),
+		false);
+	BobBody->SetPhysicsAngularVelocityInRadians(InitialAngularVelocity, false);
 	BobBody->WakeAllRigidBodies();
 }
 

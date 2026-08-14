@@ -463,6 +463,69 @@ namespace ZeroEscape::LevelGeneration
 			return StablePhase01(Hash) * 2.0f - 1.0f;
 		}
 
+		/** 环形相位距离落在 [0, 0.5]；用于择优错开，不形成最低间隔约束。 */
+		float CircularPhaseDistance(const float First, const float Second)
+		{
+			const float Direct = FMath::Abs(First - Second);
+			return FMath::Min(Direct, 1.0f - Direct);
+		}
+
+		/**
+		 * 每个周期机关从四个确定性相位里选择与同组既有相位最分散者。
+		 * 候选永远有结果，因此相位质量不会拒绝摆位或触发重新生成。
+		 */
+		void AssignPeriodicPhasesForGroup(
+			const int32 PublicSeed,
+			const TConstArrayView<int32> PlacementIndices,
+			TArray<FPopulationPlannedPlacement>& Placements)
+		{
+			constexpr int32 PhaseCandidateCount = 4;
+			constexpr uint32 PhaseSalt = 0x72F4A9C3u;
+			TArray<float> AssignedPhases;
+			for (const int32 PlacementIndex : PlacementIndices)
+			{
+				if (!Placements.IsValidIndex(PlacementIndex)
+					|| !IsPeriodicHazardKind(Placements[PlacementIndex].Kind))
+				{
+					continue;
+				}
+
+				FPopulationPlannedPlacement& Placement = Placements[PlacementIndex];
+				const float BasePhase = StablePhase01(MakeStablePlacementHash(
+					PublicSeed,
+					Placement.AnchorAddress,
+					static_cast<int32>(Placement.Kind),
+					PhaseSalt));
+				float BestPhase = BasePhase;
+				float BestMinimumDistance = -1.0f;
+				for (int32 CandidateIndex = 0;
+					CandidateIndex < PhaseCandidateCount;
+					++CandidateIndex)
+				{
+					const float CandidatePhase = FMath::Fmod(
+						BasePhase + static_cast<float>(CandidateIndex)
+							/ PhaseCandidateCount,
+						1.0f);
+					float MinimumDistance = 0.5f;
+					for (const float AssignedPhase : AssignedPhases)
+					{
+						MinimumDistance = FMath::Min(
+							MinimumDistance,
+							CircularPhaseDistance(CandidatePhase, AssignedPhase));
+					}
+					if (MinimumDistance > BestMinimumDistance + KINDA_SMALL_NUMBER)
+					{
+						BestMinimumDistance = MinimumDistance;
+						BestPhase = CandidatePhase;
+					}
+				}
+
+				Placement.PeriodicPhase.bIsConfigured = true;
+				Placement.PeriodicPhase.NormalizedPhase01 = BestPhase;
+				AssignedPhases.Add(BestPhase);
+			}
+		}
+
 		bool BuildOperationNodeIndices(
 			const FTraversalGraph& Graph,
 			const FPlacementVariant& Variant,
@@ -614,6 +677,35 @@ namespace ZeroEscape::LevelGeneration
 					&& Second == EPopulationPlacementKind::SpikeWheel);
 		}
 
+		/** 发射器只与另一类机关形成组合；发射器成排不获得组合奖励。 */
+		bool IsLauncherCombinationPair(
+			const EPopulationPlacementKind First,
+			const EPopulationPlacementKind Second)
+		{
+			return (First == EPopulationPlacementKind::GuidedLauncher
+					&& Second != EPopulationPlacementKind::GuidedLauncher
+					&& Second != EPopulationPlacementKind::MagneticResource)
+				|| (Second == EPopulationPlacementKind::GuidedLauncher
+					&& First != EPopulationPlacementKind::GuidedLauncher
+					&& First != EPopulationPlacementKind::MagneticResource);
+		}
+
+		/** 紧邻不加分，随后随图距离线性增至现有机关组半径处的满额奖励。 */
+		float LauncherCombinationDistanceSignal(
+			const int32 Distance,
+			const int32 GroupRadiusTiles)
+		{
+			if (Distance <= 1 || GroupRadiusTiles <= 1)
+			{
+				return 0.0f;
+			}
+			return FMath::Clamp(
+				static_cast<float>(Distance - 1)
+					/ static_cast<float>(GroupRadiusTiles - 1),
+				0.0f,
+				1.0f);
+		}
+
 		float CalculateGroupTargetPressure(
 			const FZeroEscapeHazardPopulationTuning& HazardTuning,
 			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
@@ -711,6 +803,8 @@ namespace ZeroEscape::LevelGeneration
 				&& Scoring.WheelRamLog2Bonus >= 0.0f
 				&& FMath::IsFinite(Scoring.WheelSpikeLog2Bonus)
 				&& Scoring.WheelSpikeLog2Bonus >= 0.0f
+				&& FMath::IsFinite(Scoring.LauncherCombinationLog2Bonus)
+				&& Scoring.LauncherCombinationLog2Bonus >= 0.0f
 				&& FMath::IsFinite(Scoring.SoloWheelLog2Contribution)
 				&& Scoring.SoloWheelLog2Contribution <= 0.0f
 				&& Scoring.RecentKindWindow >= 1
@@ -725,7 +819,9 @@ namespace ZeroEscape::LevelGeneration
 				&& FMath::IsFinite(Scoring.WheelRamPressureBonus)
 				&& Scoring.WheelRamPressureBonus >= 0.0f
 				&& FMath::IsFinite(Scoring.WheelSpikePressureBonus)
-				&& Scoring.WheelSpikePressureBonus >= 0.0f;
+				&& Scoring.WheelSpikePressureBonus >= 0.0f
+				&& FMath::IsFinite(Scoring.LauncherCombinationPressureBonus)
+				&& Scoring.LauncherCombinationPressureBonus >= 0.0f;
 		}
 
 		const FZeroEscapePopulationDifficultySettings* ValidateAndFindDifficulty(
@@ -1029,12 +1125,6 @@ namespace ZeroEscape::LevelGeneration
 								Cell.Coordinate,
 								Direction,
 								0x1B56C4E9u));
-						WheelVariant.SpikeWheel.NormalizedPhase01 = StablePhase01(
-							MakeStablePlacementHash(
-								Plan.Signature.Seed,
-								Cell.Coordinate,
-								Direction,
-								0xC2B2AE35u));
 						Wheel.Variants.Add(MoveTemp(WheelVariant));
 					}
 					else
@@ -1064,8 +1154,7 @@ namespace ZeroEscape::LevelGeneration
 							Plan.LogicalTileSizeCm * 0.5,
 							Hazards.GuidedLauncherWallInsetCm,
 							Hazards.GuidedLauncherMountHeightCm);
-						LauncherVariant.ResourceBlockedAddresses = {
-							Cell.Coordinate, FrontAddress };
+						LauncherVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
 						bool bHasPerpendicularOpening = false;
 						for (uint8 OtherDirection = 0;
 							OtherDirection < Grid::DirectionCount;
@@ -1228,6 +1317,28 @@ namespace ZeroEscape::LevelGeneration
 						Scoring.WheelSpikePressureBonus;
 				}
 			}
+
+			float BestLauncherCombinationScale = 0.0f;
+			for (const FNearbyHazard& Nearby : NearbyHazards)
+			{
+				const EPopulationPlacementKind AcceptedKind =
+					State.AcceptedHazards[Nearby.PlacementIndex].Kind;
+				if (IsLauncherCombinationPair(Candidate.Kind, AcceptedKind))
+				{
+					BestLauncherCombinationScale = FMath::Max(
+						BestLauncherCombinationScale,
+						LauncherCombinationDistanceSignal(
+							Nearby.Distance,
+							Scoring.GroupRadiusTiles));
+				}
+			}
+			BestCombinationLog2 = FMath::Max(
+				BestCombinationLog2,
+				Scoring.LauncherCombinationLog2Bonus
+					* BestLauncherCombinationScale);
+			OutEvaluation.AddedCombinationPressure +=
+				Scoring.LauncherCombinationPressureBonus
+					* BestLauncherCombinationScale;
 
 			const float BasePressure = BasePressureForKind(
 				Candidate.Kind, Scoring, RepresentativeTraversalSeconds);
@@ -1595,6 +1706,10 @@ namespace ZeroEscape::LevelGeneration
 				Record.AnchorAddress = Group.AnchorAddress;
 				Record.PlacementIndices = Group.PlacementIndices;
 				Record.PlacementIndices.Sort();
+				AssignPeriodicPhasesForGroup(
+					Plan.Signature.Seed,
+					Record.PlacementIndices,
+					InOutPlan.HazardPlacements);
 				const float GroupProgress = Group.ProgressSum
 					/ Group.PlacementIndices.Num();
 				Record.TargetPressure = CalculateGroupTargetPressure(

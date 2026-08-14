@@ -3,7 +3,7 @@
 /**
  * @file BatteringRamHazard.h
  * 职责：拥有自动周期、局部 +X 直线运动、锤头碰撞和每次伸出的重冲击准备通知。
- * 边界：不识别玩家/AI 类型，不决定倒地，不施加补偿冲量，不接入 PCG。
+ * 边界：不识别玩家/AI 类型，不决定倒地，不施加补偿冲量；PCG 只可在 BeginPlay 前注入初始相位。
  * 状态 Owner：本 Actor 唯一写入阶段、阶段时间、当前 ImpactId 和本次已通知接收者。
  */
 
@@ -44,6 +44,9 @@ public:
 	/** 按 DataAsset 在编辑器中预览碰撞尺寸、预测范围和完全缩回姿态。 */
 	virtual void OnConstruction(const FTransform& Transform) override;
 
+	/** 延迟生成专用：在 BeginPlay 前注入 [0,1) 初始相位；失败时保持原同步启动行为。 */
+	bool ConfigurePopulationPhase(float InNormalizedPhase01);
+
 protected:
 	/** 校验配置、启用碰撞并从安全等待阶段启动。 */
 	virtual void BeginPlay() override;
@@ -58,8 +61,8 @@ private:
 	/** 应用锤头盒体和前置预测盒体几何；Actor 原点就是锤头完全缩回中心。 */
 	void ApplyGeometry(const UBatteringRamHazardTuningData& Tuning);
 
-	/** 进入完全缩回安全期，并安排下一次预警。 */
-	void EnterWaiting();
+	/** 进入完全缩回安全期；非负 Override 只用于 PCG 第一轮启动偏移。 */
+	void EnterWaiting(float InitialDelayOverrideSeconds = -1.0f);
 
 	/** 显示 WarningVisualRoot，并安排伸出。 */
 	void EnterWarning();
@@ -128,6 +131,12 @@ private:
 
 	/** 当前伸出或缩回阶段已经推进的秒数。 */
 	float MotionElapsedSeconds = 0.0f;
+
+	/** 仅由 ConfigurePopulationPhase 在 BeginPlay 前写入；手摆机关保持 false。 */
+	bool bHasPopulationPhase = false;
+
+	/** PCG 确定性归一化相位；只映射到第一轮安全启动延迟。 */
+	float PopulationNormalizedPhase01 = 0.0f;
 
 	/** 当前伸出的去重 ID；缩回开始时失效。 */
 	FGuid CurrentImpactId;

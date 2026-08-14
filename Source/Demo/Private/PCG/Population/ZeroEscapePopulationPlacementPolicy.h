@@ -39,8 +39,23 @@ namespace ZeroEscape::LevelGeneration
 	{
 		bool bIsConfigured = false;
 		int32 RouteVariantSeed = 0;
+	};
+
+	/** PCG 周期机关的确定性初始相位；只控制启动偏移，不参与摆位合法性。 */
+	struct FPopulationPeriodicPhaseConfig
+	{
+		bool bIsConfigured = false;
 		float NormalizedPhase01 = 0.0f;
 	};
+
+	/** 返回需要周期初始相位的机关类型；发射器由玩家触发，不属于周期机关。 */
+	constexpr bool IsPeriodicHazardKind(const EPopulationPlacementKind Kind)
+	{
+		return Kind == EPopulationPlacementKind::Pendulum
+			|| Kind == EPopulationPlacementKind::SpikeTrap
+			|| Kind == EPopulationPlacementKind::BatteringRam
+			|| Kind == EPopulationPlacementKind::SpikeWheel;
+	}
 
 	/** 被选中机关的六项 log2 评分拆解，供测试与调参定位。 */
 	struct FPopulationPlacementScoreBreakdown
@@ -73,6 +88,7 @@ namespace ZeroEscape::LevelGeneration
 		/** 机关实际占用/操作格；同时用于机关间互斥与后续资源避让。 */
 		TArray<FIntVector> ResourceBlockedAddresses;
 		FPopulationSpikeWheelSpawnConfig SpikeWheel;
+		FPopulationPeriodicPhaseConfig PeriodicPhase;
 		FPopulationPlacementScoreBreakdown Score;
 	};
 
