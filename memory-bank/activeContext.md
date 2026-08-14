@@ -23,3 +23,13 @@
 - HeavyImpact 任务处于 `awaiting_acceptance`；构建和自动化不能替代真实机关与起身画面验收。
 - 无支撑低能量出口属于共享 Heavy 状态机，不新增 AIController 特判。
 - 不恢复无证据的 Montage 暂停、双 Refresh 或全身常驻物理；若姿势闪感仍不可接受，下一步应比较动画首姿/姿势候选，而不是继续加时序补丁。
+
+<!-- written by shiqiqiwang at 2026-08-14 11:27 UTC -->
+
+
+## 2026-08-14 PCG 体验反馈增量
+
+- Population 已在原评分内加入路线覆盖软奖励：机关 0.5 log2、资源 1.0 log2；没有最大空白长度硬拒绝或额外重试。
+- 三档资源目标现为 12/100；正式高厅配方有两盏顶灯，PCG 生成灯组件为 Movable，共享 LampA 默认值未改。
+- 技术证据：Development Editor 构建成功；Population 14/14、Presentation 4/4、Navigation Gate 1/1；Seed 12345 Normal PIE 成功且日志无 Preview/静态灯告警。
+- 仍待用户多 Seed 验收空白段频率、资源体感和高厅照度。

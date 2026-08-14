@@ -67,3 +67,15 @@
 - `BP_SpikeWheelHazard` Warning-as-error 编译通过；CharacterImpact 配置与来源契约自动化 `2/2 Success`，资产保存后非 Dirty。
 - 运行时碰撞仍为 QueryOnly Pawn Overlap，且不影响导航；用户已在 Level0 现场确认刺轮受击动画正常播放。
 - 状态：本次来源动画增量完成；刺轮路线压力、火星最终观感与整体穿越手感仍按原任务继续验收。
+
+<!-- written by shiqiqiwang at 2026-08-14 11:27 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-14 -->
+
+## 2026-08-14 — PCG 空白段与高厅灯光增量
+
+- [x] 机关与资源路线覆盖改为现有评分中的非零软奖励；没有新增最大空白长度拒绝、重试或求解器。
+- [x] 三档资源目标由 10 调至 12/100；高厅正式配方增加两盏顶灯，PCG 运行时继续把灯组件设为 Movable。
+- [x] DemoEditor 构建成功；Population 14/14、Presentation 4/4、Navigation Gate 1/1 通过；Seed 12345 Normal PIE 一次成功且产出 45 机关、19 资源、3 摆锤。
+- [ ] 用户在多张实际地图验收空白段频率、资源体感与高厅照度。

@@ -66,3 +66,16 @@
 - 将并行门禁收窄为“同一时刻只有一个实现文件写入会话”；纯文档任务不占用写入权，可与 C++/资产实现并行。
 - Git 基线不再要求为无关纯文档改动清空整个工作区；已知 Owner 和路径的文档可保持未暂存，实现会话不得代为修改、暂存或提交。
 - 已同步 `AGENTS.md`、`AI_WORKFLOW.md`、`GIT_INTERNAL.md` 与任务卡模板，并通过规则关键词搜索和 `git diff --check`；未修改 C++、Blueprint、资产、配置或其他任务持有的文档。
+
+<!-- written by shiqiqiwang at 2026-08-14 11:27 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-14 -->
+
+## 2026-08-14 白天：PCG 空白段与高厅灯光
+
+- 在现有 Population 位置/资源权重中加入有界覆盖奖励，机关强度 0.5、资源强度 1.0；所有合法候选仍保留非零概率，不增加质量硬拒绝。
+- 三档资源密度由 10 提至 12/100；正式高厅增加两个 LampA 灯位，不修改共享第三方 Blueprint，PCG 继续局部设 Movable。
+- 512 Seed 累计机关空窗 6500→6146，完全空白 2463→2423/2431；原刺轮组合合同继续通过。
+- DemoEditor 构建、Population 14/14、Presentation 4/4、Navigation Gate 1/1 通过；Seed 12345 Normal PIE 一次成功，日志无 Preview/静态灯警告。
+- 遗留：用户多 Seed 现场验收空白段频率、资源数量与高厅照度。

@@ -302,6 +302,46 @@ namespace ZeroEscape::LevelGeneration::Tests
 			return true;
 		}
 
+		int32 LongestUnoccupiedCorridorRun(
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const TConstArrayView<FPopulationPlannedPlacement> Hazards,
+			const TConstArrayView<FPopulationPlannedPlacement> Resources)
+		{
+			TSet<FIntVector> Occupied;
+			for (const FPopulationPlannedPlacement& Hazard : Hazards)
+			{
+				for (const FIntVector Address : Hazard.ResourceBlockedAddresses)
+				{
+					Occupied.Add(Address);
+				}
+			}
+			for (const FPopulationPlannedPlacement& Resource : Resources)
+			{
+				Occupied.Add(Resource.AnchorAddress);
+			}
+
+			TSet<FIntVector> OrdinaryAddresses;
+			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+			{
+				OrdinaryAddresses.Add(Cell.Coordinate);
+			}
+			int32 Longest = 0;
+			int32 Current = 0;
+			for (int32 X = 0; X < Plan.GridSize.X; ++X)
+			{
+				const FIntVector Address(X, 0, 0);
+				if (OrdinaryAddresses.Contains(Address) && !Occupied.Contains(Address))
+				{
+					Longest = FMath::Max(Longest, ++Current);
+				}
+				else
+				{
+					Current = 0;
+				}
+			}
+			return Longest;
+		}
+
 		/** 比较资源层读取前后的完整机关组诊断。 */
 		bool HazardGroupsEqual(
 			const TArray<FPopulationHazardGroupRecord>& First,
@@ -733,6 +773,106 @@ namespace ZeroEscape::LevelGeneration::Tests
 			GroupsWithSupportCandidates > 0);
 		TestTrue(TEXT("资源支持奖励提高安全进入侧的实际命中次数"),
 			SupportedSafeApproachHits > BaselineSafeApproachHits);
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapePopulationRouteCoverageBiasTest,
+		"Demo.PCG.Population.RouteCoverageBias",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapePopulationRouteCoverageBiasTest::RunTest(
+		const FString& Parameters)
+	{
+		(void)Parameters;
+		FZeroEscapeGeneratedLevelPlan Plan = MakeCombinationCorridorPlan();
+		FZeroEscapeHazardPopulationAssembly BaselineHazards = MakeHazards();
+		BaselineHazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
+		FZeroEscapeHazardPopulationAssembly CoveredHazards = BaselineHazards;
+		CoveredHazards.PlacementScoring.RouteCoverageLog2Bonus = 0.5f;
+		FZeroEscapeResourcePopulationAssembly BaselineResources = MakeResources();
+		BaselineResources.RouteCoverageLog2Bonus = 0.0f;
+		FZeroEscapeResourcePopulationAssembly CoveredResources = BaselineResources;
+		CoveredResources.RouteCoverageLog2Bonus = 1.0f;
+		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
+			MakeDifficulties(20.0f, 20.0f);
+		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
+		{
+			Difficulty.Hazards.SpikeTrapWeight = 3;
+			Difficulty.Hazards.BatteringRamWeight = 3;
+			Difficulty.Hazards.GuidedLauncherWeight = 3;
+			Difficulty.Hazards.SpikeWheelWeight = 2;
+			Difficulty.Resources.MinimumRouteSpacingTiles = 3;
+		}
+
+		constexpr int32 SeedCount = 512;
+		int64 BaselineHazardGapSum = 0;
+		int64 CoveredHazardGapSum = 0;
+		int64 BaselineCombinedGapSum = 0;
+		int64 ResourceCoveredCombinedGapSum = 0;
+		int64 CoveredCombinedGapSum = 0;
+		const TArray<FPopulationPlannedPlacement> EmptyPlacements;
+		for (int32 SeedIndex = 0; SeedIndex < SeedCount; ++SeedIndex)
+		{
+			Plan.Signature.Seed = 833000 + SeedIndex;
+			FPopulationPlacementPlan Baseline;
+			FPopulationPlacementPlan HazardCovered;
+			FPopulationPlacementPlan ResourceCovered;
+			FPopulationPlacementPlan FullyCovered;
+			FString Error;
+			const auto Build = [&](const FZeroEscapeHazardPopulationAssembly& Hazards,
+				const FZeroEscapeResourcePopulationAssembly& Resources,
+				FPopulationPlacementPlan& OutPlan)
+			{
+				return FPopulationPlacementPolicy::BuildPlan(
+					Plan,
+					0.0,
+					TestPlayerMaxWalkSpeedCmPerSecond,
+					Hazards,
+					Resources,
+					Difficulties,
+					OutPlan,
+					Error) == EPopulationPlacementResult::Success;
+			};
+			if (!Build(BaselineHazards, BaselineResources, Baseline)
+				|| !Build(CoveredHazards, BaselineResources, HazardCovered)
+				|| !Build(BaselineHazards, CoveredResources, ResourceCovered)
+				|| !Build(CoveredHazards, CoveredResources, FullyCovered))
+			{
+				AddError(FString::Printf(
+					TEXT("路线覆盖夹具 Seed=%d 规划失败：%s"),
+					Plan.Signature.Seed,
+					*Error));
+				return false;
+			}
+
+			BaselineHazardGapSum += LongestUnoccupiedCorridorRun(
+				Plan, Baseline.HazardPlacements, EmptyPlacements);
+			CoveredHazardGapSum += LongestUnoccupiedCorridorRun(
+				Plan, HazardCovered.HazardPlacements, EmptyPlacements);
+			BaselineCombinedGapSum += LongestUnoccupiedCorridorRun(
+				Plan, Baseline.HazardPlacements, Baseline.ResourcePlacements);
+			ResourceCoveredCombinedGapSum += LongestUnoccupiedCorridorRun(
+				Plan,
+				ResourceCovered.HazardPlacements,
+				ResourceCovered.ResourcePlacements);
+			CoveredCombinedGapSum += LongestUnoccupiedCorridorRun(
+				Plan, FullyCovered.HazardPlacements, FullyCovered.ResourcePlacements);
+		}
+
+		AddInfo(FString::Printf(
+			TEXT("512 Seed 路线最大空窗累计：机关 %lld->%lld，完全空白 %lld->仅资源奖励 %lld->双奖励 %lld。"),
+			BaselineHazardGapSum,
+			CoveredHazardGapSum,
+			BaselineCombinedGapSum,
+			ResourceCoveredCombinedGapSum,
+			CoveredCombinedGapSum));
+		TestTrue(TEXT("机关覆盖软奖励降低固定 Seed 集的累计最大空窗"),
+			CoveredHazardGapSum < BaselineHazardGapSum);
+		TestTrue(TEXT("资源覆盖软奖励降低机关与资源都没有的空白段"),
+			ResourceCoveredCombinedGapSum < BaselineCombinedGapSum);
+		TestTrue(TEXT("机关与资源同时启用后降低完全空白段"),
+			CoveredCombinedGapSum < BaselineCombinedGapSum);
 		return true;
 	}
 

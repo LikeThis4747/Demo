@@ -104,6 +104,7 @@ namespace ZeroEscape::LevelGeneration
 			TArray<FAcceptedHazardState> AcceptedHazards;
 			TArray<FWorkingHazardGroup> Groups;
 			TArray<TArray<int32>> AcceptedPlacementIndicesByNode;
+			TArray<int32> NearestHazardDistances;
 			TArray<int32> DistanceFromPlayer;
 			TArray<int32> DistanceToExit;
 			TArray<EPopulationPlacementKind> RecentOrdinaryKinds;
@@ -378,7 +379,7 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
-		void UpdateNearestResourceDistances(
+		void UpdateNearestDistances(
 			const FTraversalGraph& Graph,
 			const TConstArrayView<int32> SourceNodes,
 			TArray<int32>& InOutNearestDistances)
@@ -703,6 +704,9 @@ namespace ZeroEscape::LevelGeneration
 				&& Scoring.ProgressLog2Strength >= 0.0f
 				&& FMath::IsFinite(Scoring.LauncherCornerLog2Bonus)
 				&& Scoring.LauncherCornerLog2Bonus >= 0.0f
+				&& FMath::IsFinite(Scoring.RouteCoverageLog2Bonus)
+				&& Scoring.RouteCoverageLog2Bonus >= 0.0f
+				&& Scoring.RouteCoverageLog2Bonus <= 4.0f
 				&& FMath::IsFinite(Scoring.WheelRamLog2Bonus)
 				&& Scoring.WheelRamLog2Bonus >= 0.0f
 				&& FMath::IsFinite(Scoring.WheelSpikeLog2Bonus)
@@ -827,7 +831,10 @@ namespace ZeroEscape::LevelGeneration
 				|| Resources.PlacementFootprintRadiusCm >= Plan.LogicalTileSizeCm * 0.5
 				|| !FMath::IsFinite(Resources.HighPressureSupportLog2Bonus)
 				|| Resources.HighPressureSupportLog2Bonus < 0.0f
-				|| Resources.HighPressureSupportLog2Bonus > 4.0f)
+				|| Resources.HighPressureSupportLog2Bonus > 4.0f
+				|| !FMath::IsFinite(Resources.RouteCoverageLog2Bonus)
+				|| Resources.RouteCoverageLog2Bonus < 0.0f
+				|| Resources.RouteCoverageLog2Bonus > 4.0f)
 			{
 				OutError = TEXT("Population 共享装配数值非法。");
 				return false;
@@ -1242,7 +1249,25 @@ namespace ZeroEscape::LevelGeneration
 					0.0f,
 					1.0f);
 
-			OutEvaluation.Score.Position = Variant.PositionLog2Contribution;
+			int32 NearestHazardDistance = UnreachableDistance;
+			for (const int32 Node : OperationNodeIndices)
+			{
+				if (!State.NearestHazardDistances.IsValidIndex(Node))
+				{
+					return false;
+				}
+				NearestHazardDistance = FMath::Min(
+					NearestHazardDistance, State.NearestHazardDistances[Node]);
+			}
+			const float RouteCoverageSignal = NearestHazardDistance == UnreachableDistance
+				? 1.0f
+				: FMath::Clamp(
+					static_cast<float>(NearestHazardDistance - Scoring.GroupRadiusTiles)
+						/ Scoring.GroupRadiusTiles,
+					0.0f,
+					1.0f);
+			OutEvaluation.Score.Position = Variant.PositionLog2Contribution
+				+ Scoring.RouteCoverageLog2Bonus * RouteCoverageSignal;
 			OutEvaluation.Score.Progress = Scoring.ProgressLog2Strength
 				* (2.0f * OutEvaluation.CandidateProgress01 - 1.0f);
 			OutEvaluation.Score.GroupPressure =
@@ -1529,6 +1554,8 @@ namespace ZeroEscape::LevelGeneration
 			{
 				State.AcceptedPlacementIndicesByNode[Node].Add(AcceptedIndex);
 			}
+			UpdateNearestDistances(
+				Graph, OperationNodeIndices, State.NearestHazardDistances);
 			if (Candidate.Kind != EPopulationPlacementKind::Pendulum)
 			{
 				State.RecentOrdinaryKinds.Add(Candidate.Kind);
@@ -1695,6 +1722,8 @@ namespace ZeroEscape::LevelGeneration
 		{
 			FHazardPlanningState State;
 			State.AcceptedPlacementIndicesByNode.SetNum(Graph.Addresses.Num());
+			State.NearestHazardDistances.Init(
+				UnreachableDistance, Graph.Addresses.Num());
 			if (!BuildGraphDistances(
 					Graph, Plan.PlayerSpawnCoordinate, State.DistanceFromPlayer)
 				|| !BuildGraphDistances(
@@ -1991,8 +2020,20 @@ namespace ZeroEscape::LevelGeneration
 			RemainingAnchors.Sort(CoordinateLess);
 			InOutPlan.ResourceStats.TargetCount = ResourceTarget;
 			InOutPlan.ResourceStats.CandidateAnchorCount = RemainingAnchors.Num();
-			TArray<int32> NearestDistances;
-			NearestDistances.Init(UnreachableDistance, Graph.Addresses.Num());
+			TArray<int32> NearestResourceDistances;
+			NearestResourceDistances.Init(UnreachableDistance, Graph.Addresses.Num());
+			TArray<int32> NearestContentDistances;
+			NearestContentDistances.Init(UnreachableDistance, Graph.Addresses.Num());
+			TArray<int32> HazardNodes;
+			for (const FIntVector Address : ResourceBlockedAddresses)
+			{
+				if (const int32* Node = Graph.NodeByAddress.Find(Address))
+				{
+					HazardNodes.Add(*Node);
+				}
+			}
+			HazardNodes.Sort();
+			UpdateNearestDistances(Graph, HazardNodes, NearestContentDistances);
 			TArray<FIntVector> SelectedAnchors;
 			while (SelectedAnchors.Num() < ResourceTarget && !RemainingAnchors.IsEmpty())
 			{
@@ -2002,7 +2043,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					const int32 Node = Graph.NodeByAddress.FindChecked(
 						RemainingAnchors[Index]);
-					if (NearestDistances[Node]
+					if (NearestResourceDistances[Node]
 						< Difficulty.Resources.MinimumRouteSpacingTiles)
 					{
 						RemainingAnchors.RemoveAt(Index, 1, EAllowShrinking::No);
@@ -2016,13 +2057,29 @@ namespace ZeroEscape::LevelGeneration
 
 				const int32 PickIndex = PickWeightedIndex(
 					RemainingAnchors,
-					[&SupportPriorityByAddress, &Resources](const FIntVector Address)
+					[&SupportPriorityByAddress,
+						&Resources,
+						&Difficulty,
+						&Graph,
+						&NearestContentDistances](const FIntVector Address)
 					{
 						const float* Priority = SupportPriorityByAddress.Find(Address);
 						const double SupportLog2 = static_cast<double>(
 							Priority == nullptr ? 0.0f : *Priority)
 							* Resources.HighPressureSupportLog2Bonus;
-						return FMath::Pow(2.0, SupportLog2);
+						const int32 Node = Graph.NodeByAddress.FindChecked(Address);
+						const int32 NearestDistance = NearestContentDistances[Node];
+						const float CoverageSignal = NearestDistance == UnreachableDistance
+							? 1.0f
+							: FMath::Clamp(
+								static_cast<float>(NearestDistance
+									- Difficulty.Resources.MinimumRouteSpacingTiles)
+									/ Difficulty.Resources.MinimumRouteSpacingTiles,
+								0.0f,
+								1.0f);
+						const double CoverageLog2 = static_cast<double>(CoverageSignal)
+							* Resources.RouteCoverageLog2Bonus;
+						return FMath::Pow(2.0, SupportLog2 + CoverageLog2);
 					},
 					Rng);
 				if (!RemainingAnchors.IsValidIndex(PickIndex))
@@ -2033,8 +2090,10 @@ namespace ZeroEscape::LevelGeneration
 				RemainingAnchors.RemoveAt(PickIndex, 1, EAllowShrinking::No);
 				const int32 Node = Graph.NodeByAddress.FindChecked(Address);
 				SelectedAnchors.Add(Address);
-				UpdateNearestResourceDistances(
-					Graph, TConstArrayView<int32>(&Node, 1), NearestDistances);
+				UpdateNearestDistances(
+					Graph, TConstArrayView<int32>(&Node, 1), NearestResourceDistances);
+				UpdateNearestDistances(
+					Graph, TConstArrayView<int32>(&Node, 1), NearestContentDistances);
 			}
 
 			const float SafeHalfRange = static_cast<float>(

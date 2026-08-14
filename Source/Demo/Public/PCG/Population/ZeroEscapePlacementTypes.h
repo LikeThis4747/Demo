@@ -97,6 +97,14 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 		meta = (ClampMin = "0.0", ClampMax = "2.0"))
 	float LauncherCornerLog2Bonus = 0.5f;
 
+	/**
+	 * 候选远离最近已放机关时的最大 log2 位置奖励；只鼓励覆盖空白路线，
+	 * 不设置最大空白长度，也不会令任何合法候选权重归零。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
+		meta = (ClampMin = "0.0", ClampMax = "4.0"))
+	float RouteCoverageLog2Bonus = 0.5f;
+
 	/** 刺轮与相邻冲锤的强组合奖励。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
@@ -308,4 +316,9 @@ struct DEMO_API FZeroEscapeResourcePopulationAssembly
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources|Support",
 		meta = (ClampMin = "0.0", ClampMax = "4.0"))
 	float HighPressureSupportLog2Bonus = 1.0f;
+
+	/** 距离已有资源与机关越远时的最大 log2 奖励；只改善覆盖，不形成硬间距。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources|Support",
+		meta = (ClampMin = "0.0", ClampMax = "4.0"))
+	float RouteCoverageLog2Bonus = 1.0f;
 };
