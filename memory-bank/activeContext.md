@@ -33,3 +33,12 @@
 - 三档资源目标现为 12/100；正式高厅配方有两盏顶灯，PCG 生成灯组件为 Movable，共享 LampA 默认值未改。
 - 技术证据：Development Editor 构建成功；Population 14/14、Presentation 4/4、Navigation Gate 1/1；Seed 12345 Normal PIE 成功且日志无 Preview/静态灯告警。
 - 仍待用户多 Seed 验收空白段频率、资源体感和高厅照度。
+
+<!-- written by shiqiqiwang at 2026-08-14 14:33 UTC -->
+
+
+## 2026-08-14 追猎者折返楼梯增量
+
+- 追猎者近战新增 70 cm 高度差上限：同一段楼梯高度接近时仍可挥斧，隔层时不发起近战。
+- 隔层追逐改用严格位置寻路，避免 `MoveToActor` 把双方胶囊重叠误判为已经到达；不新增 AI 状态或配置资产。
+- DemoEditor 构建成功，追猎者攻击自动化 1/1 Success；原折返楼梯行为待用户 PIE 验收。

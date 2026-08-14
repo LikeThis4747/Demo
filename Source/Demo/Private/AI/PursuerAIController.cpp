@@ -107,14 +107,19 @@ void APursuerAIController::Think()
 		return;
 	}
 
-	const float Distance = FVector::Dist(Pursuer->GetActorLocation(), PlayerPawn->GetActorLocation());
+	const FVector PursuerLocation = Pursuer->GetActorLocation();
+	const FVector PlayerLocation = PlayerPawn->GetActorLocation();
+	const float Distance = FVector::Dist(PursuerLocation, PlayerLocation);
+	const float VerticalDistance = FMath::Abs(PlayerLocation.Z - PursuerLocation.Z);
 	constexpr float FlatFloorNormalZ = 0.99f;
+	constexpr float CloseAttackMaxVerticalDifference = 70.0f;
 	const UCharacterMovementComponent* Movement = Pursuer->GetCharacterMovement();
 	const bool bOnInclinedFloor = IsValid(Movement)
 		&& Movement->CurrentFloor.IsWalkableFloor()
 		&& Movement->CurrentFloor.HitResult.ImpactNormal.Z < FlatFloorNormalZ;
 	const bool bNeedsVerticalTraversal = IsValid(Movement)
-		&& FMath::Abs(PlayerPawn->GetActorLocation().Z - Pursuer->GetActorLocation().Z) > Movement->MaxStepHeight;
+		&& VerticalDistance > Movement->MaxStepHeight;
+	const bool bCanStartCloseSwing = VerticalDistance <= CloseAttackMaxVerticalDifference;
 	const bool bCanStartJumpSmash = !bOnInclinedFloor && !bNeedsVerticalTraversal;
 
 	// 攻击组件忙碌时不重复 StopMovement，避免空中 Launch 的水平速度被路径系统反复清理。
@@ -126,6 +131,7 @@ void APursuerAIController::Think()
 
 	// 近距离优先斧击；只有组件真正启动成功才停在攻击态，资产缺失时仍继续追击。
 	if (!bAttackSuppressed
+		&& bCanStartCloseSwing
 		&& Distance <= Config->AttackRange
 		&& AttackComponent->TryStartCloseSwing(PlayerPawn))
 	{
@@ -146,5 +152,11 @@ void APursuerAIController::Think()
 
 	// 冷却中、资产暂缺或目标在攻击距离外都继续追击，不再站在旧 AttackRange 等待。
 	ClearFocus(EAIFocusPriority::Gameplay);
+	if (!bCanStartCloseSwing)
+	{
+		// 隔层时按位置严格追逐，避免双方胶囊重叠让 MoveToActor 提前判定到达。
+		MoveToLocation(PlayerLocation, 0.0f, /*bStopOnOverlap=*/false);
+		return;
+	}
 	MoveToActor(PlayerPawn, Config->AttackApproachRadius);
 }

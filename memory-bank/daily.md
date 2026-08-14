@@ -79,3 +79,15 @@
 - 512 Seed 累计机关空窗 6500→6146，完全空白 2463→2423/2431；原刺轮组合合同继续通过。
 - DemoEditor 构建、Population 14/14、Presentation 4/4、Navigation Gate 1/1 通过；Seed 12345 Normal PIE 一次成功，日志无 Preview/静态灯警告。
 - 遗留：用户多 Seed 现场验收空白段频率、资源数量与高厅照度。
+
+<!-- written by shiqiqiwang at 2026-08-14 14:33 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-14 -->
+
+## 2026-08-14 白天：追猎者折返楼梯隔层攻击
+
+- 根因收敛为上下层直线距离误触发近战并停止寻路，以及 `MoveToActor` 胶囊重叠到达判定进一步放大停顿；不是再次丢失玩家。
+- 按用户确认的最小方案，仅修改追猎者控制器：高度差不超过 70 cm 仍可挥斧，超过时禁用近战并采用严格位置寻路。
+- 验证：`git diff --check` 通过；DemoEditor Win64 Development 完整编译、链接成功；追猎者攻击自动化 1/1 Success。
+- 遗留：用户重启编辑器后在原折返楼梯验收隔层持续爬楼、追近后仍可挥斧。

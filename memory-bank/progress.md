@@ -79,3 +79,15 @@
 - [x] 三档资源目标由 10 调至 12/100；高厅正式配方增加两盏顶灯，PCG 运行时继续把灯组件设为 Movable。
 - [x] DemoEditor 构建成功；Population 14/14、Presentation 4/4、Navigation Gate 1/1 通过；Seed 12345 Normal PIE 一次成功且产出 45 机关、19 资源、3 摆锤。
 - [ ] 用户在多张实际地图验收空白段频率、资源体感与高厅照度。
+
+<!-- written by shiqiqiwang at 2026-08-14 14:33 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-14 -->
+
+## 2026-08-14 — 追猎者折返楼梯隔层攻击修正
+
+- [x] 近战起手增加 70 cm 高度差上限；高度接近时保留楼梯挥斧，隔层时继续追逐。
+- [x] 隔层时使用严格位置寻路，不再让双方胶囊重叠提前结束移动。
+- [x] DemoEditor 完整构建成功；`Demo.Combat.PursuerAttack.PredictionAndBallistics` 1/1 Success。
+- [ ] 用户在原折返楼梯验收持续爬楼与追近后挥斧手感。
