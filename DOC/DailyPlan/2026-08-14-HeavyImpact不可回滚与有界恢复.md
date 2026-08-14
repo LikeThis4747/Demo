@@ -42,3 +42,25 @@
 - PIE：摆锤/冲锤正撞与擦边、奔跑/跳跃玩家、长滚动、小幅抖动、墙角阻塞、面朝上/下面起身、Downed 二次命中，覆盖 30/60/120 FPS。
 - 任一 Accepted 后出现 `Prepared -> Inactive`、正撞漏触发、擦边误触发、2 秒后仍不起身、起身穿入静态几何或既有 Heavy 画面明显退化，均视为阻塞。
 - C++ 与四份 DataAsset 独立提交；失败时整体回退该提交，不保留兼容开关或旧路径。
+
+## 用户复测后的最小增量修复
+
+本节覆盖本文较早“相机/Light 不在范围”的旧边界，但不改变 Heavy 的唯一状态 Owner：
+
+1. 恢复重试 Timer 只记录待处理序号并启用 Heavy Tick；真正的起身位置放置在下一次 `TG_PostPhysics` 的 Heavy Tick 中完成，使既有 Heavy→CameraBoom prerequisite 在同帧生效。
+2. Actor/Capsule 跟随物理骨盆时使用站立外壳的 WorldStatic Sweep；碰壁只限制共享角色外壳与相机锚点，不传送或逐 Body 纠偏已脱离外壳的物理 Mesh。若真实 Mesh 仍穿墙，再以固定复现点单独判断 Physics Asset/CCD，不预先扩张。
+3. 让追猎者斧头、冲锤视觉件与磁力箱忽略 `ECC_Camera`；摆锤和制导投射物现状已经忽略。墙、顶、地继续阻挡相机。
+4. 将 FollowCamera 的 `(30,10,0)` 子组件偏移等价折入 CameraBoom 终点并把子偏移归零，使实际镜头位置参与 SpringArm Sweep；FOV、位置 Lag 与旋转控制暂时不变。
+5. 地刺玩家 Stop 时长从 `0.25s` 调为 `0.70s`，追猎者仍为 Slow。地刺三个碰撞组件均不影响导航生成；升降刺运行时 Ignore Pawn，伤害区只 Overlap Pawn，因此不取消或物理阻断追猎者 PathFollowing。
+
+增量修改文件：
+
+- `Source/Demo/Public/Components/Physics/HeavyImpactResponseComponent.h`
+- `Source/Demo/Private/Components/Physics/HeavyImpactResponseComponent.cpp`
+- `/Game/ZeroEscape/Characters/BP_ZeroEscapeCharacter`
+- `/Game/ZeroEscape/Enemies/BP_Pursuer`
+- `/Game/ZeroEscape/Hazards/Physics/BP_BatteringRamHazard`
+- `/Game/ZeroEscape/Interaction/Magnetism/BP_MagneticProp`
+- `/Game/ZeroEscape/Physics/Impact/DA_SpikeStandingImpact`
+
+增量验收先在 60 FPS 完成：开阔/贴墙 Heavy、冲锤起身一帧闪、玩家/追猎者墙体外壳、斧头/冲锤/箱子经过镜头、地刺玩家 0.70 秒 Stop 与追猎者持续寻路。通过后再做 30/120 FPS 冒烟验证；若只剩真实物理 Mesh 穿墙或墙角原生 SpringArm 伸展跳动，作为独立证据再决定是否进入下一阶段，不在本轮预埋新系统。

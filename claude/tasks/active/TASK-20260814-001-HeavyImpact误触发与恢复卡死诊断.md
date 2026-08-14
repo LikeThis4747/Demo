@@ -1,8 +1,10 @@
 # TASK-20260814-001 HeavyImpact 误触发与恢复卡死诊断
 
 - Owner：Codex `/root`
-- Status：awaiting_acceptance
-- Stage：用户 PIE 复测发现 AI 挂墙不起与起身交接抽动；共享 Heavy 挂墙根因修正、构建、数值回读和自动化已完成；起身交接确认是物理终姿到两种固定动画首姿的匹配限制，待用户复验后决定是否另做动画侧调整
+- 任务类型：实现
+- 实现文件写入权：Codex `/root` 独占（用户 2026-08-14 明确授权本轮 Heavy/相机与地刺时长修复）
+- Status：active
+- Stage：已授权实现；开始 Heavy 墙体/相机最小修复与地刺玩家 Stop 时长调整
 - Created：2026-08-14
 
 ## 用户反馈
@@ -47,12 +49,32 @@
 - 共享修正为：骨盆低线速+低角速连续 0.35 秒即视为物理运动结束；有支撑走正常落地，无支撑走墙边卡死收口。自由飞行顶点的低速窗口小于 0.35 秒，不会因此抢跑起身。
 - 起身交接的代码与 AnimGraph 顺序经复核成立：Snapshot 在同帧被求值，四条 GetUp Sequence 的前 0.75 动画秒也基本静止。当前闪感更符合“任意物理终姿只映射到正躺/趴躺两种固定首姿”的姿势差异；暂停 Montage 或继续延长 Blend 都不是有证据的修复，因此本轮不加入该补丁。
 
+## 2026-08-14 玩家墙体穿入与相机增量反馈
+
+- 用户复测发现玩家被冲锤击入走廊墙体；该问题与追猎者挂墙同属共享 Heavy 边界问题，不做玩家或 AI 特判。两者均使用 `UHeavyImpactResponseComponent`，差异只来自各自骨架、Physics Asset 与 Heavy 调参资产。
+- 当前 Heavy 会将 Mesh 脱离角色外壳并全身模拟，同时用无 Sweep 的 `TeleportPhysics` 让 Actor/Capsule 追随物理骨盆。由此需要分别确认两件事：模拟骨骼是否真的穿入墙体，以及 Capsule/相机锚点是否在骨骼贴墙时被无 Sweep 放进墙体；不能用相机修复掩盖真实骨骼穿模。
+- 墙体穿入列为本轮 P0 验收阻断：修复必须落在共享 Heavy 或真实碰撞配置，不得在玩家类、AIController 或具体冲锤里增加位置特判。
+- 最小处理顺序：先在固定复现点回读墙体碰撞与玩家/追猎者 Physics Asset 接触，确认 Mesh 与 Capsule 各自位置；再让 Heavy 的 Actor/Capsule 追随使用 WorldStatic Sweep 并保留命中结果；若 Mesh 仍真实穿墙，才针对 Heavy 模拟 Body 的 CCD/碰撞几何做最小修正，不预先引入逐 Body 纠偏、持续 Teleport 或新状态机。
+- 起身 2 秒兜底也纳入同一墙体验收：最终恢复位置必须经过当前站立 Capsule 的 Sweep/Overlap 验证；不得把历史上安全但当前已被墙体或机关占据的位置无 Sweep 强塞给角色。
+- 相机修复继续保持独立职责：动态玩法物忽略 Camera、起身位移改在 Heavy PostPhysics 执行、真实镜头终点参与 SpringArm Sweep；这些只能解决画面闪动和相机入墙，不能替代角色身体的墙体约束。
+
 ## 已授权最小实施范围
 
 - 收紧 `ABatteringRamHazard` 与 `APendulumHazard` 的预测：PreparationVolume 只收集候选，最终请求必须通过锤头真实盒体对接收 Mesh 的短时几何 Sweep。
 - `UHeavyImpactResponseComponent` 保持唯一 Heavy/Physics Control Owner，不新增组件、接口或状态；删除正常 Prepared 回滚、Settling 抢跑起身与 5/10 秒正常硬切。
 - 清理已失效的 `FalsePositive` 命名、旧调参字段与对应测试，不保留双路径或兼容开关。
 - 不修改 Light、追猎者攻击、Heavy PCA、AnimBP、起身动画、关卡或其他机关。
+
+## 2026-08-14 相机、墙体与地刺增量实施范围
+
+- Heavy 恢复 Timer 只排队，不再在 SpringArm 已完成 PostPhysics 后直接移动 Capsule；下一次 Heavy PostPhysics 消费请求，让 CameraBoom 在同帧随后重算。
+- Heavy 的 Actor/Capsule 骨盆跟随改为带 Sweep 的共享外壳移动，阻止玩家和追猎者的相机锚点/角色外壳无条件进入 WorldStatic；不添加角色分类分支。
+- 修正相机碰撞职责：`BP_Pursuer` 斧头、`BP_BatteringRamHazard` 视觉件、`BP_MagneticProp` 对 Camera Ignore；保留各自专用玩法碰撞体。
+- `BP_ZeroEscapeCharacter` 将 FollowCamera 的额外相对偏移折入 SpringArm 有效终点，确保真实镜头位置参与墙体 Sweep；不修改 FOV、控制旋转或建立新 CameraManager。
+- `/Game/ZeroEscape/Physics/Impact/DA_SpikeStandingImpact` 仅把玩家 Stop `DurationSeconds` 从 `0.25` 改为 `0.70`；追猎者仍为 `Slow 0.60 / 0.45`。
+- 地刺导航只读结论：GrateMesh、SpikeMesh、HurtZone 均 `bCanEverAffectNavigation=false`；运行时 SpikeMesh 对 Pawn Ignore，HurtZone 仅 Pawn Overlap，AI Slow 不取消 PathFollowing。格栅保留地板碰撞，但不导出 Recast 障碍。
+- 不新增碰撞通道、SpringArm 子类、PlayerCameraManager、逐 Body 纠偏、兼容开关或机关特判；不修改 Level0、AnimBP、Heavy PCA、追猎者攻击和地刺 C++。
+- 并行纯文档改动保持原 Owner，不由本实现提交；实现基线为远端 `b57618e6a486054aaa3fc0e2a4fda3702e17522f`，首次实现写入前另做文档检查点并复核远端。
 
 ## 实施检查点
 

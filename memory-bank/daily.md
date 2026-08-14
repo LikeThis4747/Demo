@@ -57,3 +57,12 @@
 - 起身闪感复核：同帧 Snapshot 求值正常，四条 GetUp 开头基本静止；撤销暂停 Montage 的无证据试探。剩余问题是任意物理终姿只选择正躺/趴躺固定首姿，后续是否调整动画首姿由用户复验决定。
 - 验证：DemoEditor 构建成功（11 actions）；官方 MCP 回读两份 Heavy DA 为 2.0/.20/.30 且非 dirty；Heavy 5 + CharacterImpact 2 自动化 7/7 Success；Level0 5 秒 SIE 无 LogHeavyImpact 告警。
 - 遗留：真实 AI 墙边收口、玩家/AI方向起身、2 秒阻塞兜底与起身交接仍需用户 PIE 画面验收。
+
+<!-- written by shiqiqiwang at 2026-08-14 07:07 UTC -->
+
+
+## 2026-08-14 — AI 并行任务规则调整
+
+- 将并行门禁收窄为“同一时刻只有一个实现文件写入会话”；纯文档任务不占用写入权，可与 C++/资产实现并行。
+- Git 基线不再要求为无关纯文档改动清空整个工作区；已知 Owner 和路径的文档可保持未暂存，实现会话不得代为修改、暂存或提交。
+- 已同步 `AGENTS.md`、`AI_WORKFLOW.md`、`GIT_INTERNAL.md` 与任务卡模板，并通过规则关键词搜索和 `git diff --check`；未修改 C++、Blueprint、资产、配置或其他任务持有的文档。

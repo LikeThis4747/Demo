@@ -10,14 +10,14 @@
 ## 每次开始
 
 1. 通过 Memory MCP 读取 `.ai-context/current-task.md`、`.ai-context/latest-error.md` 与 `memory-bank/activeContext.md`；若昨夜 Git 提交或推送失败，开始工作时先提醒用户。不要直接读写记忆文件。
-2. 查看 `claude/tasks/active/`；开始非简单任务前创建任务卡并声明 Owner、范围和可能修改的文件。
+2. 查看 `claude/tasks/active/`；开始非简单任务前创建任务卡并声明 Owner、任务类型（文档/实现）、范围和可能修改的文件。
 3. 阅读 `DOC/AI_WORK_GUIDELINES/PROJECT_ARCHITECTURE_RULES.md`；仅在任务需要时再读对应 Skill 或 MCP 手册。
 4. 被要求查看审计意见时，只读 `claude/reviews/` 根目录里未加 `Done-` 前缀的最近一份报告；自主判断哪些建议值得采纳，不必全部落实。处理完后由写代码的 AI 把该报告改名加 `Done-` 前缀、开头标注已完成，并移入 `claude/reviews/archive/`。不主动通读 `archive/` 里的历史审计。
 5. 涉及 UE 资产时，先用 UE Editor MCP 检查真实蓝图、引用和配置，禁止只凭 C++ 猜测。
 
 ## 工作与交接
 
-- 计划和检查点写入自己的任务卡；不要让多个 AI 同时修改重叠文件。
+- 计划和检查点写入自己的任务卡；同一时刻只允许一个会话修改会影响构建、运行或编辑器行为的实现文件。纯文档任务不占用实现文件写入权，可与实现任务并行；所有任务仍不得同时修改同一文件。
 - 交接时按 `claude/templates/HANDOFF_TEMPLATE.md` 写明已完成、未完成、验证、风险和下一步。
 - 完成功能后更新 `memory-bank/progress.md`；形成稳定决策/模式时更新对应长期记忆。
 - 每个有实质工作的日期，在 `memory-bank/daily.md` 对应日期下追加完成、验证和遗留事项。
@@ -26,7 +26,7 @@
 ## 硬规则
 
 - 功能实现遵循"讨论方案 → 确定方案 → 对话中展示拟实现代码 → 用户明确允许后落盘 → 联合验证与用户验收"；未经验收不得标记完成，细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md`。
-- **代码实现基线提交与推送门禁：用户授权实现后、首次修改 C++、Blueprint、材质、关卡、配置或其他功能文件前，必须把当前工作区全部已确认改动完整纳入一次 Git commit，记录提交哈希，确认 `git status --short` 为空，并将该提交成功 push 到内部工蜂。push 前必须核对 `origin` 精确为 `git@git.woa.com:shiqiqiwang/Demo.git`，push 后确认对应远端分支已包含该提交。不得只提交本任务文件后带着其余脏改动开始实现；若存在未确认、归属不明、审计中或其他任务暂不能提交的改动，或 commit/push/远端核验任一步失败，必须暂停实现并先与其 Owner/用户协调。细则见 `GIT_INTERNAL.md`。**
+- **单一实现会话与 Git 基线门禁：同一时刻只允许一个会话持有实现文件写入权。用户授权实现后、首次修改 C++、Blueprint、材质、关卡、配置、构建/测试代码或其他会影响行为的文件前，必须记录当前 HEAD 与完整 `git status --short`；确认不存在其他会话持有的实现改动，并把全部已确认的既有实现改动 commit、push 到内部工蜂且完成远端哈希核验。若实现范围干净且当前 HEAD 已在获准远端，可直接把该 HEAD 记为基线。已知 Owner、路径明确且不与实现范围重叠的纯文档改动可以保持未提交，不要求全局 `git status` 为空，也不得由实现会话修改、暂存或提交。来源不明的改动、其他会话的实现改动或 commit/push/远端核验失败仍会阻塞实现。上述“实现文件/纯文档任务”是项目内部并行分类，细则见 `AI_WORKFLOW.md` 与 `GIT_INTERNAL.md`。**
 - 对外交流和正式文档不得把 AI 临时创造的简称或项目内部命名当作 UE 官方概念、标准算法或行业通用术语。术语首次出现时必须说明其来源类别并用直白中文解释；无法确认来源时不用该术语，也不得默认用户已经理解。细则见 `DOC/AI_WORK_GUIDELINES/AI_WORKFLOW.md` 的“术语与表达规范”。
 - 优先采用满足目标的最直接、最小方案。若项目规则或当前授权与该方案冲突，必须先向用户说明冲突、直接方案（包括所需人工操作或许可）、影响与替代方案并询问选择；不得默认用户不愿操作，也不得自行增加非必要的代码、资产副本、映射、脚本或流程来规避。只有用户明确选择复杂替代方案后，才可实施该方案。
 - **Git 推送目标为内部工蜂 `git@git.woa.com:shiqiqiwang/Demo.git`。执行 push 前必须核查 remote，详见 `DOC/AI_WORK_GUIDELINES/GIT_INTERNAL.md`。**
