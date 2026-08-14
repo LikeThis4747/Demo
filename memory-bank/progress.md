@@ -56,3 +56,14 @@
 - 未保留暂停 Montage 的猜测性补丁；当前闪感记录为物理终姿到两种固定起身首姿的匹配限制，待用户现场判断。
 - DemoEditor 构建成功；官方 MCP 回读两份 DA 正确且非 dirty；受击自动化 7/7 Success；5 秒 SIE 无 Heavy 告警。
 - 状态：技术实现完成，待用户 PIE 验收后决定是否需要动画首姿侧调整。
+
+<!-- written by shiqiqiwang at 2026-08-14 07:18 UTC -->
+
+<!-- written by Codex /root at 2026-08-14 -->
+
+## 2026-08-14 — 刺轮 Light Stop 受击动画接通
+
+- 仅将 `DA_SpikeWheelStandingImpact.PlayerReaction.bPlayReactionAnimation` 从 `false` 改为 `true`；玩家仍为 `Stop / 0.7 s / SpeedMultiplier=0 / Physical=false`，追猎者仍为 `None`。
+- `BP_SpikeWheelHazard` Warning-as-error 编译通过；CharacterImpact 配置与来源契约自动化 `2/2 Success`，资产保存后非 Dirty。
+- 运行时碰撞仍为 QueryOnly Pawn Overlap，且不影响导航；用户已在 Level0 现场确认刺轮受击动画正常播放。
+- 状态：本次来源动画增量完成；刺轮路线压力、火星最终观感与整体穿越手感仍按原任务继续验收。
