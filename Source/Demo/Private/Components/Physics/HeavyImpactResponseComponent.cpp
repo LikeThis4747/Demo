@@ -817,6 +817,7 @@ bool UHeavyImpactResponseComponent::EnterPreparedPhysicalState(FString& OutReaso
 
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
+	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	PreparedEntryFrame = GFrameCounter;
 	TotalCommittedSeconds = 0.0f;
@@ -1043,6 +1044,7 @@ void UHeavyImpactResponseComponent::ResumeFromDowned(AActor* SourceActor)
 	bPhysicsBodyCollisionReleased = false;
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
+	bPreferPreImpactRecoveryLocation = false;
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	PendingRadialVelocityChange = FVector::ZeroVector;
 	PendingRadialSourceActor.Reset();
@@ -1273,9 +1275,10 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 	const FVector AngularVelocityDeg = Mesh->GetPhysicsAngularVelocityInDegrees(Tuning->PelvisBone);
 	const float LinearSpeed = LinearVelocity.Size();
 	const float AngularSpeed = AngularVelocityDeg.Size();
-	const bool bSlowEnough = LinearSpeed <= Tuning->StableLinearSpeedCmPerSecond
+	const bool bSupportedSlowEnough = LinearSpeed <= Tuning->StableLinearSpeedCmPerSecond
 		&& AngularSpeed <= Tuning->StableAngularSpeedDegPerSecond;
-	const bool bClearlyActive = LinearSpeed > Tuning->StableLinearSpeedCmPerSecond * 1.5f
+	const float ClearlyActiveLinearSpeed = Tuning->StableLinearSpeedCmPerSecond * 1.5f;
+	const bool bClearlyActive = LinearSpeed > ClearlyActiveLinearSpeed
 		|| AngularSpeed > Tuning->StableAngularSpeedDegPerSecond * 1.5f;
 
 	FHitResult GroundHit;
@@ -1287,7 +1290,43 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 		return;
 	}
 
-	if (bSlowEnough)
+	bool bUnsupportedShellOverlappingWorldStatic = false;
+	if (!bSupported)
+	{
+		if (const UWorld* World = GetWorld(); IsValid(World))
+		{
+			const float QueryRadius = FMath::Max(
+				1.0f,
+				Capsule->GetScaledCapsuleRadius() - 2.0f);
+			const float QueryHalfHeight = FMath::Max(
+				QueryRadius,
+				Capsule->GetScaledCapsuleHalfHeight() - 2.0f);
+			FCollisionObjectQueryParams Objects;
+			Objects.AddObjectTypesToQuery(ECC_WorldStatic);
+			const FCollisionQueryParams Params(
+				SCENE_QUERY_STAT(HeavyImpactUnsupportedShellOverlap),
+				false,
+				Character);
+			bUnsupportedShellOverlappingWorldStatic = World->OverlapAnyTestByObjectType(
+				Character->GetActorLocation(),
+				FQuat::Identity,
+				Objects,
+				FCollisionShape::MakeCapsule(QueryRadius, QueryHalfHeight),
+				Params);
+		}
+	}
+
+	// 贴墙身体可能在骨盆平移已经停止后，仍因接触求解保留持续速度抖动。
+	// 无支撑平移低于现有“明显运动”阈值，或 QueryOnly 外壳已经持续进入墙体时，
+	// 求解器速度不再阻断有界起身流程。
+	const bool bUnsupportedTranslationStalled = !bSupported
+		&& (LinearSpeed <= ClearlyActiveLinearSpeed
+			|| bUnsupportedShellOverlappingWorldStatic);
+	const bool bCanFinishPhysicalMotion = bSupported
+		? bSupportedSlowEnough
+		: bUnsupportedTranslationStalled;
+
+	if (bCanFinishPhysicalMotion)
 	{
 		StableElapsedSeconds += DeltaTime;
 		if (bSupported
@@ -1310,11 +1349,15 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 			EnterDowned(
 				bSupported
 					? TEXT("Supported low-energy motion remained stable long enough.")
-					: TEXT("Unsupported low-energy pose remained stalled long enough."));
+					: TEXT("Unsupported low-energy pose remained stalled long enough."),
+				!bSupported);
 			return;
 		}
 	}
-	else if (!bSupported || bClearlyActive)
+	else if ((!bSupported
+		&& LinearSpeed > ClearlyActiveLinearSpeed
+		&& !bUnsupportedShellOverlappingWorldStatic)
+		|| (bSupported && bClearlyActive))
 	{
 		StableElapsedSeconds = 0.0f;
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Settling)
@@ -1430,7 +1473,9 @@ void UHeavyImpactResponseComponent::EnterFreeFallback(const TCHAR* Reason)
 }
 
 /** 对齐真实地面落点，调用 FreeFallback，并等下一次 PrePhysics 后再睡眠。 */
-void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
+void UHeavyImpactResponseComponent::EnterDowned(
+	const TCHAR* Reason,
+	const bool bShouldPreferPreImpactRecoveryLocation)
 {
 	const bool bStartingNewDownedTransaction = State != EHeavyImpactState::Downed;
 	UpdatePhysicalFollow(0.0f, true, true);
@@ -1449,6 +1494,7 @@ void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 	if (bStartingNewDownedTransaction)
 	{
 		RecoveryBlockedStartTimeSeconds = -1.0;
+		bPreferPreImpactRecoveryLocation = bShouldPreferPreImpactRecoveryLocation;
 	}
 	bPendingDownedSleep = true;
 	SetState(EHeavyImpactState::Downed);
@@ -1541,6 +1587,32 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 		|| RecoveryTransactionSerial != ExpectedTransactionSerial)
 	{
 		return;
+	}
+
+	// 墙边无支撑卡滞已经证明当前身体位置不适合作为站立胶囊种子。
+	// 先复用原有的完整胶囊、可行走地面校验，避免明知会失败仍等待到截止时间。
+	if (bPreferPreImpactRecoveryLocation)
+	{
+		FHeavyImpactRecoveryPlan PreferredPlan;
+		FString PreferredReason;
+		if (BuildPreImpactFallbackRecoveryPlan(PreferredPlan, PreferredReason)
+			&& BeginPhysicalToAnimationHandoff(PreferredPlan, PreferredReason))
+		{
+			UE_LOG(
+				LogHeavyImpact,
+				Warning,
+				TEXT("HeavyImpact recovery on %s immediately used a validated pre-impact-seeded location after an unsupported wall stall."),
+				*GetNameSafe(GetOwner()));
+			return;
+		}
+
+		// Handoff 基础设施失败可能已经恢复了新的 Downed 事务；旧请求不得继续写状态。
+		if (State != EHeavyImpactState::Downed
+			|| RecoveryPhase != EHeavyImpactRecoveryPhase::WaitingForSpace
+			|| RecoveryTransactionSerial != ExpectedTransactionSerial)
+		{
+			return;
+		}
 	}
 
 	FHeavyImpactRecoveryPlan Plan;
@@ -2433,6 +2505,7 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
+	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	PhysicsControl->SetComponentTickEnabled(false);
 	SetComponentTickEnabled(false);
@@ -2597,6 +2670,7 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
 		bPhysicsBodyCollisionReleased = false;
+		bPreferPreImpactRecoveryLocation = false;
 		RecoveryBlockedStartTimeSeconds = -1.0;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
@@ -2631,6 +2705,7 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
+	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);

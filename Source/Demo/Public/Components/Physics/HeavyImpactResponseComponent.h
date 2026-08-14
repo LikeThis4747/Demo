@@ -283,8 +283,8 @@ private:
 	/** 在坏物理超时或 Profile 失败时关闭姿态控制，保持自由物理。 */
 	void EnterFreeFallback(const TCHAR* Reason);
 
-	/** 对齐真实落点并排队到下一帧完成无 Tick 的 Downed 睡眠。 */
-	void EnterDowned(const TCHAR* Reason);
+	/** 对齐真实落点并排队到下一帧完成无 Tick 的 Downed 睡眠；墙边卡滞可优先使用受击前安全位置。 */
+	void EnterDowned(const TCHAR* Reason, bool bPreferPreImpactRecoveryLocation = false);
 
 	/** 在 FreeFallback 已经过一次 PrePhysics 后睡眠，并关闭两个物理 Tick。 */
 	void FinishPendingDownedSleep();
@@ -437,6 +437,8 @@ private:
 	bool bInitialized = false;
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
+	/** 本次 Downed 是否由无支撑卡滞触发；为 true 时先尝试已有的受击前安全位置。 */
+	bool bPreferPreImpactRecoveryLocation = false;
 	/** 当前已提交事务是否已经放开 Mesh 对 PhysicsBody 的阻挡。 */
 	bool bPhysicsBodyCollisionReleased = false;
 	bool bPureRagdollComparisonActive = false;
