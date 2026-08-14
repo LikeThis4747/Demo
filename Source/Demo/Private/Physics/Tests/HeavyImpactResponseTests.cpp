@@ -16,6 +16,7 @@
 #include "Characters/ZeroEscapeCharacter.h"
 #include "Components/BoxComponent.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Data/Hazards/BatteringRamHazardTuningData.h"
 #include "Data/Hazards/PendulumHazardTuningData.h"
 #include "Data/Physics/HeavyImpactTuningData.h"
 #include "Engine/SkeletalMesh.h"
@@ -398,6 +399,14 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->PhysicsBodyReleaseDelaySeconds, 0.15f);
 		TestEqual(TEXT("Player-class default same-source protection must remain explicit"),
 			Fixture.Tuning->SameSourceProtectionSeconds, 0.75f);
+		TestEqual(TEXT("共享接收端准备上限必须保留现有追猎者攻击的 0.10s ETA"),
+			Fixture.Tuning->MaximumPreparationSeconds, 0.18f);
+		TestEqual(TEXT("起身空间重试间隔必须足够短"),
+			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
+		TestEqual(TEXT("安全站位阻塞必须有 3 秒截止"),
+			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 3.0f);
+		TestEqual(TEXT("Snapshot 到起身动画的默认淡入必须稳定"),
+			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.30f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error)))
 		{
@@ -438,25 +447,21 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[0],
 			Fixture.PhysicsControlAsset->CharacterSetupData.LimbSetupData[1]);
 
-		Fixture.Tuning->ForceDownedAfterSeconds = Fixture.Tuning->FreeFallbackAfterSeconds;
-		TestFalse(TEXT("ForceDowned 等于 FreeFallback 必须被拒绝"),
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds =
+			Fixture.Tuning->RecoveryRetrySeconds - 0.01f;
+		TestFalse(TEXT("起身阻塞截止不得短于一次重试间隔"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-
-		Fixture.Tuning->ForceDownedAfterSeconds = Fixture.Tuning->FreeFallbackAfterSeconds - 0.1f;
-		TestFalse(TEXT("ForceDowned 小于 FreeFallback 必须被拒绝"),
-			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-
-		Fixture.Tuning->ForceDownedAfterSeconds = 10.0f;
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 3.0f;
 		Fixture.Tuning->GroundProbeDistance = std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("任一调参阈值为 NaN 必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 
 		Fixture.Tuning->GroundProbeDistance = 120.0f;
-		Fixture.Tuning->FreeFallbackAfterSeconds = std::numeric_limits<float>::infinity();
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds = std::numeric_limits<float>::infinity();
 		TestFalse(TEXT("任一调参阈值为 Inf 必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 
-		Fixture.Tuning->FreeFallbackAfterSeconds = 5.0f;
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 3.0f;
 		Fixture.Tuning->FlightControl.MaxTorqueMultiplier =
 			std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("任一阶段控制倍率为 NaN 必须被拒绝"),
@@ -481,10 +486,12 @@ namespace ZeroEscape::Physics::Tests
 
 		FTuningFixture Fixture;
 		FText Error;
-		TestEqual(TEXT("Early recovery stable-window default must remain stable"),
-			Fixture.Tuning->RecoveryHandoffStableSeconds, 0.10f);
 		TestEqual(TEXT("Snapshot recovery blend default must remain stable"),
-			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.22f);
+			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.30f);
+		TestEqual(TEXT("Recovery retry default must remain bounded"),
+			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
+		TestEqual(TEXT("Recovery blocked deadline must remain bounded"),
+			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 3.0f);
 		TestTrue(TEXT("Recovery tuning fixture must begin valid"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 
@@ -492,13 +499,7 @@ namespace ZeroEscape::Physics::Tests
 			std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("Snapshot recovery blend must reject NaN"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->RecoverySnapshotBlendSeconds = 0.22f;
-
-		Fixture.Tuning->RecoveryHandoffStableSeconds =
-			Fixture.Tuning->RequiredStableSeconds + 0.01f;
-		TestFalse(TEXT("Early recovery window may not exceed the sleep threshold"),
-			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->RecoveryHandoffStableSeconds = 0.10f;
+		Fixture.Tuning->RecoverySnapshotBlendSeconds = 0.30f;
 
 		Fixture.Tuning->FaceUpAnimationStartTimeSeconds = 0.1f;
 		TestFalse(TEXT("FaceUp Montage start time may not exceed its sequence length"),
@@ -567,14 +568,20 @@ namespace ZeroEscape::Physics::Tests
 
 		UPendulumHazardTuningData* Tuning = NewObject<UPendulumHazardTuningData>();
 		FString Error;
-		if (!TestTrue(TEXT("摆锤默认预测参数必须覆盖移动接收者、0.5s 低帧率上限与 60Hz 采样余量"), Tuning->IsConfigured(Error)))
+		if (!TestTrue(TEXT("摆锤默认预测参数必须覆盖 0.08 秒锤头轨迹和 60Hz 采样余量"), Tuning->IsConfigured(Error)))
 		{
 			AddError(FString::Printf(TEXT("摆锤默认参数失败原因：%s"), *Error));
 			return false;
 		}
+		TestEqual(TEXT("摆锤只允许 0.08 秒短预测窗口"),
+			Tuning->MaximumPreparationLeadTime, 0.08f);
+		const UBatteringRamHazardTuningData* RamTuning =
+			NewObject<UBatteringRamHazardTuningData>();
+		TestEqual(TEXT("冲锤只允许 0.08 秒短预测窗口"),
+			RamTuning->MaximumPreparationLeadTime, 0.08f);
 
-		Tuning->PreparationLookAheadDistance = 300.0f;
-		TestFalse(TEXT("预测距离不足以覆盖移动接收者、0.5s 最大 ETA 和采样余量时必须拒绝"),
+		Tuning->PreparationLookAheadDistance = 10.0f;
+		TestFalse(TEXT("预测距离不足以覆盖锤头短窗口轨迹和采样余量时必须拒绝"),
 			Tuning->IsConfigured(Error));
 		return true;
 	}

@@ -8,6 +8,7 @@
 
 #include "Actors/Hazards/BatteringRamHazard.h"
 
+#include "CollisionShape.h"
 #include "Components/BoxComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -24,11 +25,6 @@ namespace BatteringRamHazard
 	/** 拒绝无法形成稳定相对接近速度的数值噪声。 */
 	constexpr float MinimumClosingSpeedCmPerSecond = 1.0f;
 
-	/** 严重掉帧时允许的最大准备帧数，与共享 HeavyImpact 接收端保持一致。 */
-	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
-
-	/** 帧感知准备窗口的绝对上限，避免一次卡顿造成长期提前接管。 */
-	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 }
 
 /** 装配固定外壳挂点、运动学锤头、预测体积和预警挂点。 */
@@ -315,7 +311,7 @@ void ABatteringRamHazard::EvaluatePreparationCandidates(
 	}
 }
 
-/** 以锤头前表面到接收者世界包围盒近端的轴向间隔估算接触时间。 */
+/** 用真实锤头盒体沿剩余伸出轨迹 Sweep 接收者 Mesh，只有几何命中才请求 Heavy。 */
 bool ABatteringRamHazard::BuildPreparationRequest(
 	const AActor& Receiver,
 	const FVector& PlannedWorldVelocity,
@@ -338,41 +334,42 @@ bool ABatteringRamHazard::BuildPreparationRequest(
 	}
 
 	const FVector Axis = GetActorForwardVector();
-	const float RamHalfLength = RamBody->GetScaledBoxExtent().X;
-	const FVector RamFrontCenter = RamBody->GetComponentLocation() + Axis * RamHalfLength;
-	const FBoxSphereBounds& ReceiverBounds = PredictionPrimitive->Bounds;
-
-	const float ReceiverCenterAlongAxis = FVector::DotProduct(
-		ReceiverBounds.Origin - RamFrontCenter,
-		Axis);
-	const float ReceiverExtentAlongAxis = FVector::DotProduct(
-		ReceiverBounds.BoxExtent,
-		Axis.GetAbs());
-	const float SurfaceGap = ReceiverCenterAlongAxis - ReceiverExtentAlongAxis;
-	if (!FMath::IsFinite(SurfaceGap) || SurfaceGap < 0.0f)
-	{
-		return false;
-	}
-
-	const FVector RelativeVelocity = PlannedWorldVelocity - Receiver.GetVelocity();
-	const float ClosingSpeed = FVector::DotProduct(RelativeVelocity, Axis);
+	const float ClosingSpeed = FVector::DotProduct(PlannedWorldVelocity, Axis);
 	if (!FMath::IsFinite(ClosingSpeed)
 		|| ClosingSpeed < BatteringRamHazard::MinimumClosingSpeedCmPerSecond)
 	{
 		return false;
 	}
 
-	const float EstimatedTimeToContact = SurfaceGap / ClosingSpeed;
-	const UWorld* World = GetWorld();
-	const float DeltaSeconds = IsValid(World) ? FMath::Max(0.0f, World->GetDeltaSeconds()) : 0.0f;
-	const float FrameAwareMaximumSeconds = FMath::Min(
-		BatteringRamHazard::AbsoluteMaximumPreparationSeconds,
-		DeltaSeconds * BatteringRamHazard::MaximumPreparationFrameMultiplier);
-	const float AllowedMaximumSeconds = FMath::Max(
+	const float RemainingExtensionSeconds = FMath::Max(
+		0.0f,
+		TuningData->ExtensionSeconds - MotionElapsedSeconds);
+	const float SweepSeconds = FMath::Min(
 		TuningData->MaximumPreparationLeadTime,
-		FrameAwareMaximumSeconds);
+		RemainingExtensionSeconds);
+	if (!FMath::IsFinite(SweepSeconds) || SweepSeconds <= 0.0f)
+	{
+		return false;
+	}
+
+	const FVector SweepStart = RamBody->GetComponentLocation();
+	const FVector SweepEnd = SweepStart + PlannedWorldVelocity * SweepSeconds;
+	FHitResult PredictedHit;
+	const bool bWillHitReceiver = PredictionPrimitive->SweepComponent(
+		PredictedHit,
+		SweepStart,
+		SweepEnd,
+		RamBody->GetComponentQuat(),
+		FCollisionShape::MakeBox(RamBody->GetScaledBoxExtent()),
+		false);
+	if (!bWillHitReceiver || PredictedHit.bStartPenetrating)
+	{
+		return false;
+	}
+
+	const float EstimatedTimeToContact = PredictedHit.Time * SweepSeconds;
 	if (!FMath::IsFinite(EstimatedTimeToContact)
-		|| EstimatedTimeToContact > AllowedMaximumSeconds)
+		|| EstimatedTimeToContact <= 0.0f)
 	{
 		return false;
 	}
@@ -381,8 +378,7 @@ bool ABatteringRamHazard::BuildPreparationRequest(
 	OutRequest.ImpactId = CurrentImpactId;
 	OutRequest.SourceActor = this;
 	OutRequest.SourceComponent = RamBody;
-	OutRequest.PredictedImpactPoint =
-		RamFrontCenter + PlannedWorldVelocity * EstimatedTimeToContact;
+	OutRequest.PredictedImpactPoint = PredictedHit.ImpactPoint;
 	OutRequest.SourceLinearVelocity = PlannedWorldVelocity;
 	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN();

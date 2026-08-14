@@ -16,8 +16,6 @@ namespace PendulumHazardTuning
 	/** UE 默认重力大小，单位 cm/s^2；仅用于估算目标幅度的最低点速度。 */
 	constexpr float StandardGravityCmPerSecondSquared = 980.0f;
 
-	/** 与发送端和接收端的严重低帧率自适应上限保持一致。 */
-	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 }
 
 /** 拒绝非有限数值、越界值以及会触地或让目标摆幅撞上硬限位的组合。 */
@@ -66,11 +64,6 @@ bool UPendulumHazardTuningData::IsConfigured(FString& OutError) const
 			1.0f,
 			5000.0f)
 		|| !ValidateFloat(
-			TEXT("MaximumExpectedReceiverSpeed"),
-			MaximumExpectedReceiverSpeed,
-			0.0f,
-			2000.0f)
-		|| !ValidateFloat(
 			TEXT("MaximumPreparationLeadTime"),
 			MaximumPreparationLeadTime,
 			0.08f,
@@ -111,9 +104,8 @@ bool UPendulumHazardTuningData::IsConfigured(FString& OutError) const
 	const float ExpectedBobSpeed = FMath::Max(
 		MinimumHeavyImpactClosingSpeed,
 		TargetCenterSpeed);
-	const float ExpectedPredictionSpeed = ExpectedBobSpeed + MaximumExpectedReceiverSpeed;
-	const float RequiredLookAheadDistance = ExpectedPredictionSpeed
-		* (FMath::Max(MaximumPreparationLeadTime, PendulumHazardTuning::AbsoluteMaximumPreparationSeconds)
+	const float RequiredLookAheadDistance = ExpectedBobSpeed
+		* (MaximumPreparationLeadTime
 			+ 2.0f * PendulumHazardTuning::PredictionSampleIntervalSeconds);
 	if (PreparationLookAheadDistance < RequiredLookAheadDistance)
 	{

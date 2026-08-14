@@ -36,3 +36,13 @@
 
 - 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
 - PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow；追猎者、磁力、生命链路和第三方资产筛选形成基础。
+
+<!-- written by shiqiqiwang at 2026-08-14 05:06 UTC -->
+
+## 2026-08-14 — HeavyImpact 误触发与恢复卡死
+
+- 以 `d819a1c2bc9540a9222585681cf3ee452484f083` 为功能基线完成 HeavyImpact 修复。
+- 收紧摆锤/冲锤预测；Accepted 后不再出现正常 Prepared 回正；真实接触事件与准备 timeout 分离。
+- 起身改为自然低能量后 Downed，立即尝试安全起身，0.20s 重试、3.0s 截止并有最终玩法恢复兜底；淡入 0.30s。
+- 验证：DemoEditor 完整构建成功；官方 MCP 回读四份资产；自动化 7/7 Success，无警告/错误。
+- 遗留：用户 PIE 验收正撞/擦边、奔跑/跳跃、长滚动、3 秒阻塞、方向起身、二次命中与 30/60/120 FPS。

@@ -85,15 +85,15 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Skeleton")
 	FName RightShoulderBone = TEXT("upperarm_r");
 
-	/** Delay after the physical body has become stably Downed before the first recovery attempt. */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
-		meta = (ClampMin = "0.0"))
-	float RecoveryDelaySeconds = 0.5f;
-
 	/** Retry interval while no safe standing capsule can be found. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
-		meta = (ClampMin = "0.1"))
-	float RecoveryRetrySeconds = 0.5f;
+		meta = (ClampMin = "0.1", ClampMax = "1.0", Units = "s"))
+	float RecoveryRetrySeconds = 0.20f;
+
+	/** 起身安全站位允许阻塞的最长时间；到期后以受击前 Capsule 位置为种子做一次有界安全搜索。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
+		meta = (ClampMin = "0.1", ClampMax = "10.0", Units = "s"))
+	float MaximumRecoveryBlockedSeconds = 3.0f;
 
 	/** Minimum Chaos contact impulse that may interrupt Downed recovery as a genuine second hit. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Interruption",
@@ -129,7 +129,7 @@ public:
 	/** Duration of the single explicit blend from the relocated physical Snapshot to the get-up Slot. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation",
 		meta = (ClampMin = "0.05", ClampMax = "0.50", UIMin = "0.10", UIMax = "0.35", Units = "s"))
-	float RecoverySnapshotBlendSeconds = 0.22f;
+	float RecoverySnapshotBlendSeconds = 0.30f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Animation",
 		meta = (ClampMin = "0.0", ClampMax = "1.0"))
@@ -183,14 +183,6 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.05"))
 	float RequiredStableSeconds = 0.35f;
 
-	/**
-	 * Slow, supported time required before an open-space recovery may begin while still Settling.
-	 * This must not exceed RequiredStableSeconds, which remains the sleep fallback threshold.
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability",
-		meta = (ClampMin = "0.03", ClampMax = "0.25", UIMin = "0.05", UIMax = "0.15", Units = "s"))
-	float RecoveryHandoffStableSeconds = 0.10f;
-
 	/** 从骨盆向下查询地面支撑的距离，单位为厘米。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "10.0"))
 	float GroundProbeDistance = 120.0f;
@@ -198,14 +190,6 @@ public:
 	/** Capsule 外壳跟随骨盆的插值速度。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Follow", meta = (ClampMin = "0.1"))
 	float CapsuleFollowInterpSpeed = 18.0f;
-
-	/** 超过该时长后关闭角向控制并保持自由物理，单位为秒。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Safety", meta = (ClampMin = "1.0"))
-	float FreeFallbackAfterSeconds = 5.0f;
-
-	/** 物理长期不稳定时的最终停止保险，必须大于自由物理阈值，单位为秒。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Safety", meta = (ClampMin = "2.0"))
-	float ForceDownedAfterSeconds = 10.0f;
 
 	/** 已接受 ImpactId 与拒绝日志缓存的固定上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Deduplication", meta = (ClampMin = "4", ClampMax = "64"))

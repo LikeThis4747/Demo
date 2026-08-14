@@ -80,10 +80,10 @@ public:
 	float PreparationLookAheadDistance = 350.0f;
 
 	/**
-	 * ABatteringRamHazard::BuildPreparationRequest 读取的正常帧率最大预计接触时间，单位 s；默认 0.16，范围 0.08~0.5。
-	 * 调高会更早切入接收端准备状态；严重掉帧时运行时会临时扩到最多 2.5 帧/0.5 秒。
+	 * ABatteringRamHazard::BuildPreparationRequest 读取的正常帧率最大预计接触时间，单位 s；默认 0.08，范围 0.08~0.5。
+	 * 调高会更早切入接收端准备状态；实际 Sweep 还会被本次伸出的剩余时间截断。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|冲锤|重冲击预测",
 		meta = (ClampMin = "0.08", ClampMax = "0.5", UIMin = "0.08", UIMax = "0.25", Units = "s"))
-	float MaximumPreparationLeadTime = 0.16f;
+	float MaximumPreparationLeadTime = 0.08f;
 };

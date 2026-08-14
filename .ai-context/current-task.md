@@ -1,9 +1,7 @@
 # 当前任务
 
-- 当前 PCG 权威任务：`claude/tasks/active/TASK-20260813-006-PCG种子稳定性与结构出现率诊断.md`，实现已提交推送，待用户验收。
-- PCG 产品合同：公开 Seed 不自动改变；质量规则从搜索开始提供偏好但不终局拒绝；WFC 最多三候选择优并有同层确定性硬合法兜底；每栋至少两个高厅且至少一个非顶层。
-- 刺轮初版与半埋/多轨迹修正已提交并推送：`19ed4b27b5a81484053e1b51d0497d3916f41893`。Level0 一格实例只露上半圆；一格现有 OffsetLoop、DiagonalM、CrossLoop 三种轨迹，基础 Seed 混入实例逻辑格坐标。
-- 2026-08-14 火星修正已完成技术复验：Blueprint 默认值与 Level0 房间实例的 `GroundSparks` 缩放均恢复为精确 `(1,1,1)`；原粒子的尺寸、数量、速度与拖尾形态不再改动，只保留红黄打铁火星材质。为清除旧实例的 `0.45` 覆盖，仅在原位置替换展示 Actor，并恢复同一配置。
-- 既有技术证据仍有效：Demo `-NoLink` 与 Demo-only 正式链接成功；本次 Blueprint Warning-as-error 编译通过，Simulation 运行时读回火星缩放 `(1,1,1)`、画面可见成片红黄火星且无 `LogSpikeWheel` 警告；用户最终视觉复验仍待确认。
-- PCG 下一步由用户验收困难档加载、地图密度/长直线/高厅观感、同 Seed 重进，并在正式一局验证动态 Recast 与追猎者跨层。
-- 并行 `TASK-20260814-001-HeavyImpact误触发与恢复卡死诊断.md` 属于其他任务，本刺轮修正不得纳入或修改。
+- HeavyImpact 误触发与恢复卡死修复已完成代码、资产、构建和自动化，任务卡：`claude/tasks/active/TASK-20260814-001-HeavyImpact误触发与恢复卡死诊断.md`。
+- 已实现：摆锤/冲锤真实盒体短时 Sweep；接收端 `Accepted` 后不可正常回滚；timeout 不伪造真实接触事件；迟到的 exact source Hit 只提交一次；自然飞行/滚动无总时长硬切；Downed 立即尝试、0.20s 重试、3.0s 截止；Snapshot 淡入 0.30s。
+- 技术验证：`DemoEditor Win64 Development` 构建成功；官方 UE5.8 MCP 回读四份 DataAsset 正确且非 dirty；Heavy 5 项 + CharacterImpact 2 项自动化 `7/7 Success`。
+- 当前唯一待办：用户在 PIE 验收摆锤/冲锤正撞与擦边、奔跑/跳跃、长滚动、3 秒阻塞兜底、面朝上/下、Downed 二次命中及 30/60/120 FPS。未经验收不得标记完成或归档。
+- 既有 PCG、刺轮等并行任务状态不由本 Heavy 任务改写。

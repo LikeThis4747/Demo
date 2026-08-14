@@ -114,20 +114,12 @@ public:
 	float MinimumHeavyImpactClosingSpeed = 120.0f;
 
 	/**
-	 * 预测体积尺寸要覆盖的接收者最大运动速度，单位 cm/s；初始 600。
-	 * 它不限制角色速度，只是为了让玩家/AI 迎面移动时仍能在低帧率准备窗口前被登记。
-	 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
-		meta = (ClampMin = "0.0", ClampMax = "2000.0", UIMin = "0.0", UIMax = "1000.0", Units = "cm/s"))
-	float MaximumExpectedReceiverSpeed = 600.0f;
-
-	/**
-	 * 正常帧率下机关允许发送的最大预计接触时间，单位 s；初始 0.16，编辑范围 0.08~0.5。
-	 * 严重低帧率时运行时会与接收端同步临时扩到最多 2.5 帧/0.5 秒；资产值仍应位于接收端正常窗口内。
+	 * 机关允许发送的最大预计接触时间，单位 s。
+	 * 本机关只按锤头的实际运动轨迹做短窗口预测，不外推接收者移动。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|重冲击预测",
 		meta = (ClampMin = "0.08", ClampMax = "0.5", UIMin = "0.08", UIMax = "0.25", Units = "s"))
-	float MaximumPreparationLeadTime = 0.16f;
+	float MaximumPreparationLeadTime = 0.08f;
 
 	/**
 	 * APendulumHazard::AssistAtCenterCrossing 读取的单次最大补速，单位 cm/s；初始 0，编辑范围 0~200。

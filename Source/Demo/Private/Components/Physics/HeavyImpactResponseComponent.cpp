@@ -40,7 +40,7 @@ namespace HeavyImpactRuntime
 	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 	constexpr float AbsoluteMaximumRecoveryAdjustmentCm = 60.0f;
-	constexpr float RecoveryBlockedWarningSeconds = 5.0f;
+	constexpr float AbsoluteMaximumFallbackAdjustmentCm = 200.0f;
 	constexpr float RecoveryWatchdogPaddingSeconds = 1.0f;
 	constexpr float RecoveryAsyncFrameDelaySeconds = 0.001f;
 	const FName RecoverySlotName(TEXT("DefaultSlot"));
@@ -156,10 +156,10 @@ void UHeavyImpactResponseComponent::EndPlay(const EEndPlayReason::Type EndPlayRe
 {
 	CancelRecoveryAsync(true);
 	if (State == EHeavyImpactState::Prepared
-		&& FalsePositiveRollback.bValid
+		&& PreparationRollback.bValid
 		&& RecoveryBaseline.bValid)
 	{
-		RestoreSnapshotAfterFalsePositive();
+		RestoreFailedPreparationTransition();
 	}
 
 	if (IsValid(Mesh))
@@ -454,7 +454,7 @@ bool UHeavyImpactResponseComponent::ValidatePreparationRequest(
 	return true;
 }
 
-/** 去重后建立一次可回滚 Prepared 事务；任何部分失败都恢复快照。 */
+/** 去重后原子进入 Prepared；只允许在返回 Accepted 前恢复失败的转换。 */
 EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 	const FHeavyImpactPreparationRequest& Request)
 {
@@ -501,10 +501,12 @@ EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 			TEXT("HeavyImpact prepare failed on %s: %s"),
 			*GetNameSafe(GetOwner()),
 			*FailureReason);
-		RestoreSnapshotAfterFalsePositive();
+		RestoreFailedPreparationTransition();
 		return EHeavyImpactPrepareResult::Invalid;
 	}
 
+	// Accepted 是游戏表现的不可回滚边界。之后即使预期 Hit 未到，也必须继续 Heavy。
+	PreparationRollback.Reset();
 	// 只有完整进入 Prepared 的请求进入去重缓存；预测或状态转换失败可用同一 ID 稍后重试。
 	RecordRecentImpactId(Request.ImpactId);
 	return EHeavyImpactPrepareResult::Accepted;
@@ -550,9 +552,10 @@ bool UHeavyImpactResponseComponent::ShouldLogRejectedImpact(const FGuid& Id)
 /** 保存角色外壳、动画、碰撞和每个 Physics Asset Body 的可恢复属性。 */
 bool UHeavyImpactResponseComponent::CapturePreContactState(FString& OutReason)
 {
-	FalsePositiveRollback.Reset();
+	PreparationRollback.Reset();
 	RecoveryBaseline.Reset();
-	FHeavyImpactFalsePositiveRollback NewRollback;
+	RecoveryBlockedStartTimeSeconds = -1.0;
+	FHeavyImpactPreparationRollback NewRollback;
 	FHeavyImpactRecoveryBaseline NewBaseline;
 
 	const UPhysicsAsset* PhysicsAsset = Mesh->GetPhysicsAsset();
@@ -566,10 +569,16 @@ bool UHeavyImpactResponseComponent::CapturePreContactState(FString& OutReason)
 		return false;
 	}
 
-	NewRollback.ActorTransform = Character->GetActorTransform();
 	NewRollback.CharacterVelocity = Movement->Velocity;
 	NewRollback.MovementMode = Movement->MovementMode;
 	NewRollback.CustomMovementMode = Movement->CustomMovementMode;
+	NewBaseline.PreImpactCharacterTransform = Character->GetActorTransform();
+	if (NewBaseline.PreImpactCharacterTransform.ContainsNaN()
+		|| !NewBaseline.PreImpactCharacterTransform.GetRotation().IsNormalized())
+	{
+		OutReason = TEXT("Character transform was invalid before HeavyImpact preparation.");
+		return false;
+	}
 	NewBaseline.MeshAttachParent = Mesh->GetAttachParent();
 	NewBaseline.MeshAttachSocket = Mesh->GetAttachSocketName();
 	NewBaseline.MeshRelativeTransform = Mesh->GetRelativeTransform();
@@ -618,7 +627,7 @@ bool UHeavyImpactResponseComponent::CapturePreContactState(FString& OutReason)
 
 	NewRollback.bValid = true;
 	NewBaseline.bValid = true;
-	FalsePositiveRollback = MoveTemp(NewRollback);
+	PreparationRollback = MoveTemp(NewRollback);
 	RecoveryBaseline = MoveTemp(NewBaseline);
 	return true;
 }
@@ -635,8 +644,21 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 		return false;
 	}
 
+	const UWorld* World = GetWorld();
+	const float DeltaSeconds = IsValid(World) ? FMath::Max(0.0f, World->GetDeltaSeconds()) : 0.0f;
+	const float DeadlineMarginSeconds = FMath::Max(
+		Tuning->MinimumPreparationLeadSeconds,
+		DeltaSeconds * 1.25f);
 	ActiveRequest = Request;
-	ActivePreparationTimeoutSeconds = AllowedMaximumSeconds;
+	ActivePreparationTimeoutSeconds = FMath::Min(
+		AllowedMaximumSeconds,
+		Request.EstimatedTimeToContactSeconds + DeadlineMarginSeconds);
+	if (!FMath::IsFinite(ActivePreparationTimeoutSeconds)
+		|| ActivePreparationTimeoutSeconds <= 0.0f)
+	{
+		OutReason = TEXT("Prepared transaction could not derive a valid ETA-based deadline.");
+		return false;
+	}
 	ExpectedSourceActor = Request.SourceActor;
 	ExpectedSourceComponent = Request.SourceComponent;
 	CommittedSourceActor.Reset();
@@ -686,9 +708,7 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
-	bHardTimeoutReported = false;
-	RecoveryBlockedElapsedSeconds = 0.0f;
-	bRecoveryBlockedWarningLogged = false;
+	RecoveryBlockedStartTimeSeconds = -1.0;
 	PreparedEntryFrame = GFrameCounter;
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
@@ -724,6 +744,16 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 		return;
 	}
 
+	if (ActiveRequest.ImpactId.IsValid()
+		&& (State == EHeavyImpactState::Simulating || State == EHeavyImpactState::Settling)
+		&& OtherActor == ExpectedSourceActor
+		&& OtherComponent == ExpectedSourceComponent
+		&& !NormalImpulse.IsNearlyZero(1.0f))
+	{
+		CommitLateAcceptedContact(Hit, NormalImpulse);
+		return;
+	}
+
 	if (State != EHeavyImpactState::Prepared)
 	{
 		return;
@@ -742,7 +772,7 @@ void UHeavyImpactResponseComponent::HandleMeshHit(
 	CommitRealImpact(Hit, NormalImpulse);
 }
 
-/** 接受 Chaos 已产生的速度，切到 Flight Profile 并广播一次提交事件。 */
+/** 恢复期 AnimInstance 被重建时安全结束当前事务。 */
 void UHeavyImpactResponseComponent::HandleAnimInitialized()
 {
 	if (State != EHeavyImpactState::Recovering)
@@ -762,8 +792,16 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
 {
-	// Once real Chaos contact commits, no later path may access the pre-impact Actor transform.
-	FalsePositiveRollback.Reset();
+	CommitAcceptedImpact(&Hit, NormalImpulse);
+}
+
+/** Accepted 是物理流程边界；只有真实 Hit 才保持既有 OnImpactCommitted 事件语义。 */
+void UHeavyImpactResponseComponent::CommitAcceptedImpact(
+	const FHitResult* Hit,
+	const FVector& NormalImpulse)
+{
+	check(State == EHeavyImpactState::Prepared);
+	const bool bHasRealContact = Hit != nullptr;
 	CommittedSourceActor = ExpectedSourceActor;
 	bPhysicsBodyCollisionReleased = false;
 	const bool bPreparedCrossedFrameBoundary = GFrameCounter > PreparedEntryFrame;
@@ -772,7 +810,7 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 		UE_LOG(
 			LogHeavyImpact,
 			Error,
-			TEXT("HeavyImpact real contact reached %s before Prepared crossed a full frame boundary; first contact may be uncontrolled."),
+			TEXT("HeavyImpact accepted response reached %s before Prepared crossed a full frame boundary; first physical step may be uncontrolled."),
 			*GetNameSafe(GetOwner()));
 	}
 
@@ -781,26 +819,72 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 	TotalCommittedSeconds = 0.0f;
 	if (!bPreparedCrossedFrameBoundary)
 	{
-		EnterFreeFallback(TEXT("Real contact arrived before Prepared crossed a full frame boundary."));
+		EnterFreeFallback(TEXT("Accepted response began before Prepared crossed a full frame boundary."));
 	}
 	else if (!ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
 	{
-		EnterFreeFallback(TEXT("Flight profile failed after real contact."));
+		EnterFreeFallback(TEXT("Flight profile failed after accepted preparation."));
+	}
+
+	if (bHasRealContact)
+	{
+		const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
+		ActiveRequest = FHeavyImpactPreparationRequest();
+		UE_LOG(
+			LogHeavyImpact,
+			Verbose,
+			TEXT("HeavyImpact committed: %s, bone=%s, contact=%s, solver impulse=%s"),
+			*GetNameSafe(GetOwner()),
+			*Hit->BoneName.ToString(),
+			*Hit->ImpactPoint.ToCompactString(),
+			*NormalImpulse.ToCompactString());
+		OnImpactCommitted.Broadcast(CommittedRequest);
+	}
+	else
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Warning,
+			TEXT("HeavyImpact accepted preparation timed out on %s; continuing the physical response without a fabricated impulse."),
+			*GetNameSafe(GetOwner()));
+	}
+
+	ActivePreparationTimeoutSeconds = 0.0f;
+	PreparedEntryFrame = 0;
+}
+
+void UHeavyImpactResponseComponent::CommitLateAcceptedContact(
+	const FHitResult& Hit,
+	const FVector& NormalImpulse)
+{
+	check(ActiveRequest.ImpactId.IsValid());
+	TotalCommittedSeconds = 0.0f;
+	StableElapsedSeconds = 0.0f;
+	bPhysicsBodyCollisionReleased = false;
+	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+	if (State == EHeavyImpactState::Settling)
+	{
+		if (ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
+		{
+			SetState(EHeavyImpactState::Simulating);
+		}
+		else
+		{
+			EnterFreeFallback(TEXT("Flight profile failed after late accepted contact."));
+		}
 	}
 
 	UE_LOG(
 		LogHeavyImpact,
 		Verbose,
-		TEXT("HeavyImpact committed: %s, bone=%s, contact=%s, solver impulse=%s"),
+		TEXT("HeavyImpact received its late accepted contact: %s, bone=%s, contact=%s, solver impulse=%s"),
 		*GetNameSafe(GetOwner()),
 		*Hit.BoneName.ToString(),
 		*Hit.ImpactPoint.ToCompactString(),
 		*NormalImpulse.ToCompactString());
-
-	OnImpactCommitted.Broadcast(ActiveRequest);
+	const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
 	ActiveRequest = FHeavyImpactPreparationRequest();
-	ActivePreparationTimeoutSeconds = 0.0f;
-	PreparedEntryFrame = 0;
+	OnImpactCommitted.Broadcast(CommittedRequest);
 }
 
 /** 重新开启 Flight 约束和 PostPhysics 判稳；接触冲量已由 Chaos 传递。 */
@@ -818,7 +902,8 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	bPhysicsBodyCollisionReleased = false;
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
-	bHardTimeoutReported = false;
+	ActiveRequest = FHeavyImpactPreparationRequest();
+	RecoveryBlockedStartTimeSeconds = -1.0;
 	PhysicsControl->SetComponentTickEnabled(true);
 	SetState(EHeavyImpactState::Simulating);
 	SetComponentTickEnabled(true);
@@ -865,7 +950,7 @@ void UHeavyImpactResponseComponent::TickComponent(
 		UpdatePhysicalFollow(DeltaTime);
 		if (StateElapsedSeconds >= ActivePreparationTimeoutSeconds)
 		{
-			CancelUncommittedPreparation(TEXT("Expected source did not make contact."));
+			CommitAcceptedImpact(nullptr, FVector::ZeroVector);
 		}
 		return;
 	}
@@ -997,20 +1082,28 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 		ETeleportType::TeleportPhysics);
 }
 
-/** 只在最短模拟时间后，用速度和可行走支撑累计稳定时间并尽早交接起身。 */
+/** 只在最短模拟时间后，用有支撑的低能量窗口判定自然滚动已经结束。 */
 void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 {
 	const FVector LinearVelocity = Mesh->GetPhysicsLinearVelocity(Tuning->PelvisBone);
 	const FVector AngularVelocityDeg = Mesh->GetPhysicsAngularVelocityInDegrees(Tuning->PelvisBone);
-	const bool bSlowEnough =
-		LinearVelocity.Size() <= Tuning->StableLinearSpeedCmPerSecond
-		&& AngularVelocityDeg.Size() <= Tuning->StableAngularSpeedDegPerSecond;
+	const float LinearSpeed = LinearVelocity.Size();
+	const float AngularSpeed = AngularVelocityDeg.Size();
+	const bool bSlowEnough = LinearSpeed <= Tuning->StableLinearSpeedCmPerSecond
+		&& AngularSpeed <= Tuning->StableAngularSpeedDegPerSecond;
+	const bool bClearlyActive = LinearSpeed > Tuning->StableLinearSpeedCmPerSecond * 1.5f
+		|| AngularSpeed > Tuning->StableAngularSpeedDegPerSecond * 1.5f;
 
 	FHitResult GroundHit;
 	const bool bSupported = TryGetGroundSupport(GroundHit);
 	const bool bMinimumTimeElapsed = TotalCommittedSeconds >= Tuning->MinimumSimulationSeconds;
 
-	if (bMinimumTimeElapsed && bSlowEnough && bSupported)
+	if (!bMinimumTimeElapsed)
+	{
+		return;
+	}
+
+	if (bSupported && bSlowEnough)
 	{
 		StableElapsedSeconds += DeltaTime;
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Simulating)
@@ -1026,20 +1119,13 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 			SetState(EHeavyImpactState::Settling);
 		}
 
-		if (State == EHeavyImpactState::Settling
-			&& StableElapsedSeconds >= Tuning->RecoveryHandoffStableSeconds
-			&& TryBeginRecoveryWhileSettling())
-		{
-			return;
-		}
-
 		if (StableElapsedSeconds >= Tuning->RequiredStableSeconds)
 		{
-			EnterDowned(TEXT("No safe recovery placement before the sleep threshold."));
+			EnterDowned(TEXT("Supported low-energy motion remained stable long enough."));
 			return;
 		}
 	}
-	else
+	else if (!bSupported || bClearlyActive)
 	{
 		StableElapsedSeconds = 0.0f;
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Settling)
@@ -1054,40 +1140,11 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 			}
 		}
 	}
-
-	if (!bFreeFallbackInvoked
-		&& TotalCommittedSeconds >= Tuning->FreeFallbackAfterSeconds)
+	else
 	{
-		EnterFreeFallback(TEXT("Physical response exceeded normal duration."));
+		// 接触求解的小幅噪声不应让已经积累的自然稳定进度瞬间归零。
+		StableElapsedSeconds = FMath::Max(0.0f, StableElapsedSeconds - DeltaTime);
 	}
-
-	if (TotalCommittedSeconds >= Tuning->ForceDownedAfterSeconds)
-	{
-		if (bSupported)
-		{
-			Mesh->SetAllPhysicsLinearVelocity(FVector::ZeroVector, false);
-			Mesh->SetAllPhysicsAngularVelocityInDegrees(FVector::ZeroVector, false);
-			EnterDowned(TEXT("Supported hard safety timeout."));
-		}
-		else if (!bHardTimeoutReported)
-		{
-			bHardTimeoutReported = true;
-			UE_LOG(
-				LogHeavyImpact,
-				Error,
-				TEXT("HeavyImpact hard timeout reached without ground support on %s; body remains free instead of sleeping in air."),
-				*GetNameSafe(GetOwner()));
-		}
-	}
-}
-
-/** 在进入无 Tick 睡眠前反复尝试开阔地恢复；失败只表示当前帧仍应保持物理。 */
-bool UHeavyImpactResponseComponent::TryBeginRecoveryWhileSettling()
-{
-	FHeavyImpactRecoveryPlan Plan;
-	FString FailureReason;
-	return BuildRecoveryPlan(Plan, FailureReason)
-		&& BeginPhysicalToAnimationHandoff(Plan, FailureReason);
 }
 
 /** 从骨盆向下查询世界几何，并复用 CharacterMovement 的可行走法线判断。 */
@@ -1186,6 +1243,7 @@ void UHeavyImpactResponseComponent::EnterFreeFallback(const TCHAR* Reason)
 /** 对齐真实地面落点，调用 FreeFallback，并等下一次 PrePhysics 后再睡眠。 */
 void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 {
+	const bool bStartingNewDownedTransaction = State != EHeavyImpactState::Downed;
 	UpdatePhysicalFollow(0.0f, true, true);
 	Mesh->bPauseAnims = true;
 	CancelRecoveryAsync(false);
@@ -1196,6 +1254,11 @@ void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
+	ActiveRequest = FHeavyImpactPreparationRequest();
+	if (bStartingNewDownedTransaction)
+	{
+		RecoveryBlockedStartTimeSeconds = -1.0;
+	}
 	bPendingDownedSleep = true;
 	SetState(EHeavyImpactState::Downed);
 	SetComponentTickEnabled(true);
@@ -1214,7 +1277,14 @@ void UHeavyImpactResponseComponent::FinishPendingDownedSleep()
 	bPendingDownedSleep = false;
 	Mesh->PutAllRigidBodiesToSleep();
 	PhysicsControl->SetComponentTickEnabled(false);
-	ScheduleRecoveryAttempt(Tuning->RecoveryDelaySeconds);
+	if (RecoveryBlockedStartTimeSeconds < 0.0)
+	{
+		if (const UWorld* World = GetWorld(); IsValid(World))
+		{
+			RecoveryBlockedStartTimeSeconds = World->GetTimeSeconds();
+		}
+	}
+	ScheduleRecoveryAttempt(0.0f);
 	SetComponentTickEnabled(false);
 
 	UE_LOG(
@@ -1275,23 +1345,160 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 		return;
 	}
 
-	RecoveryBlockedElapsedSeconds += Tuning->RecoveryRetrySeconds;
-	if (!bRecoveryBlockedWarningLogged
-		&& RecoveryBlockedElapsedSeconds >= HeavyImpactRuntime::RecoveryBlockedWarningSeconds)
+	const UWorld* World = GetWorld();
+	const double NowSeconds = IsValid(World) ? World->GetTimeSeconds() : 0.0;
+	if (RecoveryBlockedStartTimeSeconds < 0.0)
 	{
-		bRecoveryBlockedWarningLogged = true;
+		RecoveryBlockedStartTimeSeconds = NowSeconds;
+	}
+	const double BlockedSeconds = FMath::Max(0.0, NowSeconds - RecoveryBlockedStartTimeSeconds);
+	if (BlockedSeconds >= Tuning->MaximumRecoveryBlockedSeconds)
+	{
+		FHeavyImpactRecoveryPlan FallbackPlan;
+		FString FallbackReason;
+		const bool bFallbackPlanBuilt =
+			BuildPreImpactFallbackRecoveryPlan(FallbackPlan, FallbackReason);
+		if (bFallbackPlanBuilt
+			&& BeginPhysicalToAnimationHandoff(FallbackPlan, FallbackReason))
+		{
+			UE_LOG(
+				LogHeavyImpact,
+				Warning,
+				TEXT("HeavyImpact recovery on %s used a validated pre-impact-seeded location after %.2f blocked seconds."),
+				*GetNameSafe(GetOwner()),
+				BlockedSeconds);
+			return;
+		}
+
+		if (bFallbackPlanBuilt)
+		{
+			FHitResult EmergencyPlacementHit;
+			const bool bPlaced = Character->SetActorLocationAndRotation(
+				FallbackPlan.CapsuleLocation,
+				FallbackPlan.CapsuleRotation,
+				true,
+				&EmergencyPlacementHit,
+				ETeleportType::TeleportPhysics);
+			if (bPlaced
+				&& Character->GetActorLocation().Equals(FallbackPlan.CapsuleLocation, 1.0f))
+			{
+				UE_LOG(
+					LogHeavyImpact,
+					Error,
+					TEXT("HeavyImpact animation handoff failed on %s after the recovery deadline: %s. Restoring gameplay without the get-up animation."),
+					*GetNameSafe(GetOwner()),
+					*FallbackReason);
+				SetState(EHeavyImpactState::Recovering);
+				RecoveryPhase = EHeavyImpactRecoveryPhase::None;
+				CompleteRecovery(TEXT("Infrastructure fallback restored gameplay at a validated location."), true);
+				return;
+			}
+		}
+
+		const FTransform LastResortTransform = RecoveryBaseline.PreImpactCharacterTransform;
+		Character->SetActorTransform(
+			LastResortTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
 		UE_LOG(
 			LogHeavyImpact,
-			Warning,
-			TEXT("HeavyImpact recovery remains blocked on %s: %s"),
+			Error,
+			TEXT("HeavyImpact could not resolve a safe get-up capsule on %s after %.2f seconds: %s. Restoring the validated pre-impact character transform without a get-up animation."),
 			*GetNameSafe(GetOwner()),
-			*FailureReason);
+			BlockedSeconds,
+			*FallbackReason);
+		SetState(EHeavyImpactState::Recovering);
+		RecoveryPhase = EHeavyImpactRecoveryPhase::None;
+		CompleteRecovery(TEXT("Recovery deadline restored the pre-impact character transform."), true);
+		return;
 	}
 
 	ScheduleRecoveryAttempt(Tuning->RecoveryRetrySeconds);
 }
 
 bool UHeavyImpactResponseComponent::BuildRecoveryPlan(
+	FHeavyImpactRecoveryPlan& OutPlan,
+	FString& OutReason)
+{
+	OutPlan = FHeavyImpactRecoveryPlan();
+	if (!PopulateRecoveryAnimation(OutPlan, OutReason))
+	{
+		return false;
+	}
+	return TryFindRecoveryCapsuleLocation(
+		OutPlan.CapsuleRotation,
+		OutPlan.CapsuleLocation,
+		OutReason);
+}
+
+bool UHeavyImpactResponseComponent::BuildPreImpactFallbackRecoveryPlan(
+	FHeavyImpactRecoveryPlan& OutPlan,
+	FString& OutReason)
+{
+	OutPlan = FHeavyImpactRecoveryPlan();
+	if (!PopulateRecoveryAnimation(OutPlan, OutReason)
+		|| RecoveryBaseline.PreImpactCharacterTransform.ContainsNaN()
+		|| !RecoveryBaseline.PreImpactCharacterTransform.GetRotation().IsNormalized())
+	{
+		if (OutReason.IsEmpty())
+		{
+			OutReason = TEXT("Pre-impact Character transform is invalid.");
+		}
+		return false;
+	}
+
+	const FVector SeedAnchor = RecoveryBaseline.PreImpactCharacterTransform.GetLocation()
+		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
+	const FVector2D Directions[] = {
+		FVector2D(1.0f, 0.0f),
+		FVector2D(-1.0f, 0.0f),
+		FVector2D(0.0f, 1.0f),
+		FVector2D(0.0f, -1.0f),
+		FVector2D(1.0f, 1.0f).GetSafeNormal(),
+		FVector2D(1.0f, -1.0f).GetSafeNormal(),
+		FVector2D(-1.0f, 1.0f).GetSafeNormal(),
+		FVector2D(-1.0f, -1.0f).GetSafeNormal()
+	};
+	const float MaximumAdjustment = HeavyImpactRuntime::AbsoluteMaximumFallbackAdjustmentCm;
+	TArray<float, TInlineAllocator<16>> SearchRadii;
+	SearchRadii.Add(0.0f);
+	for (float Radius = Tuning->RecoverySearchStepCm;
+		Radius < MaximumAdjustment;
+		Radius += Tuning->RecoverySearchStepCm)
+	{
+		SearchRadii.Add(Radius);
+	}
+	SearchRadii.AddUnique(MaximumAdjustment);
+
+	for (const float Radius : SearchRadii)
+	{
+		const int32 DirectionCount = FMath::IsNearlyZero(Radius)
+			? 1
+			: UE_ARRAY_COUNT(Directions);
+		for (int32 DirectionIndex = 0; DirectionIndex < DirectionCount; ++DirectionIndex)
+		{
+			const FVector2D Offset = FMath::IsNearlyZero(Radius)
+				? FVector2D::ZeroVector
+				: Directions[DirectionIndex] * FMath::Min(Radius, MaximumAdjustment);
+			if (TryResolveRecoveryCandidate(
+					SeedAnchor,
+					Offset,
+					OutPlan.CapsuleRotation,
+					MaximumAdjustment,
+					OutPlan.CapsuleLocation))
+			{
+				OutReason.Reset();
+				return true;
+			}
+		}
+	}
+
+	OutReason = TEXT("Pre-impact safe-location seed no longer resolves to a walkable, non-overlapping standing capsule.");
+	return false;
+}
+
+bool UHeavyImpactResponseComponent::PopulateRecoveryAnimation(
 	FHeavyImpactRecoveryPlan& OutPlan,
 	FString& OutReason)
 {
@@ -1327,10 +1534,8 @@ bool UHeavyImpactResponseComponent::BuildRecoveryPlan(
 		return false;
 	}
 
-	return TryFindRecoveryCapsuleLocation(
-		OutPlan.CapsuleRotation,
-		OutPlan.CapsuleLocation,
-		OutReason);
+	OutReason.Reset();
+	return true;
 }
 
 bool UHeavyImpactResponseComponent::DetermineRecoveryOrientation(
@@ -1679,14 +1884,11 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 	const FHeavyImpactRecoveryPlan& Plan,
 	FString& OutReason)
 {
-	const bool bSettlingHandoff =
-		State == EHeavyImpactState::Settling
-		&& RecoveryPhase == EHeavyImpactRecoveryPhase::None;
 	const bool bDownedHandoff =
 		State == EHeavyImpactState::Downed
 		&& RecoveryPhase == EHeavyImpactRecoveryPhase::WaitingForSpace;
 	USceneComponent* RecoveryAttachParent = RecoveryBaseline.MeshAttachParent.Get();
-	if ((!bSettlingHandoff && !bDownedHandoff)
+	if (!bDownedHandoff
 		|| !RecoveryBaseline.bValid
 		|| !IsValid(RecoveryAttachParent)
 		|| !RecoveryAttachParent->CanAttachAsChild(Mesh, RecoveryBaseline.MeshAttachSocket)
@@ -2019,10 +2221,11 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
 	CommittedSourceActor.Reset();
-	FalsePositiveRollback.Reset();
+	PreparationRollback.Reset();
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
+	RecoveryBlockedStartTimeSeconds = -1.0;
 	PhysicsControl->SetComponentTickEnabled(false);
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
@@ -2092,18 +2295,6 @@ bool UHeavyImpactResponseComponent::IsCurrentRecoveryTransaction(
 		&& RecoveryTransactionSerial == ExpectedTransactionSerial;
 }
 
-void UHeavyImpactResponseComponent::CancelUncommittedPreparation(const TCHAR* Reason)
-{
-	check(State == EHeavyImpactState::Prepared);
-	RestoreSnapshotAfterFalsePositive();
-	UE_LOG(
-		LogHeavyImpact,
-		Verbose,
-		TEXT("HeavyImpact preparation cancelled on %s: %s"),
-		*GetNameSafe(GetOwner()),
-		Reason);
-}
-
 /** 恢复每个刚体的碰撞、CCD、Hit 通知、Blend 和模拟状态。 */
 void UHeavyImpactResponseComponent::RestoreBodyBaseline(
 	const FHeavyImpactRecoveryBaseline& Baseline)
@@ -2133,7 +2324,7 @@ void UHeavyImpactResponseComponent::RestoreBodyBaseline(
 	}
 }
 
-/** 完整撤销未提交的物理准备，并恢复受击前 Actor Transform。 */
+/** 恢复角色外壳；调用者决定是否需要恢复准备前 Transform。 */
 bool UHeavyImpactResponseComponent::RestoreCharacterShell(
 	const FHeavyImpactRecoveryBaseline& Baseline)
 {
@@ -2180,12 +2371,12 @@ bool UHeavyImpactResponseComponent::RestoreCharacterShell(
 	return bAttached;
 }
 
-void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
+void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 {
 	CancelRecoveryAsync(false);
-	if (!FalsePositiveRollback.bValid || !RecoveryBaseline.bValid)
+	if (!PreparationRollback.bValid || !RecoveryBaseline.bValid)
 	{
-		FalsePositiveRollback.Reset();
+		PreparationRollback.Reset();
 		RecoveryBaseline.Reset();
 		ActiveRequest = FHeavyImpactPreparationRequest();
 		ExpectedSourceActor = nullptr;
@@ -2195,6 +2386,7 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
 		bPhysicsBodyCollisionReleased = false;
+		RecoveryBlockedStartTimeSeconds = -1.0;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
 		return;
@@ -2206,14 +2398,14 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 	RestoreCharacterShell(RecoveryBaseline);
 
 	Character->SetActorTransform(
-		FalsePositiveRollback.ActorTransform,
+		RecoveryBaseline.PreImpactCharacterTransform,
 		false,
 		nullptr,
 		ETeleportType::TeleportPhysics);
 	Movement->SetMovementMode(
-		FalsePositiveRollback.MovementMode,
-		FalsePositiveRollback.CustomMovementMode);
-	Movement->Velocity = FalsePositiveRollback.CharacterVelocity;
+		PreparationRollback.MovementMode,
+		PreparationRollback.CustomMovementMode);
+	Movement->Velocity = PreparationRollback.CharacterVelocity;
 
 	PhysicsControl->SetComponentTickEnabled(false);
 	ActiveRequest = FHeavyImpactPreparationRequest();
@@ -2221,11 +2413,12 @@ void UHeavyImpactResponseComponent::RestoreSnapshotAfterFalsePositive()
 	ExpectedSourceComponent = nullptr;
 	CommittedSourceActor.Reset();
 	ActivePreparationTimeoutSeconds = 0.0f;
-	FalsePositiveRollback.Reset();
+	PreparationRollback.Reset();
 	RecoveryBaseline.Reset();
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
+	RecoveryBlockedStartTimeSeconds = -1.0;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);
 }

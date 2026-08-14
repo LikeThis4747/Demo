@@ -78,13 +78,10 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		&& FMath::IsFinite(StableLinearSpeedCmPerSecond)
 		&& FMath::IsFinite(StableAngularSpeedDegPerSecond)
 		&& FMath::IsFinite(RequiredStableSeconds)
-		&& FMath::IsFinite(RecoveryHandoffStableSeconds)
 		&& FMath::IsFinite(GroundProbeDistance)
 		&& FMath::IsFinite(CapsuleFollowInterpSpeed)
-		&& FMath::IsFinite(FreeFallbackAfterSeconds)
-		&& FMath::IsFinite(ForceDownedAfterSeconds)
-		&& FMath::IsFinite(RecoveryDelaySeconds)
 		&& FMath::IsFinite(RecoveryRetrySeconds)
+		&& FMath::IsFinite(MaximumRecoveryBlockedSeconds)
 		&& FMath::IsFinite(MinimumDownedReimpactImpulse)
 		&& FMath::IsFinite(PhysicsBodyReleaseDelaySeconds)
 		&& FMath::IsFinite(SameSourceProtectionSeconds)
@@ -109,15 +106,12 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| StableLinearSpeedCmPerSecond < 0.0f
 		|| StableAngularSpeedDegPerSecond < 0.0f
 		|| RequiredStableSeconds <= 0.0f
-		|| RecoveryHandoffStableSeconds < 0.03f
-		|| RecoveryHandoffStableSeconds > 0.25f
-		|| RecoveryHandoffStableSeconds > RequiredStableSeconds
 		|| GroundProbeDistance <= 0.0f
 		|| CapsuleFollowInterpSpeed <= 0.0f
-		|| FreeFallbackAfterSeconds <= 0.0f
-		|| ForceDownedAfterSeconds <= FreeFallbackAfterSeconds
-		|| RecoveryDelaySeconds < 0.0f
 		|| RecoveryRetrySeconds < 0.1f
+		|| RecoveryRetrySeconds > 1.0f
+		|| MaximumRecoveryBlockedSeconds < RecoveryRetrySeconds
+		|| MaximumRecoveryBlockedSeconds > 10.0f
 		|| MinimumDownedReimpactImpulse < 1.0f
 		|| PhysicsBodyReleaseDelaySeconds < 0.0f
 		|| PhysicsBodyReleaseDelaySeconds > 0.5f

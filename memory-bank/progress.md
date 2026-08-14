@@ -35,3 +35,13 @@
 - 自动化与静态检查不等于正式一局动态导航、资产状态或玩家手感验收。
 - 刺轮 2026-08-14 的移动/半埋/轨迹技术验证有效；火星已按原形态重新运行验证，技术结果通过但仍不等于用户视觉验收。
 - 不恢复全身常驻受控物理、Light/Heavy 大一体化或跨对象磁力事务方案。
+
+<!-- written by shiqiqiwang at 2026-08-14 05:06 UTC -->
+
+## 2026-08-14 — HeavyImpact 不可回滚与有界恢复
+
+- 完成摆锤/冲锤真实盒体短时 Sweep；候选体积不再直接决定 Heavy。
+- 完成 `Accepted` 后不可正常回滚、timeout 继续物理但不伪造真实接触事件、迟到 exact source Hit 单次提交。
+- 删除 Settling 抢跑起身与 5/10 秒正常硬切；Downed 睡眠后立即尝试，0.20s 重试，3.0s 截止；Snapshot 淡入 0.30s。
+- DemoEditor 构建成功；官方 MCP 回读资产正确且非 dirty；Heavy 5 项 + CharacterImpact 2 项自动化 7/7 Success。
+- 状态：技术实现完成，待用户 PIE 视觉与手感验收。

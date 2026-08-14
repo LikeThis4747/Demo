@@ -60,18 +60,17 @@ struct FHeavyImpactBodySnapshot
 	TEnumAsByte<ECollisionEnabled::Type> CollisionEnabled = ECollisionEnabled::NoCollision;
 };
 
-/** 仅供“预测到了但没有命中”事务恢复的角色快照。 */
-struct FHeavyImpactFalsePositiveRollback
+/** 仅供返回 Accepted 前的准备转换失败恢复；Accepted 后立即销毁。 */
+struct FHeavyImpactPreparationRollback
 {
 	bool bValid = false;
-	FTransform ActorTransform = FTransform::Identity;
 	FVector CharacterVelocity = FVector::ZeroVector;
 	TEnumAsByte<EMovementMode> MovementMode = MOVE_None;
 	uint8 CustomMovementMode = 0;
 
 	void Reset()
 	{
-		*this = FHeavyImpactFalsePositiveRollback();
+		*this = FHeavyImpactPreparationRollback();
 	}
 };
 
@@ -79,6 +78,8 @@ struct FHeavyImpactFalsePositiveRollback
 struct FHeavyImpactRecoveryBaseline
 {
 	bool bValid = false;
+	/** Heavy 准备前的有效 Character/Capsule 世界变换；优先作为安全搜索种子，也是最后的玩法恢复锚点。 */
+	FTransform PreImpactCharacterTransform = FTransform::Identity;
 	TWeakObjectPtr<USceneComponent> MeshAttachParent;
 	FName MeshAttachSocket = NAME_None;
 	FTransform MeshRelativeTransform = FTransform::Identity;
@@ -214,6 +215,10 @@ private:
 
 	/** 将预期刚体的真实接触提交为物理飞行，不补第二份冲量。 */
 	void CommitRealImpact(const FHitResult& Hit, const FVector& NormalImpulse);
+	/** Accepted 后的统一提交入口；无 Hit 的准备超时也继续 Heavy，但不伪造接触冲量。 */
+	void CommitAcceptedImpact(const FHitResult* Hit, const FVector& NormalImpulse);
+	/** 准备超时已进入 Heavy 后，补记同一预期源随后到达的唯一真实接触。 */
+	void CommitLateAcceptedContact(const FHitResult& Hit, const FVector& NormalImpulse);
 
 	/** 从 Downed 的另一真实动态刚体接触恢复物理求解，不补冲量。 */
 	void ResumeFromDownedHit(
@@ -230,9 +235,6 @@ private:
 	/** 起身事务完成时从本次真实命中来源建立保护期。 */
 	void BeginSameSourceProtection();
 
-	/** 取消未提交的 Prepared，并恢复唯一允许使用受击前 Transform 的快照。 */
-	void CancelUncommittedPreparation(const TCHAR* Reason);
-
 	/** 让直立 Capsule/Actor 外壳跟随脱离后的真实骨盆位置和水平朝向。 */
 	void UpdatePhysicalFollow(
 		float DeltaTime,
@@ -241,9 +243,6 @@ private:
 
 	/** 用骨盆速度、可行走地面和持续时间判断落地稳定。 */
 	void UpdateStability(float DeltaTime);
-	/** 身体尚未睡眠时尝试安全找位并直接进入 Snapshot-to-Montage 交接。 */
-	bool TryBeginRecoveryWhileSettling();
-
 	/** 从骨盆向下查找可行走地面，拒绝墙面和机关自身。 */
 	bool TryGetGroundSupport(FHitResult& OutGroundHit) const;
 
@@ -275,6 +274,10 @@ private:
 	void ScheduleRecoveryAttempt(float DelaySeconds);
 	void TryBeginRecovery(uint32 ExpectedTransactionSerial);
 	bool BuildRecoveryPlan(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
+	bool BuildPreImpactFallbackRecoveryPlan(
+		FHeavyImpactRecoveryPlan& OutPlan,
+		FString& OutReason);
+	bool PopulateRecoveryAnimation(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
 	bool DetermineRecoveryOrientation(bool& bOutFaceUp, FRotator& OutRotation, FString& OutReason);
 	bool TryFindRecoveryCapsuleLocation(
 		const FRotator& UprightRotation,
@@ -307,8 +310,8 @@ private:
 		FPoseSnapshot& OutPose,
 		FString& OutReason) const;
 
-	/** 恢复 Prepared 前的全部角色外壳和 Body 属性。 */
-	void RestoreSnapshotAfterFalsePositive();
+	/** 仅恢复返回 Accepted 前失败的原子准备转换；正常 Prepared 超时不得调用。 */
+	void RestoreFailedPreparationTransition();
 
 	/** 恢复每个 Physics Asset Body 的原始属性。 */
 	void RestoreBodyBaseline(const FHeavyImpactRecoveryBaseline& Baseline);
@@ -368,7 +371,7 @@ private:
 	TWeakObjectPtr<AActor> ProtectedSourceActor;
 
 	FHeavyImpactPreparationRequest ActiveRequest;
-	FHeavyImpactFalsePositiveRollback FalsePositiveRollback;
+	FHeavyImpactPreparationRollback PreparationRollback;
 	FHeavyImpactRecoveryBaseline RecoveryBaseline;
 	TArray<FName> OwnedControlNames;
 	TArray<FName> OwnedBodyModifierNames;
@@ -395,7 +398,8 @@ private:
 	float StableElapsedSeconds = 0.0f;
 	float ActorToPelvisZ = 0.0f;
 	float ActivePreparationTimeoutSeconds = 0.0f;
-	float RecoveryBlockedElapsedSeconds = 0.0f;
+	/** Downed 睡眠完成后首次起身尝试的世界时间；负值表示尚未开始阻塞计时。 */
+	double RecoveryBlockedStartTimeSeconds = -1.0;
 	/** 同一来源保护的游戏世界截止时间；同一来源持续请求时刷新。 */
 	float SameSourceProtectionUntilSeconds = 0.0f;
 	float BodyFrontCalibrationSign = 1.0f;
@@ -409,11 +413,9 @@ private:
 	bool bInitialized = false;
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
-	bool bHardTimeoutReported = false;
 	/** 当前已提交事务是否已经放开 Mesh 对 PhysicsBody 的阻挡。 */
 	bool bPhysicsBodyCollisionReleased = false;
 	bool bPureRagdollComparisonActive = false;
 	bool bBodyFrontCalibrationValid = false;
 	bool bRecoveryOrientationWarningLogged = false;
-	bool bRecoveryBlockedWarningLogged = false;
 };
