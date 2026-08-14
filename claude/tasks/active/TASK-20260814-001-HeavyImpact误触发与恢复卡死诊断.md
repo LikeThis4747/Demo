@@ -4,7 +4,7 @@
 - 任务类型：实现
 - 实现文件写入权：Codex `/root` 独占（用户 2026-08-14 明确授权本轮 Heavy/相机与地刺时长修复）
 - Status：active
-- Stage：已授权实现；开始 Heavy 墙体/相机最小修复与地刺玩家 Stop 时长调整
+- Stage：增量实现、构建与自动化已完成；等待用户在原复现点验收 Heavy 墙体/相机与地刺时长
 - Created：2026-08-14
 
 ## 用户反馈
@@ -74,7 +74,16 @@
 - `/Game/ZeroEscape/Physics/Impact/DA_SpikeStandingImpact` 仅把玩家 Stop `DurationSeconds` 从 `0.25` 改为 `0.70`；追猎者仍为 `Slow 0.60 / 0.45`。
 - 地刺导航只读结论：GrateMesh、SpikeMesh、HurtZone 均 `bCanEverAffectNavigation=false`；运行时 SpikeMesh 对 Pawn Ignore，HurtZone 仅 Pawn Overlap，AI Slow 不取消 PathFollowing。格栅保留地板碰撞，但不导出 Recast 障碍。
 - 不新增碰撞通道、SpringArm 子类、PlayerCameraManager、逐 Body 纠偏、兼容开关或机关特判；不修改 Level0、AnimBP、Heavy PCA、追猎者攻击和地刺 C++。
-- 并行纯文档改动保持原 Owner，不由本实现提交；实现基线为远端 `b57618e6a486054aaa3fc0e2a4fda3702e17522f`，首次实现写入前另做文档检查点并复核远端。
+- 并行纯文档改动已按用户授权纳入检查点；本次增量实现实际基线为远端 `47adb45d3d338a54d67cb55bef0088aa793901e9`，写入前工作区与远端均已核对干净。
+
+## 2026-08-14 增量实施与验证结果
+
+- Heavy 恢复 Timer 现在只排队序号；真正的 `TryBeginRecovery` 在下一次组件 `TG_PostPhysics` Tick 执行。已有 Heavy→CameraBoom prerequisite 因此能在同帧让弹簧臂使用最终 Capsule 位置更新，消除 Timer 位于 SpringArm 之后造成的一帧旧缓存。
+- 物理期 Actor/Capsule 跟随增加仅查询 `WorldStatic` 的胶囊 Sweep。命中时停在 Sweep 安全位置；动态机关、箱子和 AI 不参与这次外壳约束。该修正同时作用于玩家与追猎者；已脱离外壳的物理 Mesh 不做逐 Body 纠偏，是否仍穿墙由用户固定复现点验收。
+- 相机资产保持 `ECC_Camera` 对结构墙阻挡；追猎者斧头、冲锤四个视觉件和磁力箱新增 Camera Ignore。玩家实际镜头终点改为 `ArmLength=190 / SocketOffset=(0,65,65) / FollowCamera RelativeLocation=0`，与旧构图等价且真实镜头位置进入 SpringArm Sweep。
+- 地刺玩家反应已回读为 `Stop 0.70s`；追猎者保持 `Slow 0.60s / 0.45`。SpikeTrap 三个组件均 `bCanEverAffectNavigation=false`；SpikeMesh 运行时 Ignore Pawn，HurtZone 仅 Overlap Pawn，Slow 不取消 PathFollowing。
+- `DemoEditor Win64 Development -Module=Demo -NoEngineChanges` 正式构建、链接通过。冷启动后四个 Blueprint 以 warning-as-error 编译通过；官方自动化 Heavy 5 项 + CharacterImpact 2 项共 `7/7 Success`、0 warning、0 error。
+- 短 PIE 启动/停止正常，没有 Heavy/Light 初始化错误；实际冲锤墙边、起身闪动与地刺持续寻路仍由用户现场验收，任务保持 active。
 
 ## 实施检查点
 

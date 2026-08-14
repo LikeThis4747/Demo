@@ -290,6 +290,8 @@ private:
 	void FinishPendingDownedSleep();
 
 	void ScheduleRecoveryAttempt(float DelaySeconds);
+	/** Timer 只把恢复请求排到下一次 PostPhysics，避免在弹簧臂更新后移动角色。 */
+	void QueueRecoveryAttempt(uint32 ExpectedTransactionSerial);
 	void TryBeginRecovery(uint32 ExpectedTransactionSerial);
 	bool BuildRecoveryPlan(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
 	bool BuildPreImpactFallbackRecoveryPlan(
@@ -429,6 +431,8 @@ private:
 	float RecoveryBlendElapsedSeconds = 0.0f;
 	uint64 PreparedEntryFrame = 0;
 	uint32 RecoveryTransactionSerial = 0;
+	/** 等待下一次本组件 PostPhysics Tick 消费；0 表示没有排队请求。 */
+	uint32 QueuedRecoveryAttemptSerial = 0;
 	bool bConfigured = false;
 	bool bInitialized = false;
 	bool bFreeFallbackInvoked = false;

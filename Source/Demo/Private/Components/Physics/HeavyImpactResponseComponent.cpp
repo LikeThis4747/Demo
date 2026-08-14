@@ -1105,6 +1105,18 @@ void UHeavyImpactResponseComponent::TickComponent(
 		return;
 	}
 
+	if (State == EHeavyImpactState::Downed && QueuedRecoveryAttemptSerial != 0)
+	{
+		const uint32 AttemptSerial = QueuedRecoveryAttemptSerial;
+		QueuedRecoveryAttemptSerial = 0;
+		TryBeginRecovery(AttemptSerial);
+		if (State == EHeavyImpactState::Downed && !bPendingDownedSleep)
+		{
+			SetComponentTickEnabled(false);
+		}
+		return;
+	}
+
 	if (State == EHeavyImpactState::Prepared)
 	{
 		UpdatePhysicalFollow(DeltaTime);
@@ -1242,9 +1254,42 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 		? Character->GetActorRotation().Yaw
 		: HorizontalForward.Rotation().Yaw;
 	const FRotator NewRotation(0.0f, DesiredYaw, 0.0f);
+	FVector ResolvedLocation = NewLocation;
+
+	// Heavy 的 Mesh 已脱离并由 Chaos 求解；这里只约束承载输入和相机的 Capsule 外壳。
+	// 只查询 WorldStatic，避免摆锤、箱子和其他动态玩法物反过来抖动相机锚点。
+	if (UWorld* World = GetWorld(); IsValid(World))
+	{
+		const FVector CurrentLocation = Character->GetActorLocation();
+		const float QueryRadius = FMath::Max(1.0f, Capsule->GetScaledCapsuleRadius() - 1.0f);
+		const float QueryHalfHeight = FMath::Max(
+			QueryRadius,
+			Capsule->GetScaledCapsuleHalfHeight() - 1.0f);
+		FCollisionObjectQueryParams ObjectQueryParams;
+		ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
+		FCollisionQueryParams QueryParams(
+			SCENE_QUERY_STAT(HeavyImpactCapsuleFollow),
+			false,
+			Character);
+		FHitResult WallHit;
+		const bool bBlockedByWorldStatic = World->SweepSingleByObjectType(
+			WallHit,
+			CurrentLocation,
+			NewLocation,
+			FQuat::Identity,
+			ObjectQueryParams,
+			FCollisionShape::MakeCapsule(QueryRadius, QueryHalfHeight),
+			QueryParams);
+		if (bBlockedByWorldStatic)
+		{
+			ResolvedLocation = WallHit.bStartPenetrating
+				? CurrentLocation
+				: WallHit.Location;
+		}
+	}
 
 	Character->SetActorLocationAndRotation(
-		NewLocation,
+		ResolvedLocation,
 		NewRotation,
 		false,
 		nullptr,
@@ -1483,11 +1528,12 @@ void UHeavyImpactResponseComponent::ScheduleRecoveryAttempt(const float DelaySec
 	}
 
 	World->GetTimerManager().ClearTimer(RecoveryRetryTimer);
+	QueuedRecoveryAttemptSerial = 0;
 	RecoveryPhase = EHeavyImpactRecoveryPhase::WaitingForSpace;
 	const uint32 TransactionSerial = ++RecoveryTransactionSerial;
 	const FTimerDelegate AttemptDelegate = FTimerDelegate::CreateUObject(
 		this,
-		&UHeavyImpactResponseComponent::TryBeginRecovery,
+		&UHeavyImpactResponseComponent::QueueRecoveryAttempt,
 		TransactionSerial);
 	if (DelaySeconds <= 0.0f)
 	{
@@ -1505,6 +1551,20 @@ void UHeavyImpactResponseComponent::ScheduleRecoveryAttempt(const float DelaySec
 			DelaySeconds,
 			false);
 	}
+}
+
+void UHeavyImpactResponseComponent::QueueRecoveryAttempt(
+	const uint32 ExpectedTransactionSerial)
+{
+	if (State != EHeavyImpactState::Downed
+		|| RecoveryPhase != EHeavyImpactRecoveryPhase::WaitingForSpace
+		|| RecoveryTransactionSerial != ExpectedTransactionSerial)
+	{
+		return;
+	}
+
+	QueuedRecoveryAttemptSerial = ExpectedTransactionSerial;
+	SetComponentTickEnabled(true);
 }
 
 void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransactionSerial)
@@ -2422,6 +2482,7 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 void UHeavyImpactResponseComponent::CancelRecoveryAsync(const bool bStopActiveMontage)
 {
 	++RecoveryTransactionSerial;
+	QueuedRecoveryAttemptSerial = 0;
 	if (UWorld* World = GetWorld())
 	{
 		FTimerManager& TimerManager = World->GetTimerManager();

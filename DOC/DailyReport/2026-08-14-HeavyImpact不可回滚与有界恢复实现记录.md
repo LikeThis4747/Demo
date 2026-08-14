@@ -30,3 +30,14 @@
 - 覆盖静止身体、墙角/障碍阻塞、面朝上/下面起身、Downed 二次命中。
 - 人为阻塞起身超过 2 秒，确认正常搜索或最终位置回退后恢复操作，不永久倒地。
 - 在 30/60/120 FPS 下回归预测与恢复观感。Chaos 画面和手感仍以用户现场验收为准，构建与自动化不替代该结论。
+
+## 用户复测后的相机、墙体与地刺增量
+
+- 增量实现基线为 `47adb45d3d338a54d67cb55bef0088aa793901e9`，写入前已推送并确认工作区干净、远端 `main` 一致。
+- 恢复重试 Timer 不再直接移动 Actor；只排队事务序号，下一次 Heavy `TG_PostPhysics` Tick 才执行安全位置查询和起身交接。由此 CameraBoom 能通过既有 prerequisite 在 CameraManager 采样前按最终 Capsule 位置重算。
+- Heavy 物理期的 Actor/Capsule 骨盆跟随增加仅针对 `WorldStatic` 的胶囊 Sweep，玩家与追猎者共用；动态玩法物不会参与外壳 Sweep，物理 Mesh 也没有新增逐 Body Teleport 或纠偏。
+- `BP_ZeroEscapeCharacter` 将相机子偏移折入 SpringArm 有效终点：`ArmLength 220→190`、`SocketOffset (0,55,65)→(0,65,65)`、`FollowCamera RelativeLocation (30,10,0)→0`。FOV 90、Camera Lag 12/60、ECC_Camera 与 Probe 12 均保持。
+- `BP_Pursuer` 斧头、`BP_BatteringRamHazard` 四个视觉件、`BP_MagneticProp` 的物理箱新增 Camera Ignore；原碰撞 Profile、ObjectType、CollisionEnabled 与模拟状态均保持。
+- `DA_SpikeStandingImpact` 的玩家 Stop 改为 `0.70s`；追猎者保持 `Slow 0.60s / 0.45`。官方回读和 C++ 均确认 SpikeTrap 不导出导航障碍，升降刺运行时 Ignore Pawn，Slow 不取消 AI PathFollowing。
+- Demo 模块正式构建、链接成功；冷启动后四个 Blueprint warning-as-error 编译通过，相关资产均非 dirty；Heavy 5 项 + CharacterImpact 2 项自动化 `7/7 Success`、0 warning、0 error。短 PIE 无 Heavy/Light 初始化错误。
+- 待用户在原墙边复现点确认：Capsule/相机锚点不再进墙、起身一帧闪是否消失、真实物理 Mesh 是否仍穿墙、墙角原生 SpringArm 碰撞伸展是否仍有跳变，以及地刺 0.70 秒 Stop 与 AI Slow 寻路体感。
