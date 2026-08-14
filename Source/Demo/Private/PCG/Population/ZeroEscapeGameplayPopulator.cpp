@@ -8,7 +8,11 @@
 
 #include "PCG/Population/ZeroEscapeGameplayPopulator.h"
 
+#include "Actors/Hazards/SpikeWheelHazard.h"
 #include "Engine/World.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "Kismet/GameplayStatics.h"
 #include "PCG/Population/ZeroEscapePopulationPlacementPolicy.h"
 #include "PCG/Population/ZeroEscapePopulationProfile.h"
 #include "PCG/ZeroEscapeGenerationCore.h"
@@ -26,6 +30,7 @@ namespace
 			LevelGen::EPopulationPlacementKind::SpikeTrap;
 		UClass* ActorClass = nullptr;
 		FTransform WorldTransform = FTransform::Identity;
+		LevelGen::FPopulationSpikeWheelSpawnConfig SpikeWheel;
 	};
 
 	const TCHAR* PlacementKindName(const LevelGen::EPopulationPlacementKind Kind)
@@ -36,6 +41,7 @@ namespace
 		case LevelGen::EPopulationPlacementKind::SpikeTrap: return TEXT("SpikeTrap");
 		case LevelGen::EPopulationPlacementKind::BatteringRam: return TEXT("BatteringRam");
 		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return TEXT("GuidedLauncher");
+		case LevelGen::EPopulationPlacementKind::SpikeWheel: return TEXT("SpikeWheel");
 		case LevelGen::EPopulationPlacementKind::MagneticResource: return TEXT("MagneticResource");
 		default: return TEXT("Unknown");
 		}
@@ -65,6 +71,7 @@ namespace
 		case LevelGen::EPopulationPlacementKind::SpikeTrap: return &Hazards.SpikeTrapClass;
 		case LevelGen::EPopulationPlacementKind::BatteringRam: return &Hazards.BatteringRamClass;
 		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return &Hazards.GuidedLauncherClass;
+		case LevelGen::EPopulationPlacementKind::SpikeWheel: return &Hazards.SpikeWheelClass;
 		case LevelGen::EPopulationPlacementKind::MagneticResource: return &Resources.MagneticResourceClass;
 		default: return nullptr;
 		}
@@ -99,6 +106,14 @@ namespace
 			{
 				OutError = FString::Printf(
 					TEXT("类型 %s 的 Actor Class 无法加载或不可生成。"), PlacementKindName(Kind));
+				return false;
+			}
+			if (Kind == LevelGen::EPopulationPlacementKind::SpikeWheel
+				&& !LoadedClass->IsChildOf(ASpikeWheelHazard::StaticClass()))
+			{
+				OutError = FString::Printf(
+					TEXT("Type %s must use an ASpikeWheelHazard subclass."),
+					PlacementKindName(Kind));
 				return false;
 			}
 			OutClasses.Add(Kind, LoadedClass);
@@ -169,6 +184,25 @@ namespace
 						PlacementKindName(Placement.Kind));
 					return false;
 				}
+				const bool bIsSpikeWheel =
+					Placement.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel;
+				if (bIsSpikeWheel
+					&& (Placement.LocalSpawnTransforms.Num() != 1
+						|| !Placement.SpikeWheel.bIsConfigured
+						|| !FMath::IsFinite(Placement.SpikeWheel.NormalizedPhase01)
+						|| Placement.SpikeWheel.NormalizedPhase01 < 0.0f
+						|| Placement.SpikeWheel.NormalizedPhase01 >= 1.0f))
+				{
+					OutError = TEXT("SpikeWheel placement requires one transform and a finite phase in [0,1).");
+					return false;
+				}
+				if (!bIsSpikeWheel && Placement.SpikeWheel.bIsConfigured)
+				{
+					OutError = FString::Printf(
+						TEXT("Type %s unexpectedly contains SpikeWheel spawn configuration."),
+						PlacementKindName(Placement.Kind));
+					return false;
+				}
 				for (const FTransform& LocalTransform : Placement.LocalSpawnTransforms)
 				{
 					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(LocalTransform))
@@ -180,6 +214,7 @@ namespace
 					Request.Kind = Placement.Kind;
 					Request.ActorClass = *ActorClass;
 					Request.WorldTransform = LocalTransform * GeneratedRootWorldTransform;
+					Request.SpikeWheel = Placement.SpikeWheel;
 					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(
 							Request.WorldTransform))
 					{
@@ -217,6 +252,27 @@ bool AZeroEscapeGameplayPopulator::Populate(
 	{
 		return Fail(TEXT("InvalidSetup"));
 	}
+	const ACharacter* PlayerCharacter = UGameplayStatics::GetPlayerCharacter(this, 0);
+	const ACharacter* PlayerClassDefault = IsValid(PlayerCharacter)
+		? PlayerCharacter->GetClass()->GetDefaultObject<ACharacter>()
+		: nullptr;
+	const UCharacterMovementComponent* PlayerMovement = IsValid(PlayerClassDefault)
+		? PlayerClassDefault->GetCharacterMovement()
+		: nullptr;
+	const float PlayerMaxWalkSpeedCmPerSecond = IsValid(PlayerMovement)
+		? PlayerMovement->MaxWalkSpeed
+		: 0.0f;
+	if (!FMath::IsFinite(PlayerMaxWalkSpeedCmPerSecond)
+		|| PlayerMaxWalkSpeedCmPerSecond <= 0.0f)
+	{
+		return Fail(
+			TEXT("PlayerTraversalSpeedUnavailable"),
+			FString::Printf(
+				TEXT("player=%s class_default=%s max_walk_speed_cm_s=%.3f"),
+				*GetNameSafe(PlayerCharacter),
+				*GetNameSafe(PlayerClassDefault),
+				PlayerMaxWalkSpeedCmPerSecond));
+	}
 
 	FZeroEscapeGeneratedLevelPlan LevelPlan;
 	FTransform GeneratedRootWorldTransform;
@@ -233,6 +289,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		LevelGen::FPopulationPlacementPolicy::BuildPlan(
 			LevelPlan,
 			FloorTopZCm,
+			PlayerMaxWalkSpeedCmPerSecond,
 			PopulationProfile->HazardAssembly,
 			PopulationProfile->ResourceAssembly,
 			PopulationProfile->Difficulties,
@@ -270,8 +327,47 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	for (const FPopulationSpawnRequest& Request : SpawnRequests)
 	{
-		AActor* Spawned = World->SpawnActor<AActor>(
-			Request.ActorClass, Request.WorldTransform, SpawnParameters);
+		AActor* Spawned = nullptr;
+		if (Request.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel)
+		{
+			AActor* DeferredActor = World->SpawnActorDeferred<AActor>(
+				Request.ActorClass,
+				Request.WorldTransform,
+				this,
+				nullptr,
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn,
+				ESpawnActorScaleMethod::OverrideRootScale);
+			ASpikeWheelHazard* Wheel = Cast<ASpikeWheelHazard>(DeferredActor);
+			if (!IsValid(Wheel)
+				|| !Wheel->ConfigurePopulationPlacement(
+					Request.SpikeWheel.RouteVariantSeed,
+					Request.SpikeWheel.NormalizedPhase01))
+			{
+				if (IsValid(DeferredActor))
+				{
+					DeferredActor->Destroy();
+				}
+				return Fail(TEXT("SpikeWheelConfigurationFailed"));
+			}
+
+			Spawned = UGameplayStatics::FinishSpawningActor(
+				Wheel,
+				Request.WorldTransform,
+				ESpawnActorScaleMethod::OverrideRootScale);
+			if (!IsValid(Spawned))
+			{
+				if (IsValid(DeferredActor))
+				{
+					DeferredActor->Destroy();
+				}
+				return Fail(TEXT("SpikeWheelFinishSpawningFailed"));
+			}
+		}
+		else
+		{
+			Spawned = World->SpawnActor<AActor>(
+				Request.ActorClass, Request.WorldTransform, SpawnParameters);
+		}
 		if (!IsValid(Spawned))
 		{
 			return Fail(TEXT("ActorSpawnFailed"), PlacementKindName(Request.Kind));
@@ -290,21 +386,66 @@ bool AZeroEscapeGameplayPopulator::Populate(
 			PlacementPlan.ResourceStats.ActualCount,
 			PlacementPlan.ResourceStats.TargetCount);
 	}
+	for (int32 PlacementIndex = 0;
+		PlacementIndex < PlacementPlan.HazardPlacements.Num();
+		++PlacementIndex)
+	{
+		const LevelGen::FPopulationPlannedPlacement& Placement =
+			PlacementPlan.HazardPlacements[PlacementIndex];
+		UE_LOG(LogZeroEscapePopulator, Verbose,
+			TEXT("ZE_POPULATION_SCORE index=%d kind=%s anchor=%s total=%.3f position=%.3f progress=%.3f pressure=%.3f combination=%.3f diversity=%.3f diagnostic=%.3f wheel_route_seed=%d wheel_phase=%.6f"),
+			PlacementIndex,
+			PlacementKindName(Placement.Kind),
+			*Placement.AnchorAddress.ToString(),
+			Placement.Score.TotalLog2Score,
+			Placement.Score.Position,
+			Placement.Score.Progress,
+			Placement.Score.GroupPressure,
+			Placement.Score.Combination,
+			Placement.Score.Diversity,
+			Placement.Score.Diagnostic,
+			Placement.SpikeWheel.RouteVariantSeed,
+			Placement.SpikeWheel.NormalizedPhase01);
+	}
+	for (int32 GroupIndex = 0;
+		GroupIndex < PlacementPlan.HazardGroups.Num();
+		++GroupIndex)
+	{
+		const LevelGen::FPopulationHazardGroupRecord& Group =
+			PlacementPlan.HazardGroups[GroupIndex];
+		UE_LOG(LogZeroEscapePopulator, Verbose,
+			TEXT("ZE_POPULATION_GROUP index=%d anchor=%s members=%d target_pressure=%.3f actual_pressure=%.3f support_priority=%.3f safe_approaches=%d"),
+			GroupIndex,
+			*Group.AnchorAddress.ToString(),
+			Group.PlacementIndices.Num(),
+			Group.TargetPressure,
+			Group.ActualPressure,
+			Group.ResourceSupportPriority,
+			Group.SafeApproachAddresses.Num());
+	}
 	UE_LOG(LogZeroEscapePopulator, Display,
-		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld hazard_target=%d hazard_actual=%d pendulums=%d spikes=%d rams=%d launchers=%d resource_target=%d resource_actual=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d resource_candidates=%d actors=%d"),
+		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_target=%d hazard_actual=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
 		LevelPlan.Signature.Seed,
 		static_cast<long long>(LevelPlan.CanonicalLayoutHash),
+		PlayerMaxWalkSpeedCmPerSecond,
 		PlacementPlan.HazardStats.TargetCount,
 		PlacementPlan.HazardStats.ActualCount,
 		PlacementPlan.KindCounts.Pendulums,
 		PlacementPlan.KindCounts.SpikeTrapGroups,
 		PlacementPlan.KindCounts.BatteringRams,
 		PlacementPlan.KindCounts.GuidedLaunchers,
+		PlacementPlan.KindCounts.SpikeWheels,
 		PlacementPlan.ResourceStats.TargetCount,
 		PlacementPlan.ResourceStats.ActualCount,
 		PlacementPlan.KindCounts.SpikeCandidateAnchors,
 		PlacementPlan.KindCounts.RamCandidateAnchors,
 		PlacementPlan.KindCounts.LauncherCandidateAnchors,
+		PlacementPlan.KindCounts.WheelCandidateAnchors,
+		PlacementPlan.HazardGroups.Num(),
+		PlacementPlan.KindCounts.WheelRamCombinations,
+		PlacementPlan.KindCounts.WheelSpikeCombinations,
+		PlacementPlan.KindCounts.UnpairedWheels,
+		PlacementPlan.KindCounts.LiteralSoloWheels,
 		PlacementPlan.ResourceStats.CandidateAnchorCount,
 		SpawnedActors.Num());
 	return true;

@@ -47,7 +47,7 @@ AZeroEscapeCharacter::AZeroEscapeCharacter()
 	MovementComponent->RotationRate = FRotator(0.0f, 500.0f, 0.0f);
 	MovementComponent->JumpZVelocity = 700.0f;
 	MovementComponent->AirControl = 0.35f;
-	MovementComponent->MaxWalkSpeed = 500.0f;
+	MovementComponent->MaxWalkSpeed = 400.0f;
 
 	CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
 	CameraBoom->SetupAttachment(RootComponent);

@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapePopulationPlacementPolicy.cpp
- * 职责：在完整三维通行图上枚举合法候选并执行机关/资源两次有限候选泊松拒绝采样。
+ * 职责：在完整三维通行图上枚举合法候选，执行机关上下文加权与资源支持加权规划。
  * 边界：保持纯值、确定性和原子输出；资产加载、世界变换与 Spawn 留给 Populator。
  */
 
@@ -30,22 +30,97 @@ namespace ZeroEscape::LevelGeneration
 			FTransform LocalSpawnTransform = FTransform::Identity;
 			FVector SpikeLateralAxis = FVector::ZeroVector;
 			TArray<FIntVector> ResourceBlockedAddresses;
+			FPopulationSpikeWheelSpawnConfig SpikeWheel;
+			float PositionLog2Contribution = 0.0f;
 		};
 
 		struct FPlacementCandidate
 		{
 			EPopulationPlacementKind Kind = EPopulationPlacementKind::SpikeTrap;
 			FIntVector AnchorAddress = FIntVector::ZeroValue;
-			TArray<int32> SpacingNodeIndices;
 			TArray<FPlacementVariant> Variants;
 		};
 
-		struct FFeasiblePool
+		struct FScoredVariant
+		{
+			int32 VariantIndex = INDEX_NONE;
+			FPopulationPlacementScoreBreakdown Score;
+			double Weight = 0.0;
+		};
+
+		struct FScoredAnchor
+		{
+			int32 CandidateIndex = INDEX_NONE;
+			double BestLog2Score = 0.0;
+			double Weight = 0.0;
+			TArray<FScoredVariant> Variants;
+		};
+
+		struct FScoredKindPool
 		{
 			EPopulationPlacementKind Kind = EPopulationPlacementKind::SpikeTrap;
-			int32 Weight = 0;
+			double TypeWeight = 0.0;
 			const TArray<FPlacementCandidate>* Candidates = nullptr;
-			TArray<int32> CandidateIndices;
+			TArray<FScoredAnchor> Anchors;
+		};
+
+		struct FAcceptedHazardState
+		{
+			EPopulationPlacementKind Kind = EPopulationPlacementKind::SpikeTrap;
+			FIntVector AnchorAddress = FIntVector::ZeroValue;
+			TArray<int32> OperationNodeIndices;
+			int32 GroupId = INDEX_NONE;
+			float BasePressure = 0.0f;
+			float Progress01 = 0.0f;
+		};
+
+		struct FWorkingHazardGroup
+		{
+			bool bActive = true;
+			FIntVector AnchorAddress = FIntVector::ZeroValue;
+			TArray<int32> PlacementIndices;
+			float ActualPressure = 0.0f;
+			float ProgressSum = 0.0f;
+		};
+
+		struct FNearbyHazard
+		{
+			int32 PlacementIndex = INDEX_NONE;
+			int32 Distance = UnreachableDistance;
+		};
+
+		struct FLocalGraphScratch
+		{
+			TArray<int32> NodeVisitEpoch;
+			TArray<int32> NodeDistance;
+			TArray<int32> AcceptedVisitEpoch;
+			TArray<int32> AcceptedDistance;
+			TArray<int32> Queue;
+			int32 Epoch = 0;
+		};
+
+		struct FHazardPlanningState
+		{
+			TArray<FAcceptedHazardState> AcceptedHazards;
+			TArray<FWorkingHazardGroup> Groups;
+			TArray<TArray<int32>> AcceptedPlacementIndicesByNode;
+			TArray<int32> DistanceFromPlayer;
+			TArray<int32> DistanceToExit;
+			TArray<EPopulationPlacementKind> RecentOrdinaryKinds;
+			FLocalGraphScratch LocalGraphScratch;
+		};
+
+		struct FHazardCandidateEvaluation
+		{
+			FPopulationPlacementScoreBreakdown Score;
+			TArray<int32> NearbyGroupIds;
+			TArray<int32> AdjacentPlacementIndices;
+			FIntVector ProposedGroupAnchor = FIntVector::ZeroValue;
+			float CandidateProgress01 = 0.0f;
+			float GroupProgress01 = 0.0f;
+			float TargetPressure = 0.0f;
+			float PressureAfterPlacement = 0.0f;
+			float AddedCombinationPressure = 0.0f;
 		};
 
 		bool CoordinateLess(const FIntVector& A, const FIntVector& B)
@@ -268,6 +343,10 @@ namespace ZeroEscape::LevelGeneration
 					}
 				}
 			}
+			for (TArray<int32>& NeighborList : OutGraph.Neighbors)
+			{
+				NeighborList.Sort();
+			}
 
 			if (OutGraph.Addresses.IsEmpty())
 			{
@@ -299,7 +378,7 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
-		void UpdateNearestDistances(
+		void UpdateNearestResourceDistances(
 			const FTraversalGraph& Graph,
 			const TConstArrayView<int32> SourceNodes,
 			TArray<int32>& InOutNearestDistances)
@@ -329,6 +408,322 @@ namespace ZeroEscape::LevelGeneration
 			}
 		}
 
+		bool BuildGraphDistances(
+			const FTraversalGraph& Graph,
+			const FIntVector SourceAddress,
+			TArray<int32>& OutDistances)
+		{
+			const int32* SourceNode = Graph.NodeByAddress.Find(SourceAddress);
+			if (SourceNode == nullptr)
+			{
+				return false;
+			}
+			OutDistances.Init(UnreachableDistance, Graph.Addresses.Num());
+			TQueue<int32> Queue;
+			OutDistances[*SourceNode] = 0;
+			Queue.Enqueue(*SourceNode);
+			int32 Node = INDEX_NONE;
+			while (Queue.Dequeue(Node))
+			{
+				const int32 NextDistance = OutDistances[Node] + 1;
+				for (const int32 Neighbor : Graph.Neighbors[Node])
+				{
+					if (NextDistance < OutDistances[Neighbor])
+					{
+						OutDistances[Neighbor] = NextDistance;
+						Queue.Enqueue(Neighbor);
+					}
+				}
+			}
+			return !OutDistances.Contains(UnreachableDistance);
+		}
+
+		uint32 MakeStablePlacementHash(
+			const int32 PublicSeed,
+			const FIntVector Address,
+			const int32 VariantKey,
+			const uint32 Salt)
+		{
+			uint32 Hash = HashCombineFast(GetTypeHash(PublicSeed), Salt);
+			Hash = HashCombineFast(Hash, GetTypeHash(Address.X));
+			Hash = HashCombineFast(Hash, GetTypeHash(Address.Y));
+			Hash = HashCombineFast(Hash, GetTypeHash(Address.Z));
+			return HashCombineFast(Hash, GetTypeHash(VariantKey));
+		}
+
+		float StablePhase01(const uint32 Hash)
+		{
+			// 24 位尾数保证转换成 float 后仍严格小于 1。
+			return static_cast<float>(Hash >> 8) * (1.0f / 16777216.0f);
+		}
+
+		float StableSignedUnit(const uint32 Hash)
+		{
+			return StablePhase01(Hash) * 2.0f - 1.0f;
+		}
+
+		bool BuildOperationNodeIndices(
+			const FTraversalGraph& Graph,
+			const FPlacementVariant& Variant,
+			TArray<int32>& OutNodeIndices)
+		{
+			OutNodeIndices.Reset();
+			for (const FIntVector Address : Variant.ResourceBlockedAddresses)
+			{
+				const int32* Node = Graph.NodeByAddress.Find(Address);
+				if (Node == nullptr)
+				{
+					return false;
+				}
+				OutNodeIndices.AddUnique(*Node);
+			}
+			OutNodeIndices.Sort();
+			return !OutNodeIndices.IsEmpty();
+		}
+
+		void FindNearbyAcceptedHazards(
+			const FTraversalGraph& Graph,
+			const TConstArrayView<int32> SourceNodes,
+			const int32 MaximumDistance,
+			FHazardPlanningState& State,
+			TArray<FNearbyHazard>& OutNearby)
+		{
+			OutNearby.Reset();
+			FLocalGraphScratch& Scratch = State.LocalGraphScratch;
+			if (Scratch.NodeVisitEpoch.Num() != Graph.Addresses.Num())
+			{
+				Scratch.NodeVisitEpoch.Init(0, Graph.Addresses.Num());
+				Scratch.NodeDistance.Init(0, Graph.Addresses.Num());
+			}
+			if (Scratch.AcceptedVisitEpoch.Num() < State.AcceptedHazards.Num())
+			{
+				Scratch.AcceptedVisitEpoch.SetNumZeroed(State.AcceptedHazards.Num());
+				Scratch.AcceptedDistance.SetNumZeroed(State.AcceptedHazards.Num());
+			}
+			if (Scratch.Epoch == MAX_int32)
+			{
+				Scratch.NodeVisitEpoch.Init(0, Graph.Addresses.Num());
+				Scratch.AcceptedVisitEpoch.Init(0, State.AcceptedHazards.Num());
+				Scratch.Epoch = 1;
+			}
+			else
+			{
+				++Scratch.Epoch;
+			}
+
+			Scratch.Queue.Reset();
+			for (const int32 SourceNode : SourceNodes)
+			{
+				if (Graph.Addresses.IsValidIndex(SourceNode)
+					&& Scratch.NodeVisitEpoch[SourceNode] != Scratch.Epoch)
+				{
+					Scratch.NodeVisitEpoch[SourceNode] = Scratch.Epoch;
+					Scratch.NodeDistance[SourceNode] = 0;
+					Scratch.Queue.Add(SourceNode);
+				}
+			}
+
+			for (int32 QueueIndex = 0; QueueIndex < Scratch.Queue.Num(); ++QueueIndex)
+			{
+				const int32 Node = Scratch.Queue[QueueIndex];
+				const int32 Distance = Scratch.NodeDistance[Node];
+				for (const int32 PlacementIndex :
+					State.AcceptedPlacementIndicesByNode[Node])
+				{
+					if (Scratch.AcceptedVisitEpoch[PlacementIndex] != Scratch.Epoch)
+					{
+						Scratch.AcceptedVisitEpoch[PlacementIndex] = Scratch.Epoch;
+						Scratch.AcceptedDistance[PlacementIndex] = Distance;
+					}
+				}
+				if (Distance >= MaximumDistance)
+				{
+					continue;
+				}
+				for (const int32 Neighbor : Graph.Neighbors[Node])
+				{
+					if (Scratch.NodeVisitEpoch[Neighbor] == Scratch.Epoch)
+					{
+						continue;
+					}
+					Scratch.NodeVisitEpoch[Neighbor] = Scratch.Epoch;
+					Scratch.NodeDistance[Neighbor] = Distance + 1;
+					Scratch.Queue.Add(Neighbor);
+				}
+			}
+
+			for (int32 PlacementIndex = 0;
+				PlacementIndex < State.AcceptedHazards.Num();
+				++PlacementIndex)
+			{
+				if (Scratch.AcceptedVisitEpoch[PlacementIndex] == Scratch.Epoch)
+				{
+					FNearbyHazard& Nearby = OutNearby.AddDefaulted_GetRef();
+					Nearby.PlacementIndex = PlacementIndex;
+					Nearby.Distance = Scratch.AcceptedDistance[PlacementIndex];
+				}
+			}
+		}
+
+		const FZeroEscapeHazardRiskTuning* FindRiskTuning(
+			const EPopulationPlacementKind Kind,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring)
+		{
+			switch (Kind)
+			{
+			case EPopulationPlacementKind::Pendulum: return &Scoring.PendulumRisk;
+			case EPopulationPlacementKind::SpikeTrap: return &Scoring.SpikeRisk;
+			case EPopulationPlacementKind::BatteringRam: return &Scoring.RamRisk;
+			case EPopulationPlacementKind::GuidedLauncher: return &Scoring.LauncherRisk;
+			case EPopulationPlacementKind::SpikeWheel: return &Scoring.WheelRisk;
+			case EPopulationPlacementKind::MagneticResource: return nullptr;
+			}
+			return nullptr;
+		}
+
+		float BasePressureForKind(
+			const EPopulationPlacementKind Kind,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const float RepresentativeTraversalSeconds)
+		{
+			const FZeroEscapeHazardRiskTuning* Risk = FindRiskTuning(Kind, Scoring);
+			return Risk == nullptr
+				? -1.0f
+				: Risk->TraversalPressurePerSecond * RepresentativeTraversalSeconds
+					+ Risk->HitConsequencePressure;
+		}
+
+		bool IsWheelRamPair(
+			const EPopulationPlacementKind First,
+			const EPopulationPlacementKind Second)
+		{
+			return (First == EPopulationPlacementKind::SpikeWheel
+					&& Second == EPopulationPlacementKind::BatteringRam)
+				|| (First == EPopulationPlacementKind::BatteringRam
+					&& Second == EPopulationPlacementKind::SpikeWheel);
+		}
+
+		bool IsWheelSpikePair(
+			const EPopulationPlacementKind First,
+			const EPopulationPlacementKind Second)
+		{
+			return (First == EPopulationPlacementKind::SpikeWheel
+					&& Second == EPopulationPlacementKind::SpikeTrap)
+				|| (First == EPopulationPlacementKind::SpikeTrap
+					&& Second == EPopulationPlacementKind::SpikeWheel);
+		}
+
+		float CalculateGroupTargetPressure(
+			const FZeroEscapeHazardPopulationTuning& HazardTuning,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const int32 PublicSeed,
+			const FIntVector GroupAnchor,
+			const float GroupProgress01)
+		{
+			const float ClampedProgress = FMath::Clamp(GroupProgress01, 0.0f, 1.0f);
+			const float BaseTarget = FMath::Lerp(
+				HazardTuning.TargetPressureAtStart,
+				HazardTuning.TargetPressureAtExit,
+				ClampedProgress);
+			const int32 RegionBand = FMath::Clamp(
+				FMath::FloorToInt(ClampedProgress * 4.0f), 0, 3);
+			const FIntVector RegionKey(RegionBand, 0, GroupAnchor.Z);
+			const float RegionVariation = StableSignedUnit(MakeStablePlacementHash(
+				PublicSeed, RegionKey, RegionBand, 0x68BC21EBu))
+				* Scoring.RegionTargetVariation;
+			const float AnchorVariation = StableSignedUnit(MakeStablePlacementHash(
+				PublicSeed, GroupAnchor, 0, 0xB5297A4Du))
+				* Scoring.AnchorTargetVariation;
+			return FMath::Max(0.25f, BaseTarget + RegionVariation + AnchorVariation);
+		}
+
+		template <typename ItemType, typename WeightFunction>
+		int32 PickWeightedIndex(
+			const TArray<ItemType>& Items,
+			WeightFunction&& GetWeight,
+			FRandomStream& Rng)
+		{
+			double TotalWeight = 0.0;
+			for (const ItemType& Item : Items)
+			{
+				const double Weight = GetWeight(Item);
+				if (!FMath::IsFinite(Weight) || Weight <= 0.0)
+				{
+					return INDEX_NONE;
+				}
+				TotalWeight += Weight;
+			}
+			if (!FMath::IsFinite(TotalWeight) || TotalWeight <= 0.0)
+			{
+				return INDEX_NONE;
+			}
+
+			const double Draw = static_cast<double>(Rng.FRand()) * TotalWeight;
+			double RunningWeight = 0.0;
+			for (int32 Index = 0; Index < Items.Num(); ++Index)
+			{
+				RunningWeight += GetWeight(Items[Index]);
+				if (Draw < RunningWeight)
+				{
+					return Index;
+				}
+			}
+			return Items.IsEmpty() ? INDEX_NONE : Items.Num() - 1;
+		}
+
+		bool IsValidRiskTuning(const FZeroEscapeHazardRiskTuning& Risk)
+		{
+			return FMath::IsFinite(Risk.TraversalPressurePerSecond)
+				&& Risk.TraversalPressurePerSecond >= 0.0f
+				&& FMath::IsFinite(Risk.HitConsequencePressure)
+				&& Risk.HitConsequencePressure >= 0.0f;
+		}
+
+		bool IsValidScoringTuning(
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring)
+		{
+			return FMath::IsFinite(Scoring.MaxAbsLog2Score)
+				&& Scoring.MaxAbsLog2Score >= 0.25f
+				&& Scoring.MaxAbsLog2Score <= 16.0f
+				&& Scoring.TypeContextTopAnchorCount >= 1
+				&& Scoring.TypeContextTopAnchorCount <= 8
+				&& FMath::IsFinite(Scoring.TypeContextStrength)
+				&& Scoring.TypeContextStrength >= 0.0f
+				&& Scoring.GroupRadiusTiles >= 1
+				&& Scoring.GroupRadiusTiles <= 8
+				&& FMath::IsFinite(Scoring.PressureFitLog2Strength)
+				&& Scoring.PressureFitLog2Strength >= 0.0f
+				&& FMath::IsFinite(Scoring.PressureOverloadWidthRatio)
+				&& Scoring.PressureOverloadWidthRatio > 0.0f
+				&& FMath::IsFinite(Scoring.RegionTargetVariation)
+				&& Scoring.RegionTargetVariation >= 0.0f
+				&& FMath::IsFinite(Scoring.AnchorTargetVariation)
+				&& Scoring.AnchorTargetVariation >= 0.0f
+				&& FMath::IsFinite(Scoring.ProgressLog2Strength)
+				&& Scoring.ProgressLog2Strength >= 0.0f
+				&& FMath::IsFinite(Scoring.LauncherCornerLog2Bonus)
+				&& Scoring.LauncherCornerLog2Bonus >= 0.0f
+				&& FMath::IsFinite(Scoring.WheelRamLog2Bonus)
+				&& Scoring.WheelRamLog2Bonus >= 0.0f
+				&& FMath::IsFinite(Scoring.WheelSpikeLog2Bonus)
+				&& Scoring.WheelSpikeLog2Bonus >= 0.0f
+				&& FMath::IsFinite(Scoring.SoloWheelLog2Contribution)
+				&& Scoring.SoloWheelLog2Contribution <= 0.0f
+				&& Scoring.RecentKindWindow >= 1
+				&& Scoring.RecentKindWindow <= 16
+				&& FMath::IsFinite(Scoring.MaximumRecentKindPenalty)
+				&& Scoring.MaximumRecentKindPenalty >= 0.0f
+				&& IsValidRiskTuning(Scoring.PendulumRisk)
+				&& IsValidRiskTuning(Scoring.SpikeRisk)
+				&& IsValidRiskTuning(Scoring.RamRisk)
+				&& IsValidRiskTuning(Scoring.LauncherRisk)
+				&& IsValidRiskTuning(Scoring.WheelRisk)
+				&& FMath::IsFinite(Scoring.WheelRamPressureBonus)
+				&& Scoring.WheelRamPressureBonus >= 0.0f
+				&& FMath::IsFinite(Scoring.WheelSpikePressureBonus)
+				&& Scoring.WheelSpikePressureBonus >= 0.0f;
+		}
+
 		const FZeroEscapePopulationDifficultySettings* ValidateAndFindDifficulty(
 			const TConstArrayView<FZeroEscapePopulationDifficultySettings> Difficulties,
 			const EZeroEscapeDifficulty RequestedDifficulty,
@@ -347,10 +742,14 @@ namespace ZeroEscape::LevelGeneration
 				if (Index < 0 || Index >= Counts.Num()
 					|| !FMath::IsFinite(Difficulty.Hazards.ExpectedHazardsPer100GameplayCells)
 					|| Difficulty.Hazards.ExpectedHazardsPer100GameplayCells < 0.0f
-					|| Difficulty.Hazards.MinimumRouteSpacingTiles < 1
 					|| Difficulty.Hazards.SpikeTrapWeight < 0
 					|| Difficulty.Hazards.BatteringRamWeight < 0
 					|| Difficulty.Hazards.GuidedLauncherWeight < 0
+					|| Difficulty.Hazards.SpikeWheelWeight < 0
+					|| !FMath::IsFinite(Difficulty.Hazards.TargetPressureAtStart)
+					|| Difficulty.Hazards.TargetPressureAtStart <= 0.0f
+					|| !FMath::IsFinite(Difficulty.Hazards.TargetPressureAtExit)
+					|| Difficulty.Hazards.TargetPressureAtExit <= 0.0f
 					|| !FMath::IsFinite(Difficulty.Resources.ExpectedResourcesPer100GameplayCells)
 					|| Difficulty.Resources.ExpectedResourcesPer100GameplayCells < 0.0f
 					|| Difficulty.Resources.MinimumRouteSpacingTiles < 1)
@@ -421,10 +820,14 @@ namespace ZeroEscape::LevelGeneration
 				|| Hazards.GuidedLauncherWallInsetCm < 0.0f
 				|| !FMath::IsFinite(Hazards.GuidedLauncherMountHeightCm)
 				|| Hazards.GuidedLauncherMountHeightCm < 0.0f
+				|| !IsValidScoringTuning(Hazards.PlacementScoring)
 				|| !FMath::IsFinite(Resources.SpawnZOffsetCm)
 				|| !FMath::IsFinite(Resources.PlacementFootprintRadiusCm)
 				|| Resources.PlacementFootprintRadiusCm < 0.0f
-				|| Resources.PlacementFootprintRadiusCm >= Plan.LogicalTileSizeCm * 0.5)
+				|| Resources.PlacementFootprintRadiusCm >= Plan.LogicalTileSizeCm * 0.5
+				|| !FMath::IsFinite(Resources.HighPressureSupportLog2Bonus)
+				|| Resources.HighPressureSupportLog2Bonus < 0.0f
+				|| Resources.HighPressureSupportLog2Bonus > 4.0f)
 			{
 				OutError = TEXT("Population 共享装配数值非法。");
 				return false;
@@ -469,12 +872,18 @@ namespace ZeroEscape::LevelGeneration
 				MaximumActorsPerOrdinaryHazard = FMath::Max<int64>(
 					MaximumActorsPerOrdinaryHazard, 2);
 			}
+			if (Difficulty.Hazards.SpikeWheelWeight > 0)
+			{
+				MaximumActorsPerOrdinaryHazard = FMath::Max<int64>(
+					MaximumActorsPerOrdinaryHazard, 1);
+			}
 			const int64 WorstActorCount = MandatoryPendulumCount
 				+ MaximumOrdinaryHazards * MaximumActorsPerOrdinaryHazard
 				+ OutResourceTarget;
 			const int64 WeightSum = static_cast<int64>(Difficulty.Hazards.SpikeTrapWeight)
 				+ Difficulty.Hazards.BatteringRamWeight
-				+ Difficulty.Hazards.GuidedLauncherWeight;
+				+ Difficulty.Hazards.GuidedLauncherWeight
+				+ Difficulty.Hazards.SpikeWheelWeight;
 			const double SpikeCenterHalfSpan =
 				static_cast<double>(Hazards.SpikeTrapActorCount - 1)
 				* Hazards.SpikeTrapLateralSpacingCm * 0.5;
@@ -527,9 +936,8 @@ namespace ZeroEscape::LevelGeneration
 			{
 				return false;
 			}
-			const int32* FirstNode = Graph.NodeByAddress.Find(First);
-			const int32* SecondNode = Graph.NodeByAddress.Find(Second);
-			if (FirstNode == nullptr || SecondNode == nullptr)
+			if (!Graph.NodeByAddress.Contains(First)
+				|| !Graph.NodeByAddress.Contains(Second))
 			{
 				return false;
 			}
@@ -542,7 +950,6 @@ namespace ZeroEscape::LevelGeneration
 			Variant.ResourceBlockedAddresses = { First, Second };
 			OutCandidate.Kind = EPopulationPlacementKind::Pendulum;
 			OutCandidate.AnchorAddress = Structure.BaseCoordinate;
-			OutCandidate.SpacingNodeIndices = { *FirstNode, *SecondNode };
 			OutCandidate.Variants.Add(MoveTemp(Variant));
 			return true;
 		}
@@ -554,7 +961,8 @@ namespace ZeroEscape::LevelGeneration
 			const FTraversalGraph& Graph,
 			TArray<FPlacementCandidate>& OutSpikes,
 			TArray<FPlacementCandidate>& OutRams,
-			TArray<FPlacementCandidate>& OutLaunchers)
+			TArray<FPlacementCandidate>& OutLaunchers,
+			TArray<FPlacementCandidate>& OutWheels)
 		{
 			TMap<FIntVector, const FZeroEscapeGeneratedOrdinaryCell*> OrdinaryByAddress;
 			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
@@ -563,60 +971,76 @@ namespace ZeroEscape::LevelGeneration
 			}
 			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
 			{
-				if (Cell.Coordinate == Plan.PlayerSpawnCoordinate
-					|| Cell.Coordinate == Plan.PursuerSpawnCoordinate
-					|| Cell.Coordinate == Plan.ExitCoordinate)
+				if (IsFlowCoordinate(Plan, Cell.Coordinate)
+					|| !Graph.NodeByAddress.Contains(Cell.Coordinate))
 				{
 					continue;
 				}
-				const int32* Node = Graph.NodeByAddress.Find(Cell.Coordinate);
-				if (Node == nullptr)
-				{
-					continue;
-				}
-				const FVector FloorCenter = AddressFloorLocation(Plan, Cell.Coordinate, FloorTopZCm);
+
+				const FVector FloorCenter = AddressFloorLocation(
+					Plan, Cell.Coordinate, FloorTopZCm);
 				FPlacementCandidate Spike;
 				Spike.Kind = EPopulationPlacementKind::SpikeTrap;
 				Spike.AnchorAddress = Cell.Coordinate;
-				Spike.SpacingNodeIndices.Add(*Node);
 				FPlacementCandidate Ram;
 				Ram.Kind = EPopulationPlacementKind::BatteringRam;
 				Ram.AnchorAddress = Cell.Coordinate;
-				Ram.SpacingNodeIndices.Add(*Node);
 				FPlacementCandidate Launcher;
 				Launcher.Kind = EPopulationPlacementKind::GuidedLauncher;
 				Launcher.AnchorAddress = Cell.Coordinate;
-				Launcher.SpacingNodeIndices.Add(*Node);
+				FPlacementCandidate Wheel;
+				Wheel.Kind = EPopulationPlacementKind::SpikeWheel;
+				Wheel.AnchorAddress = Cell.Coordinate;
 
 				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
 				{
-					const bool bOpen = (Cell.OpeningMask & Grid::DirectionBit(Direction)) != 0;
+					const bool bOpen =
+						(Cell.OpeningMask & Grid::DirectionBit(Direction)) != 0;
 					const bool bOpenToOrdinary = IsOrdinaryNeighborOpen(
 						Plan, OrdinaryByAddress, Cell, Direction);
 					const FVector Forward = DirectionVector(Direction);
 					if (bOpen)
 					{
-						FPlacementVariant Variant;
-						const FVector Right = FVector::CrossProduct(FVector::UpVector, Forward);
-						Variant.LocalSpawnTransform = FTransform(
+						FPlacementVariant SpikeVariant;
+						SpikeVariant.LocalSpawnTransform = FTransform(
 							Forward.Rotation(),
-							FloorCenter + FVector(0.0, 0.0, Hazards.SpikeTrapFloorOffsetCm));
-						Variant.SpikeLateralAxis = Right;
-						Variant.ResourceBlockedAddresses.Add(Cell.Coordinate);
-						Spike.Variants.Add(MoveTemp(Variant));
+							FloorCenter + FVector(
+								0.0, 0.0, Hazards.SpikeTrapFloorOffsetCm));
+						SpikeVariant.SpikeLateralAxis = FVector::CrossProduct(
+							FVector::UpVector, Forward);
+						SpikeVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
+						Spike.Variants.Add(MoveTemp(SpikeVariant));
+
+						FPlacementVariant WheelVariant;
+						WheelVariant.LocalSpawnTransform = FTransform(
+							Forward.Rotation(), FloorCenter);
+						WheelVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
+						WheelVariant.SpikeWheel.bIsConfigured = true;
+						WheelVariant.SpikeWheel.RouteVariantSeed = static_cast<int32>(
+							MakeStablePlacementHash(
+								Plan.Signature.Seed,
+								Cell.Coordinate,
+								Direction,
+								0x1B56C4E9u));
+						WheelVariant.SpikeWheel.NormalizedPhase01 = StablePhase01(
+							MakeStablePlacementHash(
+								Plan.Signature.Seed,
+								Cell.Coordinate,
+								Direction,
+								0xC2B2AE35u));
+						Wheel.Variants.Add(MoveTemp(WheelVariant));
 					}
 					else
 					{
-						const FVector ForwardIntoCell = -Forward;
-						FPlacementVariant Variant;
-						Variant.LocalSpawnTransform = MakeWallMountedTransform(
+						FPlacementVariant RamVariant;
+						RamVariant.LocalSpawnTransform = MakeWallMountedTransform(
 							FloorCenter,
-							ForwardIntoCell,
+							-Forward,
 							Plan.LogicalTileSizeCm * 0.5,
 							Hazards.BatteringRamWallInsetCm,
 							Hazards.BatteringRamMountHeightCm);
-						Variant.ResourceBlockedAddresses.Add(Cell.Coordinate);
-						Ram.Variants.Add(MoveTemp(Variant));
+						RamVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
+						Ram.Variants.Add(MoveTemp(RamVariant));
 					}
 
 					const uint8 RearDirection = Grid::OppositeDirectionIndex(Direction);
@@ -626,31 +1050,43 @@ namespace ZeroEscape::LevelGeneration
 					if (bOpenToOrdinary && bRearClosed
 						&& !IsFlowCoordinate(Plan, FrontAddress))
 					{
-						FPlacementVariant Variant;
-						Variant.LocalSpawnTransform = MakeWallMountedTransform(
+						FPlacementVariant LauncherVariant;
+						LauncherVariant.LocalSpawnTransform = MakeWallMountedTransform(
 							FloorCenter,
 							Forward,
 							Plan.LogicalTileSizeCm * 0.5,
 							Hazards.GuidedLauncherWallInsetCm,
 							Hazards.GuidedLauncherMountHeightCm);
-						Variant.ResourceBlockedAddresses = {
+						LauncherVariant.ResourceBlockedAddresses = {
 							Cell.Coordinate, FrontAddress };
-						Launcher.Variants.Add(MoveTemp(Variant));
+						bool bHasPerpendicularOpening = false;
+						for (uint8 OtherDirection = 0;
+							OtherDirection < Grid::DirectionCount;
+							++OtherDirection)
+						{
+							if (OtherDirection != Direction
+								&& OtherDirection != RearDirection
+								&& (Cell.OpeningMask
+									& Grid::DirectionBit(OtherDirection)) != 0)
+							{
+								bHasPerpendicularOpening = true;
+								break;
+							}
+						}
+						LauncherVariant.PositionLog2Contribution =
+							bHasPerpendicularOpening
+								? Hazards.PlacementScoring.LauncherCornerLog2Bonus
+								: 0.0f;
+						Launcher.Variants.Add(MoveTemp(LauncherVariant));
 					}
 				}
-				if (!Spike.Variants.IsEmpty())
-				{
-					OutSpikes.Add(MoveTemp(Spike));
-				}
-				if (!Ram.Variants.IsEmpty())
-				{
-					OutRams.Add(MoveTemp(Ram));
-				}
-				if (!Launcher.Variants.IsEmpty())
-				{
-					OutLaunchers.Add(MoveTemp(Launcher));
-				}
+
+				if (!Spike.Variants.IsEmpty()) OutSpikes.Add(MoveTemp(Spike));
+				if (!Ram.Variants.IsEmpty()) OutRams.Add(MoveTemp(Ram));
+				if (!Launcher.Variants.IsEmpty()) OutLaunchers.Add(MoveTemp(Launcher));
+				if (!Wheel.Variants.IsEmpty()) OutWheels.Add(MoveTemp(Wheel));
 			}
+
 			auto CandidateLess = [](const FPlacementCandidate& A, const FPlacementCandidate& B)
 			{
 				return CoordinateLess(A.AnchorAddress, B.AnchorAddress);
@@ -658,22 +1094,7 @@ namespace ZeroEscape::LevelGeneration
 			OutSpikes.Sort(CandidateLess);
 			OutRams.Sort(CandidateLess);
 			OutLaunchers.Sort(CandidateLess);
-		}
-
-		bool CandidateMeetsSpacing(
-			const FPlacementCandidate& Candidate,
-			const TArray<int32>& NearestDistances,
-			const int32 MinimumSpacing)
-		{
-			for (const int32 Node : Candidate.SpacingNodeIndices)
-			{
-				if (!NearestDistances.IsValidIndex(Node)
-					|| NearestDistances[Node] < MinimumSpacing)
-				{
-					return false;
-				}
-			}
-			return true;
+			OutWheels.Sort(CandidateLess);
 		}
 
 		bool VariantHasOperationConflict(
@@ -690,94 +1111,305 @@ namespace ZeroEscape::LevelGeneration
 			return false;
 		}
 
-		bool CandidateHasConflictFreeVariant(
+		bool EvaluateHazardCandidate(
 			const FPlacementCandidate& Candidate,
-			const TSet<FIntVector>& AcceptedOperationAddresses)
+			const FPlacementVariant& Variant,
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const FZeroEscapeHazardPopulationTuning& HazardTuning,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const float RepresentativeTraversalSeconds,
+			const FTraversalGraph& Graph,
+			FHazardPlanningState& State,
+			FHazardCandidateEvaluation& OutEvaluation)
 		{
-			for (const FPlacementVariant& Variant : Candidate.Variants)
+			OutEvaluation = FHazardCandidateEvaluation();
+			TArray<int32> OperationNodeIndices;
+			if (!BuildOperationNodeIndices(Graph, Variant, OperationNodeIndices))
 			{
-				if (!VariantHasOperationConflict(Variant, AcceptedOperationAddresses))
+				return false;
+			}
+
+			const int32* AnchorNode = Graph.NodeByAddress.Find(Candidate.AnchorAddress);
+			if (AnchorNode == nullptr
+				|| !State.DistanceFromPlayer.IsValidIndex(*AnchorNode)
+				|| !State.DistanceToExit.IsValidIndex(*AnchorNode))
+			{
+				return false;
+			}
+			const int32 DistanceFromPlayer = State.DistanceFromPlayer[*AnchorNode];
+			const int32 DistanceToExit = State.DistanceToExit[*AnchorNode];
+			const int64 ProgressDenominator = FMath::Max<int64>(
+				static_cast<int64>(DistanceFromPlayer) + DistanceToExit, 1);
+			OutEvaluation.CandidateProgress01 = static_cast<float>(
+				static_cast<double>(DistanceFromPlayer) / ProgressDenominator);
+
+			TArray<FNearbyHazard> NearbyHazards;
+			FindNearbyAcceptedHazards(
+				Graph,
+				OperationNodeIndices,
+				Scoring.GroupRadiusTiles,
+				State,
+				NearbyHazards);
+			for (const FNearbyHazard& Nearby : NearbyHazards)
+			{
+				if (!State.AcceptedHazards.IsValidIndex(Nearby.PlacementIndex))
 				{
-					return true;
+					return false;
+				}
+				const FAcceptedHazardState& Accepted =
+					State.AcceptedHazards[Nearby.PlacementIndex];
+				if (!State.Groups.IsValidIndex(Accepted.GroupId)
+					|| !State.Groups[Accepted.GroupId].bActive)
+				{
+					return false;
+				}
+				OutEvaluation.NearbyGroupIds.AddUnique(Accepted.GroupId);
+				if (Nearby.Distance == 1)
+				{
+					OutEvaluation.AdjacentPlacementIndices.Add(
+						Nearby.PlacementIndex);
 				}
 			}
-			return false;
-		}
+			OutEvaluation.NearbyGroupIds.Sort();
+			OutEvaluation.AdjacentPlacementIndices.Sort();
 
-		void BuildFeasibleVariantIndices(
-			const FPlacementCandidate& Candidate,
-			const TSet<FIntVector>& AcceptedOperationAddresses,
-			TArray<int32>& OutVariantIndices)
-		{
-			OutVariantIndices.Reset();
-			for (int32 Index = 0; Index < Candidate.Variants.Num(); ++Index)
+			OutEvaluation.ProposedGroupAnchor = Candidate.AnchorAddress;
+			float PressureBefore = 0.0f;
+			float ProgressSum = OutEvaluation.CandidateProgress01;
+			int32 GroupPlacementCount = 1;
+			for (const int32 GroupId : OutEvaluation.NearbyGroupIds)
 			{
-				if (!VariantHasOperationConflict(
-						Candidate.Variants[Index], AcceptedOperationAddresses))
+				const FWorkingHazardGroup& Group = State.Groups[GroupId];
+				PressureBefore += Group.ActualPressure;
+				ProgressSum += Group.ProgressSum;
+				GroupPlacementCount += Group.PlacementIndices.Num();
+				if (CoordinateLess(Group.AnchorAddress, OutEvaluation.ProposedGroupAnchor))
 				{
-					OutVariantIndices.Add(Index);
+					OutEvaluation.ProposedGroupAnchor = Group.AnchorAddress;
 				}
 			}
+			OutEvaluation.GroupProgress01 = ProgressSum
+				/ FMath::Max(GroupPlacementCount, 1);
+			OutEvaluation.TargetPressure = CalculateGroupTargetPressure(
+				HazardTuning,
+				Scoring,
+				Plan.Signature.Seed,
+				OutEvaluation.ProposedGroupAnchor,
+				OutEvaluation.GroupProgress01);
+
+			float BestCombinationLog2 = 0.0f;
+			bool bHasWheelPartner = false;
+			for (const int32 PlacementIndex :
+				OutEvaluation.AdjacentPlacementIndices)
+			{
+				const EPopulationPlacementKind AcceptedKind =
+					State.AcceptedHazards[PlacementIndex].Kind;
+				if (IsWheelRamPair(Candidate.Kind, AcceptedKind))
+				{
+					bHasWheelPartner = true;
+					BestCombinationLog2 = FMath::Max(
+						BestCombinationLog2, Scoring.WheelRamLog2Bonus);
+					OutEvaluation.AddedCombinationPressure +=
+						Scoring.WheelRamPressureBonus;
+				}
+				else if (IsWheelSpikePair(Candidate.Kind, AcceptedKind))
+				{
+					bHasWheelPartner = true;
+					BestCombinationLog2 = FMath::Max(
+						BestCombinationLog2, Scoring.WheelSpikeLog2Bonus);
+					OutEvaluation.AddedCombinationPressure +=
+						Scoring.WheelSpikePressureBonus;
+				}
+			}
+
+			const float BasePressure = BasePressureForKind(
+				Candidate.Kind, Scoring, RepresentativeTraversalSeconds);
+			if (!FMath::IsFinite(BasePressure) || BasePressure < 0.0f)
+			{
+				return false;
+			}
+			OutEvaluation.PressureAfterPlacement = PressureBefore
+				+ BasePressure
+				+ OutEvaluation.AddedCombinationPressure;
+
+			const float Target = FMath::Max(OutEvaluation.TargetPressure, 0.01f);
+			const float PressureError =
+				(OutEvaluation.PressureAfterPlacement - Target) / Target;
+			const float PressureFitSignal = PressureError <= 0.0f
+				? 1.0f - 2.0f * FMath::Clamp(-PressureError, 0.0f, 1.0f)
+				: 1.0f - 2.0f * FMath::Clamp(
+					PressureError / Scoring.PressureOverloadWidthRatio,
+					0.0f,
+					1.0f);
+
+			OutEvaluation.Score.Position = Variant.PositionLog2Contribution;
+			OutEvaluation.Score.Progress = Scoring.ProgressLog2Strength
+				* (2.0f * OutEvaluation.CandidateProgress01 - 1.0f);
+			OutEvaluation.Score.GroupPressure =
+				Scoring.PressureFitLog2Strength * PressureFitSignal;
+			OutEvaluation.Score.Combination =
+				Candidate.Kind == EPopulationPlacementKind::SpikeWheel
+					&& !bHasWheelPartner
+				? Scoring.SoloWheelLog2Contribution
+				: BestCombinationLog2;
+
+			const int32 ObservedKindCount = FMath::Min(
+				Scoring.RecentKindWindow,
+				State.RecentOrdinaryKinds.Num());
+			int32 SameKindCount = 0;
+			for (int32 Offset = 0; Offset < ObservedKindCount; ++Offset)
+			{
+				const int32 RecentIndex =
+					State.RecentOrdinaryKinds.Num() - 1 - Offset;
+				SameKindCount += State.RecentOrdinaryKinds[RecentIndex]
+					== Candidate.Kind ? 1 : 0;
+			}
+			OutEvaluation.Score.Diversity = -Scoring.MaximumRecentKindPenalty
+				* static_cast<float>(SameKindCount)
+				/ FMath::Max(Scoring.RecentKindWindow, 1);
+			OutEvaluation.Score.Diagnostic =
+				PressureError > Scoring.PressureOverloadWidthRatio * 2.0f
+					? -0.5f
+					: 0.0f;
+
+			const float Total = OutEvaluation.Score.Position
+				+ OutEvaluation.Score.Progress
+				+ OutEvaluation.Score.GroupPressure
+				+ OutEvaluation.Score.Combination
+				+ OutEvaluation.Score.Diversity
+				+ OutEvaluation.Score.Diagnostic;
+			if (!FMath::IsFinite(Total)
+				|| !FMath::IsFinite(OutEvaluation.PressureAfterPlacement)
+				|| !FMath::IsFinite(OutEvaluation.TargetPressure))
+			{
+				return false;
+			}
+			OutEvaluation.Score.TotalLog2Score = FMath::Clamp(
+				Total, -Scoring.MaxAbsLog2Score, Scoring.MaxAbsLog2Score);
+			return true;
 		}
 
-		void BuildFeasiblePool(
+		bool BuildScoredKindPool(
 			const EPopulationPlacementKind Kind,
-			const int32 Weight,
+			const int32 BaseTypeWeight,
 			const TArray<FPlacementCandidate>& Candidates,
-			const TArray<int32>& NearestDistances,
-			const int32 MinimumSpacing,
-			const TSet<FIntVector>& AcceptedAnchors,
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const FZeroEscapeHazardPopulationTuning& HazardTuning,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const float RepresentativeTraversalSeconds,
+			const FTraversalGraph& Graph,
 			const TSet<FIntVector>& AcceptedOperationAddresses,
-			TArray<FFeasiblePool>& OutPools)
+			FHazardPlanningState& State,
+			TArray<FScoredKindPool>& OutPools,
+			FString& OutError)
 		{
-			if (Weight <= 0)
+			if (BaseTypeWeight <= 0)
 			{
-				return;
+				return true;
 			}
-			FFeasiblePool Pool;
-			Pool.Kind = Kind;
-			Pool.Weight = Weight;
-			Pool.Candidates = &Candidates;
-			for (int32 Index = 0; Index < Candidates.Num(); ++Index)
-			{
-				if (!AcceptedAnchors.Contains(Candidates[Index].AnchorAddress)
-					&& CandidateMeetsSpacing(
-						Candidates[Index], NearestDistances, MinimumSpacing)
-					&& CandidateHasConflictFreeVariant(
-						Candidates[Index], AcceptedOperationAddresses))
-				{
-					Pool.CandidateIndices.Add(Index);
-				}
-			}
-			if (!Pool.CandidateIndices.IsEmpty())
-			{
-				OutPools.Add(MoveTemp(Pool));
-			}
-		}
 
-		int32 PickWeightedPool(const TArray<FFeasiblePool>& Pools, FRandomStream& Rng)
-		{
-			int64 TotalWeight = 0;
-			for (const FFeasiblePool& Pool : Pools)
+			FScoredKindPool Pool;
+			Pool.Kind = Kind;
+			Pool.Candidates = &Candidates;
+			for (int32 CandidateIndex = 0;
+				CandidateIndex < Candidates.Num();
+				++CandidateIndex)
 			{
-				TotalWeight += Pool.Weight;
-			}
-			const int64 Draw = Rng.RandRange(1, static_cast<int32>(TotalWeight));
-			int64 Running = 0;
-			for (int32 Index = 0; Index < Pools.Num(); ++Index)
-			{
-				Running += Pools[Index].Weight;
-				if (Draw <= Running)
+				const FPlacementCandidate& Candidate = Candidates[CandidateIndex];
+				FScoredAnchor Anchor;
+				Anchor.CandidateIndex = CandidateIndex;
+				Anchor.BestLog2Score = -TNumericLimits<double>::Max();
+				for (int32 VariantIndex = 0;
+					VariantIndex < Candidate.Variants.Num();
+					++VariantIndex)
 				{
-					return Index;
+					const FPlacementVariant& Variant = Candidate.Variants[VariantIndex];
+					if (VariantHasOperationConflict(
+							Variant, AcceptedOperationAddresses))
+					{
+						continue;
+					}
+
+					FHazardCandidateEvaluation Evaluation;
+					if (!EvaluateHazardCandidate(
+							Candidate,
+							Variant,
+							Plan,
+							HazardTuning,
+							Scoring,
+							RepresentativeTraversalSeconds,
+							Graph,
+							State,
+							Evaluation))
+					{
+						OutError = TEXT("机关候选评分遇到非法图节点或非有限数值。");
+						return false;
+					}
+					FScoredVariant& ScoredVariant =
+						Anchor.Variants.AddDefaulted_GetRef();
+					ScoredVariant.VariantIndex = VariantIndex;
+					ScoredVariant.Score = Evaluation.Score;
+					ScoredVariant.Weight = FMath::Pow(
+						2.0, static_cast<double>(Evaluation.Score.TotalLog2Score));
+					Anchor.BestLog2Score = FMath::Max(
+						Anchor.BestLog2Score,
+						static_cast<double>(Evaluation.Score.TotalLog2Score));
+				}
+				if (!Anchor.Variants.IsEmpty())
+				{
+					Anchor.Weight = FMath::Pow(2.0, Anchor.BestLog2Score);
+					Pool.Anchors.Add(MoveTemp(Anchor));
 				}
 			}
-			return Pools.Num() - 1;
+			if (Pool.Anchors.IsEmpty())
+			{
+				return true;
+			}
+
+			Pool.Anchors.Sort([&Candidates](
+				const FScoredAnchor& First,
+				const FScoredAnchor& Second)
+			{
+				if (First.BestLog2Score != Second.BestLog2Score)
+				{
+					return First.BestLog2Score > Second.BestLog2Score;
+				}
+				const FIntVector FirstAddress =
+					Candidates[First.CandidateIndex].AnchorAddress;
+				const FIntVector SecondAddress =
+					Candidates[Second.CandidateIndex].AnchorAddress;
+				return FirstAddress != SecondAddress
+					? CoordinateLess(FirstAddress, SecondAddress)
+					: First.CandidateIndex < Second.CandidateIndex;
+			});
+			const int32 ContextCount = FMath::Min(
+				Scoring.TypeContextTopAnchorCount,
+				Pool.Anchors.Num());
+			double ContextAverage = 0.0;
+			for (int32 Index = 0; Index < ContextCount; ++Index)
+			{
+				ContextAverage += Pool.Anchors[Index].BestLog2Score;
+			}
+			ContextAverage /= ContextCount;
+			const double ContextLog2 = FMath::Clamp(
+				ContextAverage * Scoring.TypeContextStrength,
+				-static_cast<double>(Scoring.MaxAbsLog2Score),
+				static_cast<double>(Scoring.MaxAbsLog2Score));
+			Pool.TypeWeight = static_cast<double>(BaseTypeWeight)
+				* FMath::Pow(2.0, ContextLog2);
+			if (!FMath::IsFinite(Pool.TypeWeight) || Pool.TypeWeight <= 0.0)
+			{
+				OutError = TEXT("机关类型上下文权重非法。");
+				return false;
+			}
+			OutPools.Add(MoveTemp(Pool));
+			return true;
 		}
 
 		void AcceptPlacement(
 			const FPlacementCandidate& Candidate,
 			const FPlacementVariant& Variant,
+			const FPopulationPlacementScoreBreakdown& Score,
 			const FZeroEscapeHazardPopulationAssembly& Hazards,
 			TArray<FPopulationPlannedPlacement>& OutPlacements,
 			FPopulationKindCounts& InOutCounts)
@@ -803,6 +1435,8 @@ namespace ZeroEscape::LevelGeneration
 				Placement.LocalSpawnTransforms.Add(Variant.LocalSpawnTransform);
 			}
 			Placement.ResourceBlockedAddresses = Variant.ResourceBlockedAddresses;
+			Placement.SpikeWheel = Variant.SpikeWheel;
+			Placement.Score = Score;
 			OutPlacements.Add(MoveTemp(Placement));
 			switch (Candidate.Kind)
 			{
@@ -810,13 +1444,246 @@ namespace ZeroEscape::LevelGeneration
 			case EPopulationPlacementKind::SpikeTrap: ++InOutCounts.SpikeTrapGroups; break;
 			case EPopulationPlacementKind::BatteringRam: ++InOutCounts.BatteringRams; break;
 			case EPopulationPlacementKind::GuidedLauncher: ++InOutCounts.GuidedLaunchers; break;
-			default: break;
+			case EPopulationPlacementKind::SpikeWheel: ++InOutCounts.SpikeWheels; break;
+			case EPopulationPlacementKind::MagneticResource: break;
 			}
+		}
+
+		bool RegisterAcceptedHazard(
+			const FPlacementCandidate& Candidate,
+			const FPlacementVariant& Variant,
+			const FHazardCandidateEvaluation& Evaluation,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const float RepresentativeTraversalSeconds,
+			const FTraversalGraph& Graph,
+			const int32 PlacementIndex,
+			FHazardPlanningState& State)
+		{
+			TArray<int32> OperationNodeIndices;
+			if (!BuildOperationNodeIndices(Graph, Variant, OperationNodeIndices))
+			{
+				return false;
+			}
+
+			int32 SurvivorGroupId = INDEX_NONE;
+			if (Evaluation.NearbyGroupIds.IsEmpty())
+			{
+				SurvivorGroupId = State.Groups.AddDefaulted();
+			}
+			else
+			{
+				SurvivorGroupId = Evaluation.NearbyGroupIds[0];
+			}
+
+			FWorkingHazardGroup CombinedGroup;
+			CombinedGroup.AnchorAddress = Evaluation.ProposedGroupAnchor;
+			for (const int32 GroupId : Evaluation.NearbyGroupIds)
+			{
+				if (!State.Groups.IsValidIndex(GroupId)
+					|| !State.Groups[GroupId].bActive)
+				{
+					return false;
+				}
+				FWorkingHazardGroup& Group = State.Groups[GroupId];
+				CombinedGroup.PlacementIndices.Append(Group.PlacementIndices);
+				CombinedGroup.ActualPressure += Group.ActualPressure;
+				CombinedGroup.ProgressSum += Group.ProgressSum;
+				if (CoordinateLess(Group.AnchorAddress, CombinedGroup.AnchorAddress))
+				{
+					CombinedGroup.AnchorAddress = Group.AnchorAddress;
+				}
+				Group.bActive = false;
+			}
+
+			for (FAcceptedHazardState& Accepted : State.AcceptedHazards)
+			{
+				if (Evaluation.NearbyGroupIds.Contains(Accepted.GroupId))
+				{
+					Accepted.GroupId = SurvivorGroupId;
+				}
+			}
+
+			const float BasePressure = BasePressureForKind(
+				Candidate.Kind, Scoring, RepresentativeTraversalSeconds);
+			if (!FMath::IsFinite(BasePressure) || BasePressure < 0.0f)
+			{
+				return false;
+			}
+			CombinedGroup.bActive = true;
+			CombinedGroup.PlacementIndices.Add(PlacementIndex);
+			CombinedGroup.ActualPressure +=
+				BasePressure + Evaluation.AddedCombinationPressure;
+			CombinedGroup.ProgressSum += Evaluation.CandidateProgress01;
+			State.Groups[SurvivorGroupId] = MoveTemp(CombinedGroup);
+
+			FAcceptedHazardState& Accepted =
+				State.AcceptedHazards.AddDefaulted_GetRef();
+			Accepted.Kind = Candidate.Kind;
+			Accepted.AnchorAddress = Candidate.AnchorAddress;
+			Accepted.OperationNodeIndices = OperationNodeIndices;
+			Accepted.GroupId = SurvivorGroupId;
+			Accepted.BasePressure = BasePressure;
+			Accepted.Progress01 = Evaluation.CandidateProgress01;
+			const int32 AcceptedIndex = State.AcceptedHazards.Num() - 1;
+			for (const int32 Node : OperationNodeIndices)
+			{
+				State.AcceptedPlacementIndicesByNode[Node].Add(AcceptedIndex);
+			}
+			if (Candidate.Kind != EPopulationPlacementKind::Pendulum)
+			{
+				State.RecentOrdinaryKinds.Add(Candidate.Kind);
+			}
+			return true;
+		}
+
+		bool FinalizeHazardGroups(
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const FZeroEscapeHazardPopulationTuning& HazardTuning,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
+			const FTraversalGraph& Graph,
+			const TSet<FIntVector>& AcceptedOperationAddresses,
+			const FHazardPlanningState& State,
+			FPopulationPlacementPlan& InOutPlan,
+			FString& OutError)
+		{
+			TSet<FIntVector> OrdinaryAddresses;
+			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+			{
+				OrdinaryAddresses.Add(Cell.Coordinate);
+			}
+
+			for (const FWorkingHazardGroup& Group : State.Groups)
+			{
+				if (!Group.bActive)
+				{
+					continue;
+				}
+				if (Group.PlacementIndices.IsEmpty())
+				{
+					OutError = TEXT("活动机关组没有成员。");
+					return false;
+				}
+
+				FPopulationHazardGroupRecord Record;
+				Record.AnchorAddress = Group.AnchorAddress;
+				Record.PlacementIndices = Group.PlacementIndices;
+				Record.PlacementIndices.Sort();
+				const float GroupProgress = Group.ProgressSum
+					/ Group.PlacementIndices.Num();
+				Record.TargetPressure = CalculateGroupTargetPressure(
+					HazardTuning,
+					Scoring,
+					Plan.Signature.Seed,
+					Group.AnchorAddress,
+					GroupProgress);
+				Record.ActualPressure = Group.ActualPressure;
+				Record.ResourceSupportPriority = FMath::Clamp(
+					Record.ActualPressure
+						/ FMath::Max(Record.TargetPressure, 0.01f)
+						- 0.5f,
+					0.0f,
+					1.0f);
+
+				for (const int32 PlacementIndex : Record.PlacementIndices)
+				{
+					if (!InOutPlan.HazardPlacements.IsValidIndex(PlacementIndex))
+					{
+						OutError = TEXT("机关组引用了非法放置索引。");
+						return false;
+					}
+					for (const FIntVector OperationAddress :
+						InOutPlan.HazardPlacements[PlacementIndex]
+							.ResourceBlockedAddresses)
+					{
+						const int32* OperationNode =
+							Graph.NodeByAddress.Find(OperationAddress);
+						if (OperationNode == nullptr)
+						{
+							OutError = TEXT("机关组操作格不在通行图中。");
+							return false;
+						}
+						for (const int32 Neighbor : Graph.Neighbors[*OperationNode])
+						{
+							const FIntVector NeighborAddress = Graph.Addresses[Neighbor];
+							if (OrdinaryAddresses.Contains(NeighborAddress)
+								&& !IsFlowCoordinate(Plan, NeighborAddress)
+								&& !AcceptedOperationAddresses.Contains(NeighborAddress)
+								&& State.DistanceFromPlayer[Neighbor]
+									< State.DistanceFromPlayer[*OperationNode])
+							{
+								Record.SafeApproachAddresses.AddUnique(NeighborAddress);
+							}
+						}
+					}
+				}
+				Record.SafeApproachAddresses.Sort(CoordinateLess);
+				InOutPlan.HazardGroups.Add(MoveTemp(Record));
+			}
+			InOutPlan.HazardGroups.Sort([](
+				const FPopulationHazardGroupRecord& First,
+				const FPopulationHazardGroupRecord& Second)
+			{
+				return CoordinateLess(First.AnchorAddress, Second.AnchorAddress);
+			});
+
+			for (int32 PlacementIndex = 0;
+				PlacementIndex < State.AcceptedHazards.Num();
+				++PlacementIndex)
+			{
+				const FAcceptedHazardState& Wheel =
+					State.AcceptedHazards[PlacementIndex];
+				if (Wheel.Kind != EPopulationPlacementKind::SpikeWheel)
+				{
+					continue;
+				}
+				TArray<int32> AdjacentPlacements;
+				for (const int32 Node : Wheel.OperationNodeIndices)
+				{
+					for (const int32 Neighbor : Graph.Neighbors[Node])
+					{
+						for (const int32 OtherPlacement :
+							State.AcceptedPlacementIndicesByNode[Neighbor])
+						{
+							if (OtherPlacement != PlacementIndex)
+							{
+								AdjacentPlacements.AddUnique(OtherPlacement);
+							}
+						}
+					}
+				}
+				bool bHasRam = false;
+				bool bHasSpike = false;
+				for (const int32 OtherPlacement : AdjacentPlacements)
+				{
+					const EPopulationPlacementKind OtherKind =
+						State.AcceptedHazards[OtherPlacement].Kind;
+					bHasRam |= OtherKind == EPopulationPlacementKind::BatteringRam;
+					bHasSpike |= OtherKind == EPopulationPlacementKind::SpikeTrap;
+				}
+				if (bHasRam)
+				{
+					++InOutPlan.KindCounts.WheelRamCombinations;
+				}
+				else if (bHasSpike)
+				{
+					++InOutPlan.KindCounts.WheelSpikeCombinations;
+				}
+				else
+				{
+					++InOutPlan.KindCounts.UnpairedWheels;
+				}
+				if (AdjacentPlacements.IsEmpty())
+				{
+					++InOutPlan.KindCounts.LiteralSoloWheels;
+				}
+			}
+			return true;
 		}
 
 		bool PlanHazards(
 			const FZeroEscapeGeneratedLevelPlan& Plan,
 			const double FloorTopZCm,
+			const float RepresentativeTraversalSeconds,
 			const FZeroEscapeHazardPopulationAssembly& Hazards,
 			const FZeroEscapePopulationDifficultySettings& Difficulty,
 			const FTraversalGraph& Graph,
@@ -826,9 +1693,17 @@ namespace ZeroEscape::LevelGeneration
 			TSet<FIntVector>& OutResourceBlockedAddresses,
 			FString& OutError)
 		{
-			TArray<int32> NearestDistances;
-			NearestDistances.Init(UnreachableDistance, Graph.Addresses.Num());
-			TSet<FIntVector> AcceptedAnchors;
+			FHazardPlanningState State;
+			State.AcceptedPlacementIndicesByNode.SetNum(Graph.Addresses.Num());
+			if (!BuildGraphDistances(
+					Graph, Plan.PlayerSpawnCoordinate, State.DistanceFromPlayer)
+				|| !BuildGraphDistances(
+					Graph, Plan.ExitCoordinate, State.DistanceToExit))
+			{
+				OutError = TEXT("玩家出生点或 Exit 不在完整通行图中。");
+				return false;
+			}
+
 			for (const FZeroEscapeGeneratedStructure& Structure : Plan.Structures)
 			{
 				if (Structure.Kind != EZeroEscapeStructureKind::HighCeilingRoom)
@@ -843,15 +1718,45 @@ namespace ZeroEscape::LevelGeneration
 					return false;
 				}
 				const FPlacementVariant& Variant = Candidate.Variants[0];
+				FHazardCandidateEvaluation Evaluation;
+				if (!EvaluateHazardCandidate(
+						Candidate,
+						Variant,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						State,
+						Evaluation))
+				{
+					OutError = TEXT("强制摆锤无法建立机关组诊断。");
+					return false;
+				}
+				const int32 PlacementIndex = InOutPlan.HazardPlacements.Num();
 				AcceptPlacement(
-					Candidate, Variant, Hazards,
+					Candidate,
+					Variant,
+					FPopulationPlacementScoreBreakdown(),
+					Hazards,
 					InOutPlan.HazardPlacements, InOutPlan.KindCounts);
-				AcceptedAnchors.Add(Candidate.AnchorAddress);
 				for (const FIntVector Address : Variant.ResourceBlockedAddresses)
 				{
 					OutResourceBlockedAddresses.Add(Address);
 				}
-				UpdateNearestDistances(Graph, Candidate.SpacingNodeIndices, NearestDistances);
+				if (!RegisterAcceptedHazard(
+						Candidate,
+						Variant,
+						Evaluation,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						PlacementIndex,
+						State))
+				{
+					OutError = TEXT("强制摆锤无法提交机关组状态。");
+					return false;
+				}
 			}
 
 			InOutPlan.HazardStats.TargetCount = FMath::Max(
@@ -859,64 +1764,191 @@ namespace ZeroEscape::LevelGeneration
 			TArray<FPlacementCandidate> Spikes;
 			TArray<FPlacementCandidate> Rams;
 			TArray<FPlacementCandidate> Launchers;
+			TArray<FPlacementCandidate> Wheels;
 			BuildOrdinaryCandidates(
-				Plan, FloorTopZCm, Hazards, Graph, Spikes, Rams, Launchers);
+				Plan,
+				FloorTopZCm,
+				Hazards,
+				Graph,
+				Spikes,
+				Rams,
+				Launchers,
+				Wheels);
 			InOutPlan.KindCounts.SpikeCandidateAnchors = Spikes.Num();
 			InOutPlan.KindCounts.RamCandidateAnchors = Rams.Num();
 			InOutPlan.KindCounts.LauncherCandidateAnchors = Launchers.Num();
+			InOutPlan.KindCounts.WheelCandidateAnchors = Wheels.Num();
 			InOutPlan.HazardStats.CandidateAnchorCount =
-				Spikes.Num() + Rams.Num() + Launchers.Num();
+				Spikes.Num() + Rams.Num() + Launchers.Num() + Wheels.Num();
 			int32 Remaining = InOutPlan.HazardStats.TargetCount
 				- InOutPlan.KindCounts.Pendulums;
 			while (Remaining > 0)
 			{
-				TArray<FFeasiblePool> Pools;
-				BuildFeasiblePool(EPopulationPlacementKind::SpikeTrap,
-					Difficulty.Hazards.SpikeTrapWeight, Spikes, NearestDistances,
-					Difficulty.Hazards.MinimumRouteSpacingTiles, AcceptedAnchors,
-					OutResourceBlockedAddresses, Pools);
-				BuildFeasiblePool(EPopulationPlacementKind::BatteringRam,
-					Difficulty.Hazards.BatteringRamWeight, Rams, NearestDistances,
-					Difficulty.Hazards.MinimumRouteSpacingTiles, AcceptedAnchors,
-					OutResourceBlockedAddresses, Pools);
-				BuildFeasiblePool(EPopulationPlacementKind::GuidedLauncher,
-					Difficulty.Hazards.GuidedLauncherWeight, Launchers, NearestDistances,
-					Difficulty.Hazards.MinimumRouteSpacingTiles, AcceptedAnchors,
-					OutResourceBlockedAddresses, Pools);
+				TArray<FScoredKindPool> Pools;
+				if (!BuildScoredKindPool(
+						EPopulationPlacementKind::SpikeTrap,
+						Difficulty.Hazards.SpikeTrapWeight,
+						Spikes,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						OutResourceBlockedAddresses,
+						State,
+						Pools,
+						OutError)
+					|| !BuildScoredKindPool(
+						EPopulationPlacementKind::BatteringRam,
+						Difficulty.Hazards.BatteringRamWeight,
+						Rams,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						OutResourceBlockedAddresses,
+						State,
+						Pools,
+						OutError)
+					|| !BuildScoredKindPool(
+						EPopulationPlacementKind::GuidedLauncher,
+						Difficulty.Hazards.GuidedLauncherWeight,
+						Launchers,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						OutResourceBlockedAddresses,
+						State,
+						Pools,
+						OutError)
+					|| !BuildScoredKindPool(
+						EPopulationPlacementKind::SpikeWheel,
+						Difficulty.Hazards.SpikeWheelWeight,
+						Wheels,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						OutResourceBlockedAddresses,
+						State,
+						Pools,
+						OutError))
+				{
+					return false;
+				}
 				if (Pools.IsEmpty())
 				{
 					break;
 				}
-				const FFeasiblePool& Pool = Pools[PickWeightedPool(Pools, Rng)];
-				const int32 CandidateIndex = Pool.CandidateIndices[
-					Rng.RandRange(0, Pool.CandidateIndices.Num() - 1)];
-				const FPlacementCandidate& Candidate = (*Pool.Candidates)[CandidateIndex];
-				TArray<int32> FeasibleVariantIndices;
-				BuildFeasibleVariantIndices(
-					Candidate, OutResourceBlockedAddresses, FeasibleVariantIndices);
-				if (FeasibleVariantIndices.IsEmpty())
+				const int32 PoolIndex = PickWeightedIndex(
+					Pools,
+					[](const FScoredKindPool& Pool)
+					{
+						return Pool.TypeWeight;
+					},
+					Rng);
+				if (!Pools.IsValidIndex(PoolIndex))
 				{
-					OutError = TEXT("机关候选的可用方向在抽取期间失效。");
+					OutError = TEXT("机关类型加权抽取失败。");
 					return false;
 				}
-				const FPlacementVariant& Variant = Candidate.Variants[
-					FeasibleVariantIndices[
-						Rng.RandRange(0, FeasibleVariantIndices.Num() - 1)]];
+				const FScoredKindPool& Pool = Pools[PoolIndex];
+				const int32 AnchorIndex = PickWeightedIndex(
+					Pool.Anchors,
+					[](const FScoredAnchor& Anchor)
+					{
+						return Anchor.Weight;
+					},
+					Rng);
+				if (!Pool.Anchors.IsValidIndex(AnchorIndex))
+				{
+					OutError = TEXT("机关锚点加权抽取失败。");
+					return false;
+				}
+				const FScoredAnchor& Anchor = Pool.Anchors[AnchorIndex];
+				const int32 VariantPickIndex = PickWeightedIndex(
+					Anchor.Variants,
+					[](const FScoredVariant& Variant)
+					{
+						return Variant.Weight;
+					},
+					Rng);
+				if (!Anchor.Variants.IsValidIndex(VariantPickIndex)
+					|| Pool.Candidates == nullptr
+					|| !Pool.Candidates->IsValidIndex(Anchor.CandidateIndex))
+				{
+					OutError = TEXT("机关方向加权抽取失败。");
+					return false;
+				}
+
+				const FPlacementCandidate& Candidate =
+					(*Pool.Candidates)[Anchor.CandidateIndex];
+				const FScoredVariant& ScoredVariant =
+					Anchor.Variants[VariantPickIndex];
+				if (!Candidate.Variants.IsValidIndex(ScoredVariant.VariantIndex))
+				{
+					OutError = TEXT("机关方向索引非法。");
+					return false;
+				}
+				const FPlacementVariant& Variant =
+					Candidate.Variants[ScoredVariant.VariantIndex];
+				FHazardCandidateEvaluation Evaluation;
+				if (!EvaluateHazardCandidate(
+						Candidate,
+						Variant,
+						Plan,
+						Difficulty.Hazards,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						State,
+						Evaluation))
+				{
+					OutError = TEXT("选中机关无法重建评分上下文。");
+					return false;
+				}
+				const int32 PlacementIndex = InOutPlan.HazardPlacements.Num();
 				AcceptPlacement(
-					Candidate, Variant, Hazards,
+					Candidate,
+					Variant,
+					Evaluation.Score,
+					Hazards,
 					InOutPlan.HazardPlacements, InOutPlan.KindCounts);
-				AcceptedAnchors.Add(Candidate.AnchorAddress);
 				for (const FIntVector Address : Variant.ResourceBlockedAddresses)
 				{
 					OutResourceBlockedAddresses.Add(Address);
 				}
-				UpdateNearestDistances(Graph, Candidate.SpacingNodeIndices, NearestDistances);
+				if (!RegisterAcceptedHazard(
+						Candidate,
+						Variant,
+						Evaluation,
+						Hazards.PlacementScoring,
+						RepresentativeTraversalSeconds,
+						Graph,
+						PlacementIndex,
+						State))
+				{
+					OutError = TEXT("选中机关无法提交组状态。");
+					return false;
+				}
 				--Remaining;
 			}
 			InOutPlan.HazardStats.ActualCount = InOutPlan.HazardPlacements.Num();
 			InOutPlan.HazardStats.UnderfilledCount = FMath::Max(
 				0, InOutPlan.HazardStats.TargetCount - InOutPlan.HazardStats.ActualCount);
-			return true;
+			return FinalizeHazardGroups(
+				Plan,
+				Difficulty.Hazards,
+				Hazards.PlacementScoring,
+				Graph,
+				OutResourceBlockedAddresses,
+				State,
+				InOutPlan,
+				OutError);
 		}
 
 		void PlanResources(
@@ -930,6 +1962,21 @@ namespace ZeroEscape::LevelGeneration
 			FRandomStream& Rng,
 			FPopulationPlacementPlan& InOutPlan)
 		{
+			// 机关层已经完成且不再消费随机数；资源只读取其纯值诊断，
+			// 因而资源支持参数和资源随机流都不会反向洗牌机关。
+			TMap<FIntVector, float> SupportPriorityByAddress;
+			for (const FPopulationHazardGroupRecord& Group : InOutPlan.HazardGroups)
+			{
+				const float Priority = FMath::Clamp(
+					Group.ResourceSupportPriority, 0.0f, 1.0f);
+				for (const FIntVector Address : Group.SafeApproachAddresses)
+				{
+					float& ExistingPriority =
+						SupportPriorityByAddress.FindOrAdd(Address);
+					ExistingPriority = FMath::Max(ExistingPriority, Priority);
+				}
+			}
+
 			TArray<FIntVector> RemainingAnchors;
 			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
 			{
@@ -949,17 +1996,44 @@ namespace ZeroEscape::LevelGeneration
 			TArray<FIntVector> SelectedAnchors;
 			while (SelectedAnchors.Num() < ResourceTarget && !RemainingAnchors.IsEmpty())
 			{
-				const int32 PickIndex = Rng.RandRange(0, RemainingAnchors.Num() - 1);
-				const FIntVector Address = RemainingAnchors[PickIndex];
-				RemainingAnchors.RemoveAtSwap(PickIndex, 1, EAllowShrinking::No);
-				const int32 Node = Graph.NodeByAddress.FindChecked(Address);
-				if (NearestDistances[Node] < Difficulty.Resources.MinimumRouteSpacingTiles)
+				// 资源之间的物理间距仍是合法性边界；先稳定移除不再可行的锚点，
+				// 再在全部合法锚点中做非零软加权，避免“抽中后拒绝”稀释支持效果。
+				for (int32 Index = RemainingAnchors.Num() - 1; Index >= 0; --Index)
 				{
-					++InOutPlan.ResourceStats.SpacingRejectedCount;
-					continue;
+					const int32 Node = Graph.NodeByAddress.FindChecked(
+						RemainingAnchors[Index]);
+					if (NearestDistances[Node]
+						< Difficulty.Resources.MinimumRouteSpacingTiles)
+					{
+						RemainingAnchors.RemoveAt(Index, 1, EAllowShrinking::No);
+						++InOutPlan.ResourceStats.SpacingRejectedCount;
+					}
 				}
+				if (RemainingAnchors.IsEmpty())
+				{
+					break;
+				}
+
+				const int32 PickIndex = PickWeightedIndex(
+					RemainingAnchors,
+					[&SupportPriorityByAddress, &Resources](const FIntVector Address)
+					{
+						const float* Priority = SupportPriorityByAddress.Find(Address);
+						const double SupportLog2 = static_cast<double>(
+							Priority == nullptr ? 0.0f : *Priority)
+							* Resources.HighPressureSupportLog2Bonus;
+						return FMath::Pow(2.0, SupportLog2);
+					},
+					Rng);
+				if (!RemainingAnchors.IsValidIndex(PickIndex))
+				{
+					break;
+				}
+				const FIntVector Address = RemainingAnchors[PickIndex];
+				RemainingAnchors.RemoveAt(PickIndex, 1, EAllowShrinking::No);
+				const int32 Node = Graph.NodeByAddress.FindChecked(Address);
 				SelectedAnchors.Add(Address);
-				UpdateNearestDistances(
+				UpdateNearestResourceDistances(
 					Graph, TConstArrayView<int32>(&Node, 1), NearestDistances);
 			}
 
@@ -1016,6 +2090,7 @@ namespace ZeroEscape::LevelGeneration
 	EPopulationPlacementResult FPopulationPlacementPolicy::BuildPlan(
 		const FZeroEscapeGeneratedLevelPlan& LevelPlan,
 		const double FloorTopZCm,
+		const float PlayerMaxWalkSpeedCmPerSecond,
 		const FZeroEscapeHazardPopulationAssembly& HazardAssembly,
 		const FZeroEscapeResourcePopulationAssembly& ResourceAssembly,
 		const TConstArrayView<FZeroEscapePopulationDifficultySettings> Difficulties,
@@ -1024,6 +2099,12 @@ namespace ZeroEscape::LevelGeneration
 	{
 		OutPlan = FPopulationPlacementPlan();
 		OutError.Reset();
+		if (!FMath::IsFinite(PlayerMaxWalkSpeedCmPerSecond)
+			|| PlayerMaxWalkSpeedCmPerSecond <= 0.0f)
+		{
+			OutError = TEXT("玩家名义地面速度必须为有限正数。");
+			return EPopulationPlacementResult::InvalidConfiguration;
+		}
 		const FZeroEscapePopulationDifficultySettings* Difficulty =
 			ValidateAndFindDifficulty(
 				Difficulties, LevelPlan.Signature.Difficulty, OutError);
@@ -1045,6 +2126,17 @@ namespace ZeroEscape::LevelGeneration
 		{
 			return EPopulationPlacementResult::InvalidConfiguration;
 		}
+		const double TraversalSeconds = LevelPlan.LogicalTileSizeCm
+			/ static_cast<double>(PlayerMaxWalkSpeedCmPerSecond);
+		if (!FMath::IsFinite(TraversalSeconds)
+			|| TraversalSeconds <= 0.0
+			|| TraversalSeconds > TNumericLimits<float>::Max())
+		{
+			OutError = TEXT("玩家速度与逻辑格宽无法得到有限通行时间。");
+			return EPopulationPlacementResult::InvalidConfiguration;
+		}
+		const float RepresentativeTraversalSeconds =
+			static_cast<float>(TraversalSeconds);
 
 		FTraversalGraph Graph;
 		if (!BuildTraversalGraph(LevelPlan, Graph, OutError))
@@ -1062,6 +2154,7 @@ namespace ZeroEscape::LevelGeneration
 		if (!PlanHazards(
 				LevelPlan,
 				FloorTopZCm,
+				RepresentativeTraversalSeconds,
 				HazardAssembly,
 				*Difficulty,
 				Graph,

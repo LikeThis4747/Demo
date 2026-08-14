@@ -37,6 +37,11 @@ public:
 	virtual void OnConstruction(const FTransform& Transform) override;
 	virtual void Tick(float DeltaSeconds) override;
 
+	/** 延迟生成专用：在 FinishSpawningActor 前固定一格路线、路线种子与归一化相位。 */
+	bool ConfigurePopulationPlacement(
+		int32 InRouteVariantSeed,
+		float InNormalizedPhase01);
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -100,4 +105,8 @@ private:
 	float TravelDirectionSign = 1.0f;
 	float VisualRollDegrees = 0.0f;
 	bool bActiveRouteClosedLoop = true;
+	/** 仅由 ConfigurePopulationPlacement 在 BeginPlay 前写入。 */
+	float PopulationNormalizedPhase01 = 0.0f;
+	/** 为 true 时路线不再混入世界位置，并使用显式归一化相位。 */
+	bool bHasPopulationRouteConfiguration = false;
 };

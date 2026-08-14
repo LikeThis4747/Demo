@@ -64,6 +64,37 @@ ASpikeWheelHazard::ASpikeWheelHazard()
 	WheelMesh->SetCanEverAffectNavigation(false);
 }
 
+bool ASpikeWheelHazard::ConfigurePopulationPlacement(
+	const int32 InRouteVariantSeed,
+	const float InNormalizedPhase01)
+{
+	FString TuningError;
+	const bool bHasOneCellRoute = IsValid(TuningData)
+		&& TuningData->IsConfigured(TuningError)
+		&& TuningData->RoutePatterns.ContainsByPredicate(
+			[](const FSpikeWheelRoutePattern& Pattern)
+			{
+				return Pattern.FootprintSpanTiles == 1;
+			});
+	if (HasActorBegunPlay()
+		|| IsActorBeginningPlay()
+		|| bHasPopulationRouteConfiguration
+		|| !bHasOneCellRoute
+		|| !FMath::IsFinite(InNormalizedPhase01)
+		|| InNormalizedPhase01 < 0.0f
+		|| InNormalizedPhase01 >= 1.0f)
+	{
+		return false;
+	}
+
+	// Population 首版只声明一格占用；手放实例未调用本函数时仍保留原跨度。
+	FootprintSpanTiles = 1;
+	RouteVariantSeed = InRouteVariantSeed;
+	PopulationNormalizedPhase01 = InNormalizedPhase01;
+	bHasPopulationRouteConfiguration = true;
+	return true;
+}
+
 void ASpikeWheelHazard::OnConstruction(const FTransform& Transform)
 {
 	Super::OnConstruction(Transform);
@@ -127,17 +158,24 @@ bool ASpikeWheelHazard::BuildRoute(FString& OutError)
 		return false;
 	}
 
-	const FVector ActorLocation = GetActorLocation();
 	uint32 EffectiveSeed = GetTypeHash(RouteVariantSeed);
-	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.X / TuningData->TileSizeCm)));
-	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Y / TuningData->TileSizeCm)));
-	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Z / TuningData->TileSizeCm)));
+	if (!bHasPopulationRouteConfiguration)
+	{
+		// 手放实例继续把世界格坐标混入种子，保持既有实例之间的确定性变化。
+		const FVector ActorLocation = GetActorLocation();
+		EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.X / TuningData->TileSizeCm)));
+		EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Y / TuningData->TileSizeCm)));
+		EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Z / TuningData->TileSizeCm)));
+	}
 	FRandomStream Random(static_cast<int32>(EffectiveSeed));
 	const int32 PatternIndex = MatchingPatternIndices[Random.RandRange(0, MatchingPatternIndices.Num() - 1)];
 	const FSpikeWheelRoutePattern& Pattern = TuningData->RoutePatterns[PatternIndex];
 	const float MirrorSign = Random.RandRange(0, 1) == 0 ? 1.0f : -1.0f;
 	const bool bReverse = Random.RandRange(0, 1) != 0;
-	const float StartPhase = Random.FRand();
+	// 手放模式仍在原位置消费 FRand，避免改变现有 Level0 的随机调用顺序。
+	const float StartPhase = bHasPopulationRouteConfiguration
+		? PopulationNormalizedPhase01
+		: Random.FRand();
 
 	RouteSpline->ClearSplinePoints(false);
 	RouteSpline->SetClosedLoop(false, false);
@@ -163,11 +201,30 @@ bool ASpikeWheelHazard::BuildRoute(FString& OutError)
 	}
 
 	bActiveRouteClosedLoop = Pattern.bClosedLoop;
-	TravelDirectionSign = bReverse ? -1.0f : 1.0f;
-	DistanceAlongSplineCm = StartPhase * SplineLengthCm;
-	TraversalPhaseCm = bReverse && !bActiveRouteClosedLoop
-		? 2.0f * SplineLengthCm - DistanceAlongSplineCm
-		: DistanceAlongSplineCm;
+	if (bHasPopulationRouteConfiguration && !bActiveRouteClosedLoop)
+	{
+		// 开放路线的归一化相位覆盖完整往返，而不是只覆盖去程。
+		TraversalPhaseCm = StartPhase * 2.0f * SplineLengthCm;
+		if (TraversalPhaseCm <= SplineLengthCm)
+		{
+			DistanceAlongSplineCm = TraversalPhaseCm;
+			TravelDirectionSign = 1.0f;
+		}
+		else
+		{
+			DistanceAlongSplineCm =
+				2.0f * SplineLengthCm - TraversalPhaseCm;
+			TravelDirectionSign = -1.0f;
+		}
+	}
+	else
+	{
+		TravelDirectionSign = bReverse ? -1.0f : 1.0f;
+		DistanceAlongSplineCm = StartPhase * SplineLengthCm;
+		TraversalPhaseCm = bReverse && !bActiveRouteClosedLoop
+			? 2.0f * SplineLengthCm - DistanceAlongSplineCm
+			: DistanceAlongSplineCm;
+	}
 	VisualRollDegrees = 0.0f;
 	UpdateWheelTransform(0.0f);
 	return true;
