@@ -219,7 +219,9 @@ void UMagneticThrowBreakComponent::HandleThrownBlockingHit(
 	AActor* OtherActor,
 	UPrimitiveComponent* OtherComponent,
 	const FVector& NormalImpulse,
-	const FHitResult& Hit)
+	const FHitResult& Hit,
+	const bool bExplosiveHit,
+	const float FragmentSeparationMultiplier)
 {
 	const float ImpulseMagnitude = NormalImpulse.Size();
 	if (!bConfigurationValid
@@ -229,7 +231,9 @@ void UMagneticThrowBreakComponent::HandleThrownBlockingHit(
 		|| !IsValid(OtherActor)
 		|| OtherActor == GetOwner()
 		|| !FMath::IsFinite(ImpulseMagnitude)
-		|| ImpulseMagnitude < MinimumBreakNormalImpulse
+		|| (!bExplosiveHit && ImpulseMagnitude < MinimumBreakNormalImpulse)
+		|| !FMath::IsFinite(FragmentSeparationMultiplier)
+		|| FragmentSeparationMultiplier < 1.0f
 		|| !IsValid(GetWorld()))
 	{
 		return;
@@ -271,6 +275,9 @@ void UMagneticThrowBreakComponent::HandleThrownBlockingHit(
 	PendingBody = HitComponent;
 	PendingLinearVelocity = CorrectedVelocity;
 	PendingAngularVelocityRadians = AngularVelocityRadians;
+	PendingFragmentSeparationMultiplier = bExplosiveHit
+		? FragmentSeparationMultiplier
+		: 1.0f;
 	SetState(EMagneticThrowBreakState::BreakQueued, TEXT("first qualifying blocking hit"));
 	UE_LOG(LogMagneticThrowBreak, Log,
 		TEXT("%s queued fracture after hitting %s: impulse %.1f, mass %.1fkg, post-solve %.1fcm/s, inherited %.1fcm/s."),
@@ -308,6 +315,7 @@ void UMagneticThrowBreakComponent::ProcessQueuedBreak()
 	const FTransform SpawnTransform = Body->GetComponentTransform();
 	const FVector LinearVelocity = PendingLinearVelocity;
 	const FVector AngularVelocityRadians = PendingAngularVelocityRadians;
+	const float FragmentSeparationMultiplier = PendingFragmentSeparationMultiplier;
 	if (!UE::ZeroEscape::Magnetism::IsFiniteMotionVector(LinearVelocity)
 		|| !UE::ZeroEscape::Magnetism::IsFiniteMotionVector(AngularVelocityRadians))
 	{
@@ -328,7 +336,10 @@ void UMagneticThrowBreakComponent::ProcessQueuedBreak()
 		return;
 	}
 
-	Fracture->SetInheritedMotion(LinearVelocity, AngularVelocityRadians);
+	Fracture->SetInheritedMotion(
+		LinearVelocity,
+		AngularVelocityRadians,
+		FragmentSeparationMultiplier);
 	AMagneticFractureActor* FinishedFracture = Cast<AMagneticFractureActor>(
 		UGameplayStatics::FinishSpawningActor(
 			Fracture,
@@ -355,6 +366,7 @@ void UMagneticThrowBreakComponent::ResetPendingBreakData()
 	PendingBody.Reset();
 	PendingLinearVelocity = FVector::ZeroVector;
 	PendingAngularVelocityRadians = FVector::ZeroVector;
+	PendingFragmentSeparationMultiplier = 1.0f;
 }
 
 /** 替换失败时只降级本实例，不让配置错误删除玩家资源或每次碰撞循环报错。 */

@@ -55,7 +55,8 @@ AMagneticFractureActor::AMagneticFractureActor()
 /** 在组件注册和 Chaos 代理创建前写入用户指定的初始线速度与角速度。 */
 void AMagneticFractureActor::SetInheritedMotion(
 	const FVector& LinearVelocity,
-	const FVector& AngularVelocityRadians)
+	const FVector& AngularVelocityRadians,
+	const float SeparationMultiplier)
 {
 	if (!IsValid(GeometryCollection))
 	{
@@ -77,6 +78,10 @@ void AMagneticFractureActor::SetInheritedMotion(
 	GeometryCollection->InitialAngularVelocity = bAngularValid
 		? AngularVelocityRadians
 		: FVector::ZeroVector;
+	FragmentSeparationMultiplier = FMath::IsFinite(SeparationMultiplier)
+		&& SeparationMultiplier >= 1.0f
+		? SeparationMultiplier
+		: 1.0f;
 }
 
 /** RestCollection 缺失时自毁并让调用方保留原物体；有效时立即解簇并启动异常兜底。 */
@@ -113,12 +118,14 @@ void AMagneticFractureActor::BeginPlay()
 	const float SeparationRadius = FMath::Max(
 		GeometryCollection->Bounds.SphereRadius * FragmentSeparationRadiusScale,
 		1.0f);
-	if (FragmentSeparationSpeed > 0.0f)
+	const float EffectiveSeparationSpeed =
+		FragmentSeparationSpeed * FragmentSeparationMultiplier;
+	if (EffectiveSeparationSpeed > 0.0f)
 	{
 		GeometryCollection->AddRadialImpulse(
 			GeometryCollection->Bounds.Origin,
 			SeparationRadius,
-			FragmentSeparationSpeed,
+			EffectiveSeparationSpeed,
 			ERadialImpulseFalloff::RIF_Linear,
 			true);
 	}
@@ -126,7 +133,7 @@ void AMagneticFractureActor::BeginPlay()
 	UE_LOG(LogMagneticFractureActor, Log,
 		TEXT("%s crumbled active clusters with %.1fcm/s separation over %.1fcm and %.2fs safety lifetime."),
 		*GetNameSafe(this),
-		FragmentSeparationSpeed,
+		EffectiveSeparationSpeed,
 		SeparationRadius,
 		GetLifeSpan());
 }

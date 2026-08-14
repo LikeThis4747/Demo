@@ -96,4 +96,8 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "输入|动作")
 	TObjectPtr<UInputAction> MagneticThrowAction;
+
+	/** 持有磁力物时切换普通/爆裂状态的 Boolean 动作；首版由 E 键触发。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "输入|动作")
+	TObjectPtr<UInputAction> MagneticExplosionModeAction;
 };

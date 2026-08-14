@@ -9,10 +9,18 @@
 
 #include "Components/Magnetism/MagneticObjectComponent.h"
 
+#include "CollisionQueryParams.h"
+#include "CollisionShape.h"
+#include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/PrimitiveComponent.h"
+#include "Data/Magnetism/MagneticGrabTuningData.h"
 #include "Data/Physics/CharacterImpactSourceProfile.h"
+#include "Engine/OverlapResult.h"
 #include "Engine/World.h"
+#include "GameFramework/DamageType.h"
+#include "GameFramework/Pawn.h"
 #include "Interfaces/CharacterImpactReceiver.h"
+#include "Kismet/GameplayStatics.h"
 #include "Physics/CharacterImpactTypes.h"
 #include "Physics/DemoCollisionChannels.h"
 #include "Physics/DemoHitTags.h"
@@ -40,11 +48,13 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	UPrimitiveComponent* ThrownPrimitive,
 	AActor* Thrower,
 	const float LightActiveDurationSeconds,
-	const float MaximumBreakMonitoringSeconds)
+	const float MaximumBreakMonitoringSeconds,
+	UMagneticGrabTuningData* ExplosionTuning)
 {
 	DisarmThrownImpact();
 
 	FString ConfigurationError;
+	const bool bArmExplosion = IsValid(ExplosionTuning);
 	const ECollisionEnabled::Type ExistingCollision = IsValid(ThrownPrimitive)
 		? ThrownPrimitive->GetCollisionEnabled()
 		: ECollisionEnabled::NoCollision;
@@ -55,6 +65,7 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 		|| !IsValid(Thrower)
 		|| !IsValid(StandingImpactSourceProfile)
 		|| !StandingImpactSourceProfile->IsConfigured(ConfigurationError)
+		|| (bArmExplosion && !ExplosionTuning->IsConfigured(ConfigurationError))
 		|| !FMath::IsFinite(LightActiveDurationSeconds)
 		|| LightActiveDurationSeconds <= 0.0f
 		|| !IsValid(GetWorld()))
@@ -95,7 +106,9 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	ArmedPrimitive = ThrownPrimitive;
 	ActiveThrower = Thrower;
 	ActiveImpactId = FGuid::NewGuid();
-	bLightImpactWindowActive = true;
+	ActiveExplosionTuning = bArmExplosion ? ExplosionTuning : nullptr;
+	bLightImpactWindowActive = !bArmExplosion;
+	bExplosionImpactWindowActive = bArmExplosion;
 	bKeepMonitoringForBreak = bEnableBreakMonitoring;
 	bImpactConsumed = false;
 
@@ -125,8 +138,9 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	}
 
 	UE_LOG(LogMagneticObjectImpact, Verbose,
-		TEXT("%s armed thrown impact (Light %.2fs, break monitor %.2fs)."),
+		TEXT("%s armed thrown impact (%s %.2fs, break monitor %.2fs)."),
 		*GetNameSafe(GetOwner()),
+		bArmExplosion ? TEXT("Explosion") : TEXT("Light"),
 		LightActiveDurationSeconds,
 		bKeepMonitoringForBreak ? MaximumBreakMonitoringSeconds : 0.0f);
 	return true;
@@ -168,9 +182,11 @@ void UMagneticObjectComponent::DisarmThrownImpact()
 
 	ArmedPrimitive.Reset();
 	ActiveThrower.Reset();
+	ActiveExplosionTuning.Reset();
 	ActiveImpactId.Invalidate();
 	CollisionSnapshot.Reset();
 	bLightImpactWindowActive = false;
+	bExplosionImpactWindowActive = false;
 	bKeepMonitoringForBreak = false;
 	bImpactConsumed = false;
 }
@@ -198,12 +214,41 @@ void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 		return;
 	}
 
+
+	if (bExplosionImpactWindowActive && ActiveExplosionTuning.IsValid())
+	{
+		const float FragmentMultiplier =
+			ActiveExplosionTuning->ExplosionFragmentSeparationMultiplier;
+		bExplosionImpactWindowActive = false;
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(ActiveDurationTimerHandle);
+		}
+
+		const FVector ExplosionOrigin = Hit.ImpactPoint.ContainsNaN()
+			? HitComponent->GetComponentLocation()
+			: FVector(Hit.ImpactPoint);
+		TriggerExplosion(ExplosionOrigin);
+		ThrownBlockingHit.Broadcast(
+			HitComponent,
+			OtherActor,
+			OtherComponent,
+			NormalImpulse,
+			Hit,
+			true,
+			FragmentMultiplier);
+		DisarmThrownImpact();
+		return;
+	}
+
 	ThrownBlockingHit.Broadcast(
 		HitComponent,
 		OtherActor,
 		OtherComponent,
 		NormalImpulse,
-		Hit);
+		Hit,
+		false,
+		1.0f);
 
 	if (!bLightImpactWindowActive
 		|| bImpactConsumed
@@ -267,6 +312,7 @@ void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 void UMagneticObjectComponent::HandleLightWindowExpired()
 {
 	bLightImpactWindowActive = false;
+	bExplosionImpactWindowActive = false;
 	if (!bKeepMonitoringForBreak)
 	{
 		DisarmThrownImpact();
@@ -274,6 +320,111 @@ void UMagneticObjectComponent::HandleLightWindowExpired()
 	}
 
 	RestoreAttackIdentityButKeepHitMonitoring();
+}
+
+/** 爆炸由同一投掷 ImpactId 对每个 Pawn Actor 只结算一次；碎片不参与该查询。 */
+void UMagneticObjectComponent::TriggerExplosion(const FVector& ExplosionOrigin)
+{
+	UWorld* World = GetWorld();
+	UMagneticGrabTuningData* ExplosionTuning = ActiveExplosionTuning.Get();
+	if (!IsValid(World) || !IsValid(ExplosionTuning) || !ActiveImpactId.IsValid())
+	{
+		return;
+	}
+
+	FCollisionObjectQueryParams ObjectQuery;
+	ObjectQuery.AddObjectTypesToQuery(ECC_Pawn);
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(MagneticExplosion), false, GetOwner());
+	TArray<FOverlapResult> Overlaps;
+	World->OverlapMultiByObjectType(
+		Overlaps,
+		ExplosionOrigin,
+		FQuat::Identity,
+		ObjectQuery,
+		FCollisionShape::MakeSphere(ExplosionTuning->ExplosionRadius),
+		QueryParams);
+
+	AController* InstigatorController = nullptr;
+	if (const APawn* ThrowerPawn = Cast<APawn>(ActiveThrower.Get()))
+	{
+		InstigatorController = ThrowerPawn->GetController();
+	}
+
+	TSet<AActor*> AffectedActors;
+	for (const FOverlapResult& Overlap : Overlaps)
+	{
+		AActor* TargetActor = Overlap.GetActor();
+		if (!IsValid(TargetActor) || TargetActor == GetOwner() || AffectedActors.Contains(TargetActor))
+		{
+			continue;
+		}
+		AffectedActors.Add(TargetActor);
+
+		const FVector ToTarget = TargetActor->GetActorLocation() - ExplosionOrigin;
+		const float Distance = ToTarget.Size();
+		if (!FMath::IsFinite(Distance) || Distance > ExplosionTuning->ExplosionRadius)
+		{
+			continue;
+		}
+
+		const float DistanceAlpha = FMath::Clamp(
+			Distance / ExplosionTuning->ExplosionRadius,
+			0.0f,
+			1.0f);
+		const float DistanceScale = FMath::Lerp(
+			1.0f,
+			ExplosionTuning->ExplosionEdgeEffectScale,
+			DistanceAlpha);
+		const uint32 Seed = HashCombine(
+			GetTypeHash(ActiveImpactId),
+			GetTypeHash(TargetActor->GetUniqueID()));
+		FRandomStream RandomStream(static_cast<int32>(Seed));
+
+		FVector HorizontalDirection(ToTarget.X, ToTarget.Y, 0.0f);
+		HorizontalDirection = HorizontalDirection.GetSafeNormal();
+		if (HorizontalDirection.IsNearlyZero())
+		{
+			const float RandomYaw = RandomStream.FRandRange(-180.0f, 180.0f);
+			HorizontalDirection = FRotator(0.0f, RandomYaw, 0.0f).Vector();
+		}
+		else
+		{
+			const float JitterYaw = RandomStream.FRandRange(
+				-ExplosionTuning->ExplosionDirectionJitterDegrees,
+				ExplosionTuning->ExplosionDirectionJitterDegrees);
+			HorizontalDirection = FRotator(0.0f, JitterYaw, 0.0f)
+				.RotateVector(HorizontalDirection);
+		}
+
+		const float StrengthScale = DistanceScale * RandomStream.FRandRange(
+			1.0f - ExplosionTuning->ExplosionStrengthJitterRatio,
+			1.0f + ExplosionTuning->ExplosionStrengthJitterRatio);
+		const FVector VelocityChange =
+			HorizontalDirection * ExplosionTuning->ExplosionHorizontalVelocityChange * StrengthScale
+			+ FVector::UpVector * ExplosionTuning->ExplosionUpwardVelocityChange * StrengthScale;
+
+		if (UHeavyImpactResponseComponent* HeavyImpact =
+			TargetActor->FindComponentByClass<UHeavyImpactResponseComponent>())
+		{
+			HeavyImpact->RequestRadialImpact(
+				ActiveImpactId,
+				GetOwner(),
+				VelocityChange);
+		}
+
+		UGameplayStatics::ApplyDamage(
+			TargetActor,
+			ExplosionTuning->ExplosionDamage * DistanceScale,
+			InstigatorController,
+			GetOwner(),
+			UDamageType::StaticClass());
+	}
+
+	UE_LOG(LogMagneticObjectImpact, Log,
+		TEXT("%s exploded at %s and affected %d Pawn actors."),
+		*GetNameSafe(GetOwner()),
+		*ExplosionOrigin.ToCompactString(),
+		AffectedActors.Num());
 }
 
 /** Light 请求同帧消费完成后，在 next-tick 安全恢复攻击身份或完整事务。 */

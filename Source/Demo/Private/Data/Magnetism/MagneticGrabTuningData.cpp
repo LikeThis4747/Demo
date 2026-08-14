@@ -53,6 +53,16 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		|| !ValidateFloat(TEXT("MaximumHoldError"), MaximumHoldError, 100.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("ThrowSpeed"), ThrowSpeed, 100.0f, 8000.0f)
 		|| !ValidateFloat(TEXT("ThrownWeaponActiveDuration"), ThrownWeaponActiveDuration, 0.1f, 10.0f)
+		|| InitialExplosionCharges < 0 || InitialExplosionCharges > 999
+		|| !ValidateFloat(TEXT("ExplosionModeCancelLockSeconds"), ExplosionModeCancelLockSeconds, 0.0f, 5.0f)
+		|| !ValidateFloat(TEXT("ExplosionRadius"), ExplosionRadius, 50.0f, 2000.0f)
+		|| !ValidateFloat(TEXT("ExplosionHorizontalVelocityChange"), ExplosionHorizontalVelocityChange, 0.0f, 5000.0f)
+		|| !ValidateFloat(TEXT("ExplosionUpwardVelocityChange"), ExplosionUpwardVelocityChange, 0.0f, 3000.0f)
+		|| !ValidateFloat(TEXT("ExplosionEdgeEffectScale"), ExplosionEdgeEffectScale, 0.0f, 1.0f)
+		|| !ValidateFloat(TEXT("ExplosionDirectionJitterDegrees"), ExplosionDirectionJitterDegrees, 0.0f, 45.0f)
+		|| !ValidateFloat(TEXT("ExplosionStrengthJitterRatio"), ExplosionStrengthJitterRatio, 0.0f, 0.5f)
+		|| !ValidateFloat(TEXT("ExplosionDamage"), ExplosionDamage, 0.0f, 1000.0f)
+		|| !ValidateFloat(TEXT("ExplosionFragmentSeparationMultiplier"), ExplosionFragmentSeparationMultiplier, 1.0f, 10.0f)
 		|| !ValidateFloat(TEXT("AimTraceDistance"), AimTraceDistance, 1000.0f, 50000.0f)
 		|| !ValidateFloat(TEXT("HandleLinearStiffness"), HandleLinearStiffness, 1.0f, 10000.0f)
 		|| !ValidateFloat(TEXT("HandleLinearDamping"), HandleLinearDamping, 0.0f, 5000.0f)
@@ -61,8 +71,9 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		if (OutError.IsEmpty())
 		{
 			OutError = FString::Printf(
-				TEXT("磁力 Tuning DataAsset 的 MaximumCandidateChecks=%d，合法范围为 1~128。"),
-				MaximumCandidateChecks);
+				TEXT("磁力 Tuning DataAsset 的整数字段非法：MaximumCandidateChecks=%d，InitialExplosionCharges=%d。"),
+				MaximumCandidateChecks,
+				InitialExplosionCharges);
 		}
 		return false;
 	}

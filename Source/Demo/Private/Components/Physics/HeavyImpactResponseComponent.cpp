@@ -3,7 +3,7 @@
 /**
  * @file HeavyImpactResponseComponent.cpp
  * 职责：把机关预测和真实 Chaos 接触转换为受控全身物理飞行、环境落地、姿势整理与安全起身。
- * 边界：所有冲量来自外部刚体接触；本文件不调用 AddImpulse、LaunchCharacter 或受击动画。
+ * 边界：接触式 Heavy 的冲量仍只来自 Chaos；独立径向入口只施加调用方已计算的速度改变量，不播放受击动画。
  */
 
 #include "Components/Physics/HeavyImpactResponseComponent.h"
@@ -512,6 +512,110 @@ EHeavyImpactPrepareResult UHeavyImpactResponseComponent::PrepareForImpact(
 	return EHeavyImpactPrepareResult::Accepted;
 }
 
+/** 爆炸不伪造接触源；只在 Inactive 时建立身体基线，其余状态复用当前 Heavy 事务。 */
+EHeavyImpactPrepareResult UHeavyImpactResponseComponent::RequestRadialImpact(
+	const FGuid& ImpactId,
+	AActor* SourceActor,
+	const FVector& VelocityChange)
+{
+	if (HasSeenImpactId(ImpactId))
+	{
+		return EHeavyImpactPrepareResult::Duplicate;
+	}
+
+	const bool bVelocityFinite = FMath::IsFinite(VelocityChange.X)
+		&& FMath::IsFinite(VelocityChange.Y)
+		&& FMath::IsFinite(VelocityChange.Z);
+	if (!bInitialized
+		|| !ImpactId.IsValid()
+		|| !IsValid(SourceActor)
+		|| SourceActor == GetOwner()
+		|| !bVelocityFinite
+		|| VelocityChange.IsNearlyZero())
+	{
+		return EHeavyImpactPrepareResult::Invalid;
+	}
+
+	// 起身恢复已接回动画身体；先复用现有安全收尾，再立即建立新的径向 Heavy 基线。
+	if (State == EHeavyImpactState::Recovering)
+	{
+		CompleteRecovery(TEXT("Recovery was interrupted by a radial HeavyImpact."), true);
+		if (State != EHeavyImpactState::Inactive)
+		{
+			return EHeavyImpactPrepareResult::Invalid;
+		}
+	}
+
+	if (State == EHeavyImpactState::Inactive)
+	{
+		FHeavyImpactPreparationRequest CaptureSignal;
+		CaptureSignal.ImpactId = ImpactId;
+		CaptureSignal.SourceActor = SourceActor;
+		CaptureSignal.SourceLinearVelocity = VelocityChange;
+		OnPreContactCaptureRequested.Broadcast(CaptureSignal);
+
+		FString FailureReason;
+		if (!CapturePreContactState(FailureReason))
+		{
+			UE_LOG(LogHeavyImpact, Error,
+				TEXT("Radial HeavyImpact capture failed on %s: %s"),
+				*GetNameSafe(GetOwner()),
+				*FailureReason);
+			RestoreFailedPreparationTransition();
+			return EHeavyImpactPrepareResult::Invalid;
+		}
+
+		ActiveRequest = FHeavyImpactPreparationRequest();
+		ExpectedSourceActor = nullptr;
+		ExpectedSourceComponent = nullptr;
+		CommittedSourceActor = SourceActor;
+		ActivePreparationTimeoutSeconds = 0.0f;
+		bPhysicsBodyCollisionReleased = false;
+		if (!EnterPreparedPhysicalState(FailureReason))
+		{
+			UE_LOG(LogHeavyImpact, Error,
+				TEXT("Radial HeavyImpact prepare failed on %s: %s"),
+				*GetNameSafe(GetOwner()),
+				*FailureReason);
+			RestoreFailedPreparationTransition();
+			return EHeavyImpactPrepareResult::Invalid;
+		}
+
+		PreparationRollback.Reset();
+	}
+	else if (State == EHeavyImpactState::Downed)
+	{
+		ResumeFromDowned(SourceActor);
+	}
+	else if (State == EHeavyImpactState::Settling)
+	{
+		StableElapsedSeconds = 0.0f;
+		TotalCommittedSeconds = 0.0f;
+		CommittedSourceActor = SourceActor;
+		Mesh->WakeAllRigidBodies();
+		if (ApplyPhysicalStage(Demo::HeavyImpact::ProfileFlight, Tuning->FlightControl))
+		{
+			SetState(EHeavyImpactState::Simulating);
+		}
+		else
+		{
+			EnterFreeFallback(TEXT("Flight profile failed after radial HeavyImpact left Settling."));
+		}
+	}
+	else if (State == EHeavyImpactState::Simulating)
+	{
+		CommittedSourceActor = SourceActor;
+		StableElapsedSeconds = 0.0f;
+		TotalCommittedSeconds = 0.0f;
+	}
+
+	PendingRadialVelocityChange += VelocityChange;
+	PendingRadialSourceActor = SourceActor;
+	RecordRecentImpactId(ImpactId);
+	SetComponentTickEnabled(true);
+	return EHeavyImpactPrepareResult::Accepted;
+}
+
 /** 已接受 ID 的固定长度查询。 */
 bool UHeavyImpactResponseComponent::HasSeenImpactId(const FGuid& Id) const
 {
@@ -663,7 +767,12 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 	ExpectedSourceComponent = Request.SourceComponent;
 	CommittedSourceActor.Reset();
 	bPhysicsBodyCollisionReleased = false;
+	return EnterPreparedPhysicalState(OutReason);
+}
 
+/** 接触预测与径向爆炸共用的同步身体接管；来源和截止时间由各自入口提前写入。 */
+bool UHeavyImpactResponseComponent::EnterPreparedPhysicalState(FString& OutReason)
+{
 	Movement->StopMovementImmediately();
 	Movement->DisableMovement();
 	Mesh->bPauseAnims = true;
@@ -798,11 +907,19 @@ void UHeavyImpactResponseComponent::CommitRealImpact(
 /** Accepted 是物理流程边界；只有真实 Hit 才保持既有 OnImpactCommitted 事件语义。 */
 void UHeavyImpactResponseComponent::CommitAcceptedImpact(
 	const FHitResult* Hit,
-	const FVector& NormalImpulse)
+	const FVector& NormalImpulse,
+	const bool bTriggeredByRadial)
 {
 	check(State == EHeavyImpactState::Prepared);
 	const bool bHasRealContact = Hit != nullptr;
-	CommittedSourceActor = ExpectedSourceActor;
+	if (bTriggeredByRadial && PendingRadialSourceActor.IsValid())
+	{
+		CommittedSourceActor = PendingRadialSourceActor;
+	}
+	else
+	{
+		CommittedSourceActor = ExpectedSourceActor;
+	}
 	bPhysicsBodyCollisionReleased = false;
 	const bool bPreparedCrossedFrameBoundary = GFrameCounter > PreparedEntryFrame;
 	if (!bPreparedCrossedFrameBoundary)
@@ -825,6 +942,7 @@ void UHeavyImpactResponseComponent::CommitAcceptedImpact(
 	{
 		EnterFreeFallback(TEXT("Flight profile failed after accepted preparation."));
 	}
+	ApplyPendingRadialImpact();
 
 	if (bHasRealContact)
 	{
@@ -839,6 +957,14 @@ void UHeavyImpactResponseComponent::CommitAcceptedImpact(
 			*Hit->ImpactPoint.ToCompactString(),
 			*NormalImpulse.ToCompactString());
 		OnImpactCommitted.Broadcast(CommittedRequest);
+	}
+	else if (bTriggeredByRadial)
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Verbose,
+			TEXT("HeavyImpact Prepared response on %s was promoted by a radial impact; any original expected contact remains eligible as a late contact."),
+			*GetNameSafe(GetOwner()));
 	}
 	else
 	{
@@ -884,6 +1010,7 @@ void UHeavyImpactResponseComponent::CommitLateAcceptedContact(
 		*NormalImpulse.ToCompactString());
 	const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
 	ActiveRequest = FHeavyImpactPreparationRequest();
+	CommittedSourceActor = ExpectedSourceActor;
 	OnImpactCommitted.Broadcast(CommittedRequest);
 }
 
@@ -892,6 +1019,20 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	AActor* SourceActor,
 	const FHitResult& Hit,
 	const FVector& NormalImpulse)
+{
+	ResumeFromDowned(SourceActor);
+
+	UE_LOG(
+		LogHeavyImpact,
+		Verbose,
+		TEXT("HeavyImpact Downed body woke from real contact: %s bone=%s impulse=%s"),
+		*GetNameSafe(GetOwner()),
+		*Hit.BoneName.ToString(),
+		*NormalImpulse.ToCompactString());
+}
+
+/** 唤醒 Downed 的同一物理身体；调用方决定冲量来自真实接触还是独立径向入口。 */
+void UHeavyImpactResponseComponent::ResumeFromDowned(AActor* SourceActor)
 {
 	// The sleeping pose is still authoritative until the new impact resumes Chaos simulation.
 	Mesh->bPauseAnims = true;
@@ -903,6 +1044,8 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
 	ActiveRequest = FHeavyImpactPreparationRequest();
+	PendingRadialVelocityChange = FVector::ZeroVector;
+	PendingRadialSourceActor.Reset();
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	PhysicsControl->SetComponentTickEnabled(true);
 	SetState(EHeavyImpactState::Simulating);
@@ -914,14 +1057,31 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 	{
 		EnterFreeFallback(TEXT("Flight profile failed after Downed was hit again."));
 	}
+}
 
-	UE_LOG(
-		LogHeavyImpact,
-		Verbose,
-		TEXT("HeavyImpact Downed body woke from real contact: %s bone=%s impulse=%s"),
+/** 只在 Flight 已经接管全身物理后施加速度改变量；多次同帧请求先累加再消费。 */
+void UHeavyImpactResponseComponent::ApplyPendingRadialImpact()
+{
+	if (PendingRadialVelocityChange.IsNearlyZero()
+		|| State != EHeavyImpactState::Simulating
+		|| !IsValid(Mesh)
+		|| !Mesh->IsAnySimulatingPhysics())
+	{
+		return;
+	}
+
+	const FVector VelocityChange = PendingRadialVelocityChange;
+	PendingRadialVelocityChange = FVector::ZeroVector;
+	PendingRadialSourceActor.Reset();
+	Mesh->WakeAllRigidBodies();
+	Mesh->AddImpulse(VelocityChange, NAME_None, true);
+	TotalCommittedSeconds = 0.0f;
+	StableElapsedSeconds = 0.0f;
+
+	UE_LOG(LogHeavyImpact, Verbose,
+		TEXT("HeavyImpact applied radial velocity change on %s: %s"),
 		*GetNameSafe(GetOwner()),
-		*Hit.BoneName.ToString(),
-		*NormalImpulse.ToCompactString());
+		*VelocityChange.ToCompactString());
 }
 
 /** 在物理事务状态下更新计时、外壳位置和稳定判断。 */
@@ -948,7 +1108,15 @@ void UHeavyImpactResponseComponent::TickComponent(
 	if (State == EHeavyImpactState::Prepared)
 	{
 		UpdatePhysicalFollow(DeltaTime);
-		if (StateElapsedSeconds >= ActivePreparationTimeoutSeconds)
+		const bool bCrossedPreparedFrame = GFrameCounter > PreparedEntryFrame;
+		const bool bRadialReady = bCrossedPreparedFrame
+			&& !PendingRadialVelocityChange.IsNearlyZero();
+		if (bRadialReady)
+		{
+			CommitAcceptedImpact(nullptr, FVector::ZeroVector, true);
+		}
+		else if (bCrossedPreparedFrame
+			&& StateElapsedSeconds >= ActivePreparationTimeoutSeconds)
 		{
 			CommitAcceptedImpact(nullptr, FVector::ZeroVector);
 		}
@@ -957,6 +1125,7 @@ void UHeavyImpactResponseComponent::TickComponent(
 
 	if (State == EHeavyImpactState::Simulating || State == EHeavyImpactState::Settling)
 	{
+		ApplyPendingRadialImpact();
 		TotalCommittedSeconds += DeltaTime;
 		ReleasePhysicsBodyCollisionIfDue();
 		UpdatePhysicalFollow(DeltaTime, false, State == EHeavyImpactState::Settling);
@@ -1263,6 +1432,8 @@ void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
 	ActiveRequest = FHeavyImpactPreparationRequest();
+	PendingRadialVelocityChange = FVector::ZeroVector;
+	PendingRadialSourceActor.Reset();
 	if (bStartingNewDownedTransaction)
 	{
 		RecoveryBlockedStartTimeSeconds = -1.0;
@@ -2229,6 +2400,8 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
 	CommittedSourceActor.Reset();
+	PendingRadialVelocityChange = FVector::ZeroVector;
+	PendingRadialSourceActor.Reset();
 	PreparationRollback.Reset();
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
@@ -2390,6 +2563,8 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 		ExpectedSourceActor = nullptr;
 		ExpectedSourceComponent = nullptr;
 		CommittedSourceActor.Reset();
+		PendingRadialVelocityChange = FVector::ZeroVector;
+		PendingRadialSourceActor.Reset();
 		ActivePreparationTimeoutSeconds = 0.0f;
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
@@ -2420,6 +2595,8 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 	ExpectedSourceActor = nullptr;
 	ExpectedSourceComponent = nullptr;
 	CommittedSourceActor.Reset();
+	PendingRadialVelocityChange = FVector::ZeroVector;
+	PendingRadialSourceActor.Reset();
 	ActivePreparationTimeoutSeconds = 0.0f;
 	PreparationRollback.Reset();
 	RecoveryBaseline.Reset();

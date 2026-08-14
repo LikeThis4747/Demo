@@ -19,16 +19,19 @@
 
 class AActor;
 class UCharacterImpactSourceProfile;
+class UMagneticGrabTuningData;
 class UPrimitiveComponent;
 
 /** 正式投掷事务过滤投掷者后，为墙体、道具和角色统一广播的原生阻挡命中。 */
-DECLARE_MULTICAST_DELEGATE_FiveParams(
+DECLARE_MULTICAST_DELEGATE_SevenParams(
 	FOnMagneticThrownBlockingHit,
 	UPrimitiveComponent*,
 	AActor*,
 	UPrimitiveComponent*,
 	const FVector&,
-	const FHitResult&);
+	const FHitResult&,
+	bool,
+	float);
 
 /** 给 Actor 添加可磁吸标记，并提供选取优先级、投掷倍率与共享命中事务。 */
 UCLASS(ClassGroup = (Magnetism), meta = (BlueprintSpawnableComponent))
@@ -51,7 +54,8 @@ public:
 		UPrimitiveComponent* ThrownPrimitive,
 		AActor* Thrower,
 		float LightActiveDurationSeconds,
-		float MaximumBreakMonitoringSeconds = 0.0f);
+		float MaximumBreakMonitoringSeconds = 0.0f,
+		UMagneticGrabTuningData* ExplosionTuning = nullptr);
 
 	/** 幂等结束当前投掷事务并精确恢复该 Primitive 的全部碰撞快照。 */
 	void DisarmThrownImpact();
@@ -110,6 +114,9 @@ private:
 	/** 破碎监听达到硬上限后完整结束投掷事务，避免长期潜伏成随机破碎。 */
 	void HandleMaximumMonitoringExpired();
 
+	/** 对 Pawn 做一次 Actor 去重范围查询，并结算距离衰减伤害与独立径向 Heavy。 */
+	void TriggerExplosion(const FVector& ExplosionOrigin);
+
 	/** 恢复原 ObjectType、Responses、Profile 与 Tag，同时继续临时保留 Hit 通知和 CCD。 */
 	void RestoreAttackIdentityButKeepHitMonitoring();
 
@@ -137,6 +144,9 @@ private:
 	/** 当前 Light 请求的唯一标识；每次正式投掷重新生成。 */
 	FGuid ActiveImpactId;
 
+	/** 仅爆裂投掷持有现有磁力 DA；普通投掷保持为空，不读取任何爆裂参数。 */
+	TWeakObjectPtr<UMagneticGrabTuningData> ActiveExplosionTuning;
+
 	/** 正式投掷前的唯一恢复基线；Light 与破碎不得各存一份。 */
 	FThrownImpactCollisionSnapshot CollisionSnapshot;
 
@@ -154,6 +164,9 @@ private:
 
 	/** 为 true 时本次仍允许构造一次角色 Light 请求。 */
 	bool bLightImpactWindowActive = false;
+
+	/** 为 true 时第一次合格 Blocking Hit 改走爆炸，不再叠加普通 Light。 */
+	bool bExplosionImpactWindowActive = false;
 
 	/** 为 true 时 Light 结束后继续由同一 Hit/CCD 事务等待破碎消费者。 */
 	bool bKeepMonitoringForBreak = false;

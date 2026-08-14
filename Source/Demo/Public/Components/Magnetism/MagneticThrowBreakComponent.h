@@ -64,7 +64,9 @@ private:
 		AActor* OtherActor,
 		UPrimitiveComponent* OtherComponent,
 		const FVector& NormalImpulse,
-		const FHitResult& Hit);
+		const FHitResult& Hit,
+		bool bExplosiveHit,
+		float FragmentSeparationMultiplier);
 
 	/** 在 Hit 后 next-tick 继承运动、生成替身，并仅在成功后销毁完整 Actor。 */
 	void ProcessQueuedBreak();
@@ -127,6 +129,9 @@ private:
 
 	/** 首次合格 Hit 当帧冻结的弧度制角速度；只由 HandleThrownBlockingHit 写入并由替换事务消费。 */
 	FVector PendingAngularVelocityRadians = FVector::ZeroVector;
+
+	/** 单次爆裂命中传入的碎片分离倍率；普通投掷保持 1。 */
+	float PendingFragmentSeparationMultiplier = 1.0f;
 
 	/** 注册到 MagneticObject 原生委托的句柄；EndPlay 精确移除。 */
 	FDelegateHandle ThrownHitDelegateHandle;

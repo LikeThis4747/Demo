@@ -144,6 +144,12 @@ public:
 	/** 接受机关预测请求；外部不能通过本组件直接击飞角色。 */
 	EHeavyImpactPrepareResult PrepareForImpact(const FHeavyImpactPreparationRequest& Request);
 
+	/** 接受爆炸计算完成的世界速度改变量；可在任意 Heavy 阶段复用同一物理事务。 */
+	EHeavyImpactPrepareResult RequestRadialImpact(
+		const FGuid& ImpactId,
+		AActor* SourceActor,
+		const FVector& VelocityChange);
+
 	/** 返回当前项目重冲击状态。 */
 	EHeavyImpactState GetState() const { return State; }
 
@@ -213,10 +219,16 @@ private:
 		float AllowedMaximumSeconds,
 		FString& OutReason);
 
+	/** 执行接触式与径向 Prepared 共用的身体接管，不写入任何来源请求。 */
+	bool EnterPreparedPhysicalState(FString& OutReason);
+
 	/** 将预期刚体的真实接触提交为物理飞行，不补第二份冲量。 */
 	void CommitRealImpact(const FHitResult& Hit, const FVector& NormalImpulse);
 	/** Accepted 后的统一提交入口；无 Hit 的准备超时也继续 Heavy，但不伪造接触冲量。 */
-	void CommitAcceptedImpact(const FHitResult* Hit, const FVector& NormalImpulse);
+	void CommitAcceptedImpact(
+		const FHitResult* Hit,
+		const FVector& NormalImpulse,
+		bool bTriggeredByRadial = false);
 	/** 准备超时已进入 Heavy 后，补记同一预期源随后到达的唯一真实接触。 */
 	void CommitLateAcceptedContact(const FHitResult& Hit, const FVector& NormalImpulse);
 
@@ -225,6 +237,12 @@ private:
 		AActor* SourceActor,
 		const FHitResult& Hit,
 		const FVector& NormalImpulse);
+
+	/** Downed 被真实接触或径向爆炸唤醒时共用的 Flight 恢复。 */
+	void ResumeFromDowned(AActor* SourceActor);
+
+	/** 在全身物理与 Flight 已有效时消费一次或多次累加的径向速度改变量。 */
+	void ApplyPendingRadialImpact();
 
 	/** 首次真实冲量保留短暂接触后，只放开 PhysicsBody；墙和地面碰撞保持不变。 */
 	void ReleasePhysicsBodyCollisionIfDue();
@@ -377,6 +395,8 @@ private:
 	TArray<FName> OwnedBodyModifierNames;
 	TArray<FGuid> RecentImpactIds;
 	TArray<FGuid> LoggedRejectedImpactIds;
+	FVector PendingRadialVelocityChange = FVector::ZeroVector;
+	TWeakObjectPtr<AActor> PendingRadialSourceActor;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHeavyImpactAnimInstance> HeavyImpactAnimInstance = nullptr;

@@ -13,6 +13,7 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/Attributes/HealthComponent.h"
 #include "Components/Combat/PursuerAttackComponent.h"
 #include "Components/Physics/CharacterImpactResponseComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
@@ -52,6 +53,7 @@ APursuerCharacter::APursuerCharacter()
 	PhysicsControl->SetupAttachment(GetRootComponent());
 	HeavyImpactResponse = CreateDefaultSubobject<UHeavyImpactResponseComponent>(TEXT("HeavyImpactResponse"));
 	CharacterImpactResponse = CreateDefaultSubobject<UCharacterImpactResponseComponent>(TEXT("CharacterImpactResponse"));
+	HealthComponent = CreateDefaultSubobject<UHealthComponent>(TEXT("HealthComponent"));
 	LightPhysicalAnimation = CreateDefaultSubobject<UPhysicalAnimationComponent>(TEXT("LightPhysicalAnimation"));
 	LightPhysicalAnimation->SetAutoActivate(false);
 	LightPhysicalAnimation->PrimaryComponentTick.bStartWithTickEnabled = false;

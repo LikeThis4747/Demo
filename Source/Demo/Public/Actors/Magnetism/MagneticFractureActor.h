@@ -27,7 +27,10 @@ public:
 	AMagneticFractureActor();
 
 	/** deferred spawn 完成前注入完整刚体的世界线速度和弧度制角速度。 */
-	void SetInheritedMotion(const FVector& LinearVelocity, const FVector& AngularVelocityRadians);
+	void SetInheritedMotion(
+		const FVector& LinearVelocity,
+		const FVector& AngularVelocityRadians,
+		float SeparationMultiplier = 1.0f);
 
 protected:
 	/** 校验 RestCollection，启动兜底 LifeSpan，并显式解开当前活动簇。 */
@@ -61,4 +64,7 @@ private:
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "磁力物|破碎", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", UIMin = "1.0"))
 	float FragmentSeparationRadiusScale = 1.25f;
+
+	/** deferred spawn 前由单次投掷事务写入；普通破碎保持 1，不修改 Blueprint 默认值。 */
+	float FragmentSeparationMultiplier = 1.0f;
 };

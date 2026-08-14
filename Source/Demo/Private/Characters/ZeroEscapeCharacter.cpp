@@ -193,6 +193,7 @@ void AZeroEscapeCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInpu
 	EnhancedInput->BindAction(InputConfig->MagneticGrabAction, ETriggerEvent::Completed, this, &AZeroEscapeCharacter::EndMagneticGrab);
 	EnhancedInput->BindAction(InputConfig->MagneticGrabAction, ETriggerEvent::Canceled, this, &AZeroEscapeCharacter::EndMagneticGrab);
 	EnhancedInput->BindAction(InputConfig->MagneticThrowAction, ETriggerEvent::Started, this, &AZeroEscapeCharacter::ThrowMagneticObject);
+	EnhancedInput->BindAction(InputConfig->MagneticExplosionModeAction, ETriggerEvent::Started, this, &AZeroEscapeCharacter::ToggleMagneticExplosionMode);
 }
 
 /** 重冲击从 Prepared 到倒地期间独占身体控制；未装配组件时不阻断原玩家输入。 */
@@ -324,6 +325,15 @@ void AZeroEscapeCharacter::ThrowMagneticObject()
 	if (CanAcceptBodyInput() && IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->ThrowHeldObject();
+	}
+}
+
+/** 请求磁力组件切换当前持有物的普通/爆裂状态；空手或身体受控时保持无副作用。 */
+void AZeroEscapeCharacter::ToggleMagneticExplosionMode()
+{
+	if (CanAcceptBodyInput() && IsValid(ElectromagneticGrab))
+	{
+		ElectromagneticGrab->ToggleExplosionMode();
 	}
 }
 

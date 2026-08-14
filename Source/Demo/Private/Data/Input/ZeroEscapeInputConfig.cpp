@@ -64,7 +64,8 @@ bool UZeroEscapeInputConfig::IsConfigured(FString& OutError) const
 		{TEXT("MouseLookAction"), MouseLookAction.Get(), EInputActionValueType::Axis2D, TEXT("Axis2D")},
 		{TEXT("JumpAction"), JumpAction.Get(), EInputActionValueType::Boolean, TEXT("Boolean")},
 		{TEXT("MagneticGrabAction"), MagneticGrabAction.Get(), EInputActionValueType::Boolean, TEXT("Boolean")},
-		{TEXT("MagneticThrowAction"), MagneticThrowAction.Get(), EInputActionValueType::Boolean, TEXT("Boolean")}
+		{TEXT("MagneticThrowAction"), MagneticThrowAction.Get(), EInputActionValueType::Boolean, TEXT("Boolean")},
+		{TEXT("MagneticExplosionModeAction"), MagneticExplosionModeAction.Get(), EInputActionValueType::Boolean, TEXT("Boolean")}
 	};
 
 	for (const FRequiredAction& RequiredAction : RequiredActions)

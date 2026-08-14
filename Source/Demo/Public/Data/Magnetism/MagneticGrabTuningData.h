@@ -157,6 +157,46 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|投掷", meta = (ClampMin = "0.1", ClampMax = "10.0", UIMin = "0.5", UIMax = "5.0", Units = "s"))
 	float ThrownWeaponActiveDuration = 2.5f;
 
+	/** 光球系统接入前可直接测试的爆裂投掷次数；只在爆裂物成功建立正式投掷事务后扣除。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0", ClampMax = "999", UIMin = "0", UIMax = "50"))
+	int32 InitialExplosionCharges = 10;
+
+	/** 激活爆裂状态后允许按 E 取消的最短时间；不限制激活后立即投掷。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "5.0", UIMin = "0.0", UIMax = "2.0", Units = "s"))
+	float ExplosionModeCancelLockSeconds = 1.0f;
+
+	/** 首次合格阻挡命中产生的 Pawn 球形查询半径。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "50.0", ClampMax = "2000.0", UIMin = "100.0", UIMax = "1000.0", Units = "cm"))
+	float ExplosionRadius = 350.0f;
+
+	/** 爆心处沿水平径向施加给 Heavy 身体的速度改变量。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "5000.0", UIMin = "0.0", UIMax = "2500.0", Units = "cm/s"))
+	float ExplosionHorizontalVelocityChange = 900.0f;
+
+	/** 爆心处向上施加给 Heavy 身体的速度改变量。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "3000.0", UIMin = "0.0", UIMax = "1500.0", Units = "cm/s"))
+	float ExplosionUpwardVelocityChange = 450.0f;
+
+	/** 半径边缘相对爆心仍保留的冲量与伤害比例。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.0", UIMax = "1.0"))
+	float ExplosionEdgeEffectScale = 0.6f;
+
+	/** 每个角色的水平径向随机偏转上限，正负范围对称。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "45.0", UIMin = "0.0", UIMax = "30.0", Units = "deg"))
+	float ExplosionDirectionJitterDegrees = 10.0f;
+
+	/** 每个角色强度的对称随机比例；0.1 表示在基础结果上乘以 0.9~1.1。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "0.5", UIMin = "0.0", UIMax = "0.3"))
+	float ExplosionStrengthJitterRatio = 0.1f;
+
+	/** 爆心伤害；半径边缘与 Heavy 速度使用相同距离衰减。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "1000.0", UIMin = "0.0", UIMax = "200.0"))
+	float ExplosionDamage = 30.0f;
+
+	/** 只放大本次爆裂破碎的现有碎片分离速度；普通破碎始终使用 1。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "1.0", ClampMax = "10.0", UIMin = "1.0", UIMax = "5.0"))
+	float ExplosionFragmentSeparationMultiplier = 2.5f;
+
 	/**
 	 * 对应 C++ 属性 AimTraceDistance，由 CalculateAimPoint 决定准星射线最大距离，单位 cm。
 	 * 初始值：10000；编辑范围：1000~50000。调高支持远距离瞄准，调低会让无命中投掷更早收敛。

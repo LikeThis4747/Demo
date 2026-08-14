@@ -102,6 +102,8 @@ void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysics
 	PhysicsHandle->SetLinearDamping(TuningData->HandleLinearDamping);
 	PhysicsHandle->SetInterpolationSpeed(TuningData->HandleInterpolationSpeed);
 	PhysicsHandle->AddTickPrerequisiteComponent(this);
+	AvailableExplosionCharges = TuningData->InitialExplosionCharges;
+	SetExplosionModeActive(false);
 	bConfigurationReady = true;
 }
 
@@ -152,6 +154,8 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 	const FVector ThrowDirection = (CalculateAimPoint() - CenterOfMass).GetSafeNormal();
 	const FVector DesiredVelocity = ThrowDirection * TuningData->ThrowSpeed * SpeedMultiplier;
 	const FVector ExistingVelocity = ComponentToThrow->GetPhysicsLinearVelocity();
+	UMagneticGrabTuningData* ExplosionTuningForThrow =
+		bExplosionModeActive && AvailableExplosionCharges > 0 ? TuningData.Get() : nullptr;
 
 	ReleaseHeldObject(true);
 
@@ -159,16 +163,57 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 	{
 		if (IsValid(MagneticObject))
 		{
-			MagneticObject->ArmThrownImpact(
+			const bool bArmed = MagneticObject->ArmThrownImpact(
 				ComponentToThrow,
 				GetOwner(),
 				TuningData->ThrownWeaponActiveDuration,
-				BreakMonitoringSeconds);
+				BreakMonitoringSeconds,
+				ExplosionTuningForThrow);
+			if (bArmed && IsValid(ExplosionTuningForThrow))
+			{
+				AvailableExplosionCharges = FMath::Max(0, AvailableExplosionCharges - 1);
+			}
 		}
 
 		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
 		ComponentToThrow->AddImpulse(DesiredVelocity - ExistingVelocity, NAME_None, true);
 	}
+}
+
+/** E 只切换持有状态；次数只在 ThrowHeldObject 成功武装后结算。 */
+void UElectromagneticGrabComponent::ToggleExplosionMode()
+{
+	if (!IsConfigurationReady() || !IsHoldingObject())
+	{
+		return;
+	}
+
+	if (!bExplosionModeActive)
+	{
+		if (AvailableExplosionCharges <= 0)
+		{
+			return;
+		}
+
+		const UWorld* World = GetWorld();
+		ExplosionModeActivatedWorldTimeSeconds = IsValid(World)
+			? static_cast<double>(World->GetTimeSeconds())
+			: 0.0;
+		SetExplosionModeActive(true);
+		return;
+	}
+
+	const UWorld* World = GetWorld();
+	const double CurrentWorldTimeSeconds = IsValid(World)
+		? static_cast<double>(World->GetTimeSeconds())
+		: ExplosionModeActivatedWorldTimeSeconds;
+	if (CurrentWorldTimeSeconds - ExplosionModeActivatedWorldTimeSeconds
+		< static_cast<double>(TuningData->ExplosionModeCancelLockSeconds))
+	{
+		return;
+	}
+
+	SetExplosionModeActive(false);
 }
 
 /** 真实重冲击只中断正在吸取或持有的事务；空手调用不得改变输入释放锁。 */
@@ -530,6 +575,7 @@ void UElectromagneticGrabComponent::ResetPullState()
 void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRelease)
 {
 	UPrimitiveComponent* ComponentToRelease = HeldComponent.Get();
+	SetExplosionModeActive(false);
 	RestoreHandleTargetInterpolation();
 
 	if (IsValid(PhysicsHandle) && IsValid(PhysicsHandle->GetGrabbedComponent()))
@@ -550,6 +596,22 @@ void UElectromagneticGrabComponent::ReleaseHeldObject(const bool bRequireInputRe
 	ObstructedElapsedSeconds = 0.0f;
 	bAwaitingGrabRelease = bRequireInputRelease;
 	SetComponentTickEnabled(false);
+}
+
+/** 状态事件总是携带切换前仍有效的精确持有刚体，便于后续表现恢复材质。 */
+void UElectromagneticGrabComponent::SetExplosionModeActive(const bool bActive)
+{
+	if (bExplosionModeActive == bActive)
+	{
+		return;
+	}
+
+	bExplosionModeActive = bActive;
+	if (!bExplosionModeActive)
+	{
+		ExplosionModeActivatedWorldTimeSeconds = -1.0;
+	}
+	OnExplosionModeChanged.Broadcast(bExplosionModeActive, HeldComponent.Get());
 }
 
 /** 使用角色原点提供稳定高度基准，并使用相机前/右方向保持持有点与瞄准直觉一致。 */

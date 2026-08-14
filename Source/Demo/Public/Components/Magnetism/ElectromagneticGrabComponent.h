@@ -21,6 +21,14 @@ class UMagneticObjectComponent;
 class UPhysicsHandleComponent;
 class UPrimitiveComponent;
 
+/** 持有物普通/爆裂状态变化；后续红光表现可直接绑定当前精确刚体。 */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FOnMagneticExplosionModeChanged,
+	bool,
+	bActive,
+	UPrimitiveComponent*,
+	HeldPrimitive);
+
 /** 提供宽容准星选取和保留自然碰撞旋转的 Physics Handle 抓取基线。 */
 UCLASS(ClassGroup = (Magnetism), meta = (BlueprintSpawnableComponent))
 class DEMO_API UElectromagneticGrabComponent final : public UActorComponent
@@ -43,11 +51,26 @@ public:
 	/** 释放当前刚体，并按照准星方向、全局基础速度和单物体倍率施加速度变化冲量。 */
 	void ThrowHeldObject();
 
+	/** 持有期间切换普通/爆裂状态；激活不扣次数，取消受 DA 的最短时间限制。 */
+	void ToggleExplosionMode();
+
 	/** 重冲击真实提交时中断吸取或持有；空手时保持完全无副作用。 */
 	void InterruptAndRelease();
 
 	/** 同时检查组件弱引用与 Physics Handle，确认双方是否指向同一个当前持有刚体。 */
 	bool IsHoldingObject() const;
+
+	/** 返回光球系统接入前由本组件持有的剩余爆裂投掷次数。 */
+	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
+	int32 GetAvailableExplosionCharges() const { return AvailableExplosionCharges; }
+
+	/** 返回当前持有物是否被玩家切换到爆裂状态。 */
+	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
+	bool IsExplosionModeActive() const { return bExplosionModeActive; }
+
+	/** 预留给后续材质、Niagara 或其他红光表现的状态事件。 */
+	UPROPERTY(BlueprintAssignable, Category = "磁力|爆裂投掷")
+	FOnMagneticExplosionModeChanged OnExplosionModeChanged;
 
 protected:
 	/** 只在持有期间更新安全目标并执行阻挡/误差释放，不做每帧全局 Actor 搜索。 */
@@ -76,6 +99,9 @@ private:
 
 	/** 释放 Handle、恢复物理覆盖，并按需要要求右键先松开再允许下一次抓取。 */
 	void ReleaseHeldObject(bool bRequireInputRelease);
+
+	/** 单点写入爆裂状态并广播精确持有刚体；重复写入不重复广播。 */
+	void SetExplosionModeActive(bool bActive);
 
 	/** 快照并关闭 Handle 目标插值，依据初始安全终点初始化确定性吸取曲线。 */
 	void BeginPull(const FVector& StartLocation, const FVector& InitialSafeHoldLocation);
@@ -172,4 +198,15 @@ private:
 
 	/** 投掷或自动释放后保持 true，直到收到右键松开，防止长按立即重新抓取。 */
 	bool bAwaitingGrabRelease = false;
+
+	/** 当前可正式武装的爆裂投掷次数；Configure 时从现有磁力 DA 初始化。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "磁力|爆裂投掷", meta = (AllowPrivateAccess = "true"))
+	int32 AvailableExplosionCharges = 0;
+
+	/** 只表示当前持有物的玩家选择；放下、投掷、打断或重新抓取都会恢复普通。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "磁力|爆裂投掷", meta = (AllowPrivateAccess = "true"))
+	bool bExplosionModeActive = false;
+
+	/** 本次激活的世界时间；只在按 E 取消时比较，不启用额外 Tick 或 Timer。 */
+	double ExplosionModeActivatedWorldTimeSeconds = -1.0;
 };

@@ -21,6 +21,7 @@ class UCharacterImpactResponseComponent;
 class UCharacterImpactTuningData;
 class UHeavyImpactResponseComponent;
 class UHeavyImpactTuningData;
+class UHealthComponent;
 class UPursuerConfig;
 class UPhysicalAnimationComponent;
 class UPhysicsControlComponent;
@@ -114,6 +115,10 @@ private:
 	/** 追猎者站立轻受击、速度恢复与 Heavy 抢占的运行时 Owner。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCharacterImpactResponseComponent> CharacterImpactResponse;
+
+	/** 复用现有生命组件接收爆炸 ApplyDamage；归零后的死亡后果不属于本轮。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|属性", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UHealthComponent> HealthComponent;
 
 	/** UE 官方局部动画驱动物理组件；只由 CharacterImpactResponse 配置和调节强度。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "追猎者|轻受击", meta = (AllowPrivateAccess = "true"))

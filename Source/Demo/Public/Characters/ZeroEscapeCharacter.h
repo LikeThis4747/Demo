@@ -99,6 +99,9 @@ private:
 	/** 将左键投掷意图转发给磁力状态 Owner。 */
 	void ThrowMagneticObject();
 
+	/** 将 E 键的普通/爆裂切换意图转发给磁力状态 Owner。 */
+	void ToggleMagneticExplosionMode();
+
 	/** 真实重物接触提交后中断正在进行的磁力吸取或持有；空手时不产生副作用。 */
 	void HandleHeavyImpactCommitted(const FHeavyImpactPreparationRequest& Request);
 
