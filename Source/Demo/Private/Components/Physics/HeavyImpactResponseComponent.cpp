@@ -3,7 +3,7 @@
 /**
  * @file HeavyImpactResponseComponent.cpp
  * 职责：把机关预测和真实 Chaos 接触转换为受控全身物理飞行、环境落地、姿势整理与安全起身。
- * 边界：接触式 Heavy 的冲量仍只来自 Chaos；独立径向入口只施加调用方已计算的速度改变量，不播放受击动画。
+ * 边界：接触式 Heavy 的局部冲击仍只来自 Chaos；来源可缩放首次接触新增的共同平移速度，独立径向入口只施加调用方已计算的速度改变量。
  */
 
 #include "Components/Physics/HeavyImpactResponseComponent.h"
@@ -766,6 +766,8 @@ bool UHeavyImpactResponseComponent::EnterPrepared(
 	ExpectedSourceComponent = Request.SourceComponent;
 	CommittedSourceActor.Reset();
 	bPhysicsBodyCollisionReleased = false;
+	bHasPendingContactPelvisVelocity = false;
+	PendingContactPelvisVelocity = FVector::ZeroVector;
 	return EnterPreparedPhysicalState(OutReason);
 }
 
@@ -820,6 +822,7 @@ bool UHeavyImpactResponseComponent::EnterPreparedPhysicalState(FString& OutReaso
 	PreparedEntryFrame = GFrameCounter;
 	TotalCommittedSeconds = 0.0f;
 	StableElapsedSeconds = 0.0f;
+	CapturePendingContactVelocity();
 	SetState(EHeavyImpactState::Prepared);
 	SetComponentTickEnabled(true);
 	return true;
@@ -946,6 +949,8 @@ void UHeavyImpactResponseComponent::CommitAcceptedImpact(
 	if (bHasRealContact)
 	{
 		const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
+		ApplyCommittedPhysicalResponseScale(CommittedRequest);
+		ReleaseCommittedPhysicsBodyContact();
 		ActiveRequest = FHeavyImpactPreparationRequest();
 		UE_LOG(
 			LogHeavyImpact,
@@ -1008,6 +1013,8 @@ void UHeavyImpactResponseComponent::CommitLateAcceptedContact(
 		*Hit.ImpactPoint.ToCompactString(),
 		*NormalImpulse.ToCompactString());
 	const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
+	ApplyCommittedPhysicalResponseScale(CommittedRequest);
+	ReleaseCommittedPhysicsBodyContact();
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	CommittedSourceActor = ExpectedSourceActor;
 	OnImpactCommitted.Broadcast(CommittedRequest);
@@ -1119,6 +1126,7 @@ void UHeavyImpactResponseComponent::TickComponent(
 	if (State == EHeavyImpactState::Prepared)
 	{
 		UpdatePhysicalFollow(DeltaTime);
+		CapturePendingContactVelocity();
 		const bool bCrossedPreparedFrame = GFrameCounter > PreparedEntryFrame;
 		const bool bRadialReady = bCrossedPreparedFrame
 			&& !PendingRadialVelocityChange.IsNearlyZero();
@@ -1141,10 +1149,94 @@ void UHeavyImpactResponseComponent::TickComponent(
 		ReleasePhysicsBodyCollisionIfDue();
 		UpdatePhysicalFollow(DeltaTime, false, State == EHeavyImpactState::Settling);
 		UpdateStability(DeltaTime);
+		if (ActiveRequest.ImpactId.IsValid())
+		{
+			CapturePendingContactVelocity();
+		}
 	}
 }
 
-/** 保留首个 Chaos 接触的真实冲量后，避免 PhysicsBody 持续夹持；静态/动态关卡几何不变。 */
+/** 缓存当前物理帧的骨盆线速度；真实 Hit 回调发生时该值仍是上一求解帧的接触前基线。 */
+void UHeavyImpactResponseComponent::CapturePendingContactVelocity()
+{
+	bHasPendingContactPelvisVelocity = false;
+	if (!IsValid(Mesh) || !IsValid(Tuning) || !ActiveRequest.ImpactId.IsValid())
+	{
+		return;
+	}
+
+	const FVector Velocity = Mesh->GetPhysicsLinearVelocity(Tuning->PelvisBone);
+	if (Velocity.ContainsNaN())
+	{
+		return;
+	}
+
+	PendingContactPelvisVelocity = Velocity;
+	bHasPendingContactPelvisVelocity = true;
+}
+
+/** 只缩放本次求解沿来源方向新增的全身共同平移；SetAll 的 additive 写入不改变刚体间相对速度或角速度。 */
+void UHeavyImpactResponseComponent::ApplyCommittedPhysicalResponseScale(
+	const FHeavyImpactPreparationRequest& Request)
+{
+	const float ResponseScale = Request.PhysicalResponseScale;
+	if (ResponseScale >= 1.0f - UE_KINDA_SMALL_NUMBER)
+	{
+		bHasPendingContactPelvisVelocity = false;
+		PendingContactPelvisVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	const FVector ImpactDirection = Request.SourceLinearVelocity.GetSafeNormal();
+	if (!bHasPendingContactPelvisVelocity || ImpactDirection.IsNearlyZero())
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Warning,
+			TEXT("HeavyImpact could not apply PhysicalResponseScale %.2f on %s because no valid pre-contact pelvis velocity or source direction was available."),
+			ResponseScale,
+			*GetNameSafe(GetOwner()));
+		bHasPendingContactPelvisVelocity = false;
+		PendingContactPelvisVelocity = FVector::ZeroVector;
+		return;
+	}
+
+	const FVector CurrentPelvisVelocity = Mesh->GetPhysicsLinearVelocity(Tuning->PelvisBone);
+	const float AddedSpeedAlongSource = FVector::DotProduct(
+		CurrentPelvisVelocity - PendingContactPelvisVelocity,
+		ImpactDirection);
+	if (FMath::IsFinite(AddedSpeedAlongSource) && AddedSpeedAlongSource > UE_KINDA_SMALL_NUMBER)
+	{
+		const FVector CommonVelocityCorrection =
+			-ImpactDirection * AddedSpeedAlongSource * (1.0f - ResponseScale);
+		Mesh->SetAllPhysicsLinearVelocity(CommonVelocityCorrection, true);
+		UE_LOG(
+			LogHeavyImpact,
+			Verbose,
+			TEXT("HeavyImpact scaled committed common linear response on %s: scale=%.2f, added=%.2f cm/s, correction=%s"),
+			*GetNameSafe(GetOwner()),
+			ResponseScale,
+			AddedSpeedAlongSource,
+			*CommonVelocityCorrection.ToCompactString());
+	}
+
+	bHasPendingContactPelvisVelocity = false;
+	PendingContactPelvisVelocity = FVector::ZeroVector;
+}
+
+/** 首次真实接触已经完成动量交换；后续帧只保留世界几何碰撞，避免运动学锤头持续推入对墙。 */
+void UHeavyImpactResponseComponent::ReleaseCommittedPhysicsBodyContact()
+{
+	if (!IsValid(Mesh))
+	{
+		return;
+	}
+
+	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
+	bPhysicsBodyCollisionReleased = true;
+}
+
+/** 无精确 Hit 的超时/径向事务使用延迟兜底放开 PhysicsBody；静态/动态关卡几何不变。 */
 void UHeavyImpactResponseComponent::ReleasePhysicsBodyCollisionIfDue()
 {
 	if (bPhysicsBodyCollisionReleased

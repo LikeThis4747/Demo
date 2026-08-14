@@ -380,6 +380,7 @@ bool ABatteringRamHazard::BuildPreparationRequest(
 	OutRequest.SourceComponent = RamBody;
 	OutRequest.PredictedImpactPoint = PredictedHit.ImpactPoint;
 	OutRequest.SourceLinearVelocity = PlannedWorldVelocity;
+	OutRequest.PhysicalResponseScale = TuningData->PhysicalResponseScale;
 	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN();
 }

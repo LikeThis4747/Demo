@@ -273,6 +273,7 @@ namespace ZeroEscape::Physics::Tests
 		ValidRequest.SourceComponent = SourceComponent;
 		ValidRequest.PredictedImpactPoint = FVector(100.0f, 20.0f, 50.0f);
 		ValidRequest.SourceLinearVelocity = FVector(800.0f, 0.0f, 0.0f);
+		ValidRequest.PhysicalResponseScale = 0.6f;
 		ValidRequest.EstimatedTimeToContactSeconds = 0.05f;
 
 		auto ExpectInvalid = [this, Receiver](
@@ -320,6 +321,18 @@ namespace ZeroEscape::Physics::Tests
 		Request = ValidRequest;
 		Request.EstimatedTimeToContactSeconds = -0.01f;
 		ExpectInvalid(TEXT("预计接触时间为负数必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.PhysicalResponseScale = std::numeric_limits<float>::quiet_NaN();
+		ExpectInvalid(TEXT("物理响应比例为 NaN 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.PhysicalResponseScale = -0.01f;
+		ExpectInvalid(TEXT("物理响应比例低于 0 必须被拒绝"), Request);
+
+		Request = ValidRequest;
+		Request.PhysicalResponseScale = 1.01f;
+		ExpectInvalid(TEXT("物理响应比例高于 1 必须被拒绝"), Request);
 
 		FString ValidReason;
 		TestTrue(TEXT("对象关系与预测值都合法的请求必须通过"),
@@ -395,7 +408,7 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->LandingControl.MaxTorqueMultiplier, 3.5f);
 		TestEqual(TEXT("Downed reimpact threshold must reject residual contacts by default"),
 			Fixture.Tuning->MinimumDownedReimpactImpulse, 1000.0f);
-		TestEqual(TEXT("PhysicsBody contact release must preserve a short real-contact window"),
+		TestEqual(TEXT("Contactless Heavy fallback release delay must remain explicit"),
 			Fixture.Tuning->PhysicsBodyReleaseDelaySeconds, 0.15f);
 		TestEqual(TEXT("Player-class default same-source protection must remain explicit"),
 			Fixture.Tuning->SameSourceProtectionSeconds, 0.75f);
@@ -592,6 +605,15 @@ namespace ZeroEscape::Physics::Tests
 			NewObject<UBatteringRamHazardTuningData>();
 		TestEqual(TEXT("冲锤只允许 0.08 秒短预测窗口"),
 			RamTuning->MaximumPreparationLeadTime, 0.08f);
+		TestEqual(TEXT("冲锤默认只保留 60% 的首次接触整体线性响应"),
+			RamTuning->PhysicalResponseScale, 0.6f);
+		TestTrue(TEXT("冲锤默认响应映射必须通过配置校验"),
+			RamTuning->IsConfigured(Error));
+		UBatteringRamHazardTuningData* MutableRamTuning =
+			NewObject<UBatteringRamHazardTuningData>();
+		MutableRamTuning->PhysicalResponseScale = 1.01f;
+		TestFalse(TEXT("冲锤响应比例高于 1 必须被拒绝"),
+			MutableRamTuning->IsConfigured(Error));
 
 		Tuning->PreparationLookAheadDistance = 10.0f;
 		TestFalse(TEXT("预测距离不足以覆盖锤头短窗口轨迹和采样余量时必须拒绝"),

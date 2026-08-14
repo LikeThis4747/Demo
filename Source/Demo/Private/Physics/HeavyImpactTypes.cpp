@@ -59,6 +59,14 @@ bool FHeavyImpactPreparationRequest::IsStructurallyValid(
 		return false;
 	}
 
+	if (!FMath::IsFinite(PhysicalResponseScale)
+		|| PhysicalResponseScale < 0.0f
+		|| PhysicalResponseScale > 1.0f)
+	{
+		OutReason = TEXT("Physical response scale must be finite and within 0..1.");
+		return false;
+	}
+
 	OutReason.Reset();
 	return true;
 }

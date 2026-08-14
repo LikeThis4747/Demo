@@ -2,7 +2,7 @@
 
 /**
  * @file BatteringRamHazardTuningData.h
- * 职责：保存 Level0 自动周期冲锤第一版的碰撞几何、行程、时序和重冲击预测窗口。
+ * 职责：保存自动周期冲锤的碰撞几何、行程、时序、重冲击预测窗口与来源响应比例。
  * 边界：不引用关卡、网格、角色或 PCG；不定义玩家与追猎者的受击差异。
  */
 
@@ -86,4 +86,12 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|冲锤|重冲击预测",
 		meta = (ClampMin = "0.08", ClampMax = "0.5", UIMin = "0.08", UIMax = "0.25", Units = "s"))
 	float MaximumPreparationLeadTime = 0.08f;
+
+	/**
+	 * ABatteringRamHazard::BuildPreparationRequest 写入 Heavy 请求的整体线性响应比例；默认 0.60，范围 0~1。
+	 * 调低只削减首次真实接触沿冲锤方向新增的全身共同平移速度；局部转动、四肢相对运动和冲锤自身速度保持真实接触结果。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|冲锤|重冲击响应",
+		meta = (ClampMin = "0.0", ClampMax = "1.0", UIMin = "0.3", UIMax = "1.0"))
+	float PhysicalResponseScale = 0.60f;
 };

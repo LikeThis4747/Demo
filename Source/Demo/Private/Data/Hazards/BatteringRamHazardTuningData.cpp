@@ -26,7 +26,8 @@ bool UBatteringRamHazardTuningData::IsConfigured(FString& OutError) const
 		|| !FMath::IsFinite(ExtensionSeconds)
 		|| !FMath::IsFinite(RetractionSeconds)
 		|| !FMath::IsFinite(PreparationLookAheadDistance)
-		|| !FMath::IsFinite(MaximumPreparationLeadTime))
+		|| !FMath::IsFinite(MaximumPreparationLeadTime)
+		|| !FMath::IsFinite(PhysicalResponseScale))
 	{
 		return Reject(TEXT("冲锤配置包含非有限数值。"));
 	}
@@ -59,6 +60,11 @@ bool UBatteringRamHazardTuningData::IsConfigured(FString& OutError) const
 	if (MaximumPreparationLeadTime < 0.08f || MaximumPreparationLeadTime > 0.5f)
 	{
 		return Reject(TEXT("MaximumPreparationLeadTime 必须位于 0.08~0.5 s。"));
+	}
+
+	if (PhysicalResponseScale < 0.0f || PhysicalResponseScale > 1.0f)
+	{
+		return Reject(TEXT("PhysicalResponseScale 必须位于 0~1。"));
 	}
 
 	return true;

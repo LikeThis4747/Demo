@@ -39,7 +39,7 @@ enum class EHeavyImpactPrepareResult : uint8
 
 /**
  * 机关在真实接触前提交的准备请求。
- * 该请求只标识预期接触源；线性和角动量仍由随后发生的 Chaos 接触产生。
+ * 该请求标识预期接触源与来源期望的整体线性响应比例；局部线性和角向变化仍由随后发生的 Chaos 接触产生。
  */
 USTRUCT(BlueprintType)
 struct DEMO_API FHeavyImpactPreparationRequest
@@ -62,9 +62,17 @@ struct DEMO_API FHeavyImpactPreparationRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact")
 	FVector PredictedImpactPoint = FVector::ZeroVector;
 
-	/** 世界空间机关线速度，仅用于诊断，不会直接转成角色冲量，单位为厘米/秒。 */
+	/** 世界空间机关线速度；用于诊断并确定来源冲击方向，不会直接转成角色冲量，单位为厘米/秒。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact")
 	FVector SourceLinearVelocity = FVector::ZeroVector;
+
+	/**
+	 * 来源期望保留的整体线性物理响应比例；1 保留完整 Chaos 接触，0 只保留局部相对运动与角向响应。
+	 * 接收组件只缩放该次接触沿 SourceLinearVelocity 新增的共同平移速度，不重放冲量，也不改变各刚体相对速度。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float PhysicalResponseScale = 1.0f;
 
 	/** 从请求时刻到预计接触的秒数。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact", meta = (ClampMin = "0.0"))

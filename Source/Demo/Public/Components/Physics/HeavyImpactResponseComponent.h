@@ -3,7 +3,7 @@
 /**
  * @file HeavyImpactResponseComponent.h
  * 职责：唯一拥有角色重冲击准备、真实接触提交、全身物理飞行、跟随与落地判稳状态。
- * 边界：不制造冲量、不播放受击动画；只在安全落点确定后协调共享起身动画，不依赖具体玩家、AI 或机关类型。
+ * 边界：不重放接触冲量、不播放受击动画；可按请求缩放一次共同线性响应，并只在安全落点确定后协调共享起身动画。
  * 状态 Owner：唯一写入 EHeavyImpactState 并唯一管理本组件创建的 Physics Control 记录。
  */
 
@@ -232,6 +232,15 @@ private:
 	/** 准备超时已进入 Heavy 后，补记同一预期源随后到达的唯一真实接触。 */
 	void CommitLateAcceptedContact(const FHitResult& Hit, const FVector& NormalImpulse);
 
+	/** 记录下一次预期真实接触前的骨盆线速度，供来源响应比例只处理本次新增速度。 */
+	void CapturePendingContactVelocity();
+
+	/** 按请求比例缩放真实接触沿来源方向新增的共同平移速度；保留相对速度与角向响应。 */
+	void ApplyCommittedPhysicalResponseScale(const FHeavyImpactPreparationRequest& Request);
+
+	/** 首个真实接触提交后立即结束 Mesh 对 PhysicsBody 的后续阻挡，防止运动学来源重复顶推。 */
+	void ReleaseCommittedPhysicsBodyContact();
+
 	/** 从 Downed 的另一真实动态刚体接触恢复物理求解，不补冲量。 */
 	void ResumeFromDownedHit(
 		AActor* SourceActor,
@@ -244,7 +253,7 @@ private:
 	/** 在全身物理与 Flight 已有效时消费一次或多次累加的径向速度改变量。 */
 	void ApplyPendingRadialImpact();
 
-	/** 首次真实冲量保留短暂接触后，只放开 PhysicsBody；墙和地面碰撞保持不变。 */
+	/** 无真实 Commit 的超时/径向事务使用延迟兜底放开 PhysicsBody；真实 Commit 已在回调内立即放开。 */
 	void ReleasePhysicsBodyCollisionIfDue();
 
 	/** Inactive 时拒绝并刷新上一次命中来源的保护期；其他来源不受影响。 */
@@ -396,6 +405,8 @@ private:
 	TArray<FGuid> LoggedRejectedImpactIds;
 	FVector PendingRadialVelocityChange = FVector::ZeroVector;
 	TWeakObjectPtr<AActor> PendingRadialSourceActor;
+	/** 最近一次 PostPhysics 采样的接触前骨盆线速度；只在 ActiveRequest 等待真实接触时有效。 */
+	FVector PendingContactPelvisVelocity = FVector::ZeroVector;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UHeavyImpactAnimInstance> HeavyImpactAnimInstance = nullptr;
@@ -436,6 +447,8 @@ private:
 	bool bPendingDownedSleep = false;
 	/** 当前已提交事务是否已经放开 Mesh 对 PhysicsBody 的阻挡。 */
 	bool bPhysicsBodyCollisionReleased = false;
+	/** PendingContactPelvisVelocity 是否来自当前 ActiveRequest 的有效物理帧。 */
+	bool bHasPendingContactPelvisVelocity = false;
 	bool bPureRagdollComparisonActive = false;
 	bool bBodyFrontCalibrationValid = false;
 	bool bRecoveryOrientationWarningLogged = false;

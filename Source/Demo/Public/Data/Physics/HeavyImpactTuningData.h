@@ -101,8 +101,8 @@ public:
 	float MinimumDownedReimpactImpulse = 1000.0f;
 
 	/**
-	 * Seconds of real PhysicsBody contact retained after the first committed Chaos impulse.
-	 * Once elapsed, the physical Mesh ignores PhysicsBody until animation recovery restores its baseline;
+	 * Fallback seconds before releasing PhysicsBody when Heavy was promoted without an exact committed contact.
+	 * Exact real contacts release PhysicsBody immediately after their first solver result; once released, the Mesh ignores PhysicsBody until recovery;
 	 * WorldStatic and WorldDynamic remain blocking, so walls and floors still participate.
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Protection",

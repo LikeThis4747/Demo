@@ -41,3 +41,12 @@
 - `DA_SpikeStandingImpact` 的玩家 Stop 改为 `0.70s`；追猎者保持 `Slow 0.60s / 0.45`。官方回读和 C++ 均确认 SpikeTrap 不导出导航障碍，升降刺运行时 Ignore Pawn，Slow 不取消 AI PathFollowing。
 - Demo 模块正式构建、链接成功；冷启动后四个 Blueprint warning-as-error 编译通过，相关资产均非 dirty；Heavy 5 项 + CharacterImpact 2 项自动化 `7/7 Success`、0 warning、0 error。短 PIE 无 Heavy/Light 初始化错误。
 - 待用户在原墙边复现点确认：Capsule/相机锚点不再进墙、起身一帧闪是否消失、真实物理 Mesh 是否仍穿墙、墙角原生 SpringArm 碰撞伸展是否仍有跳变，以及地刺 0.70 秒 Stop 与 AI Slow 寻路体感。
+
+## 冲锤 Heavy 方案 A 实现
+
+- Heavy 准备请求新增来源参数 `PhysicalResponseScale`，默认 `1.0`。冲锤调参默认 `0.60`；摆锤、追猎者攻击及其他既有来源未赋值，继续保留完整响应。
+- 真实 Hit 前保存骨盆线速度；Hit 后只削减沿来源速度方向新增的全身共同平移。实现对全部模拟 Body 施加同一个速度修正，因此不改变 Body 间相对线速度与角速度，也没有生成第二份人工受击冲量。
+- 首次真实接触提交后立即结束 Mesh 对 `ECC_PhysicsBody` 的阻挡，墙与地面碰撞保持不变，避免运动学冲锤在后续帧持续向对墙推送。原 `PhysicsBodyReleaseDelaySeconds=0.15` 仅作为没有精确 Hit 的超时/径向 Heavy 兜底。
+- 官方 UE5.8 MCP 回读 `DA_BatteringRamHazard_Default.PhysicalResponseScale=0.60`，原有盒体、行程和时序数值未改；资产和三个相关 Blueprint 未产生新二进制差异。
+- `DemoEditor Win64 Development -Module=Demo -NoEngineChanges` 编译链接通过；`BP_BatteringRamHazard`、`BP_ZeroEscapeCharacter`、`BP_Pursuer` warning-as-error 编译通过；Heavy 5 项 + CharacterImpact 2 项自动化 `7/7 Success`、0 warning、0 error。
+- 仍待用户真实 PIE 判定冲锤 `0.60` 的画面力度，以及首次接触后是否不再持续顶推；该手感验收不由构建或自动化代替。
