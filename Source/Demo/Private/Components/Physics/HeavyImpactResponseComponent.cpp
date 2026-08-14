@@ -1254,42 +1254,9 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 		? Character->GetActorRotation().Yaw
 		: HorizontalForward.Rotation().Yaw;
 	const FRotator NewRotation(0.0f, DesiredYaw, 0.0f);
-	FVector ResolvedLocation = NewLocation;
-
-	// Heavy 的 Mesh 已脱离并由 Chaos 求解；这里只约束承载输入和相机的 Capsule 外壳。
-	// 只查询 WorldStatic，避免摆锤、箱子和其他动态玩法物反过来抖动相机锚点。
-	if (UWorld* World = GetWorld(); IsValid(World))
-	{
-		const FVector CurrentLocation = Character->GetActorLocation();
-		const float QueryRadius = FMath::Max(1.0f, Capsule->GetScaledCapsuleRadius() - 1.0f);
-		const float QueryHalfHeight = FMath::Max(
-			QueryRadius,
-			Capsule->GetScaledCapsuleHalfHeight() - 1.0f);
-		FCollisionObjectQueryParams ObjectQueryParams;
-		ObjectQueryParams.AddObjectTypesToQuery(ECC_WorldStatic);
-		FCollisionQueryParams QueryParams(
-			SCENE_QUERY_STAT(HeavyImpactCapsuleFollow),
-			false,
-			Character);
-		FHitResult WallHit;
-		const bool bBlockedByWorldStatic = World->SweepSingleByObjectType(
-			WallHit,
-			CurrentLocation,
-			NewLocation,
-			FQuat::Identity,
-			ObjectQueryParams,
-			FCollisionShape::MakeCapsule(QueryRadius, QueryHalfHeight),
-			QueryParams);
-		if (bBlockedByWorldStatic)
-		{
-			ResolvedLocation = WallHit.bStartPenetrating
-				? CurrentLocation
-				: WallHit.Location;
-		}
-	}
 
 	Character->SetActorLocationAndRotation(
-		ResolvedLocation,
+		NewLocation,
 		NewRotation,
 		false,
 		nullptr,
