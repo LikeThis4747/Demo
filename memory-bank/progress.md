@@ -45,3 +45,14 @@
 - 删除 Settling 抢跑起身与 5/10 秒正常硬切；Downed 睡眠后立即尝试，0.20s 重试，3.0s 截止；Snapshot 淡入 0.30s。
 - DemoEditor 构建成功；官方 MCP 回读资产正确且非 dirty；Heavy 5 项 + CharacterImpact 2 项自动化 7/7 Success。
 - 状态：技术实现完成，待用户 PIE 视觉与手感验收。
+
+<!-- written by shiqiqiwang at 2026-08-14 05:41 UTC -->
+
+## 2026-08-14 — HeavyImpact 用户复测增量
+
+- 玩家与追猎者确认共用同一 HeavyImpact 状态机；AI 挂墙不起定位为“无可行走支撑时稳定进度永远清零”，不是 AIController 漏恢复。
+- 共享修正为低线速/低角速连续 0.35 秒即可收口；有支撑走正常 Downed，无支撑处理墙边/夹缝低能量卡死。
+- 两份 Heavy 起身阻塞截止从 3.0 秒改为 2.0 秒；0.20 秒重试不变。自然飞行与滚动仍无总时长硬切。
+- 未保留暂停 Montage 的猜测性补丁；当前闪感记录为物理终姿到两种固定起身首姿的匹配限制，待用户现场判断。
+- DemoEditor 构建成功；官方 MCP 回读两份 DA 正确且非 dirty；受击自动化 7/7 Success；5 秒 SIE 无 Heavy 告警。
+- 状态：技术实现完成，待用户 PIE 验收后决定是否需要动画首姿侧调整。

@@ -1082,7 +1082,10 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 		ETeleportType::TeleportPhysics);
 }
 
-/** 只在最短模拟时间后，用有支撑的低能量窗口判定自然滚动已经结束。 */
+/**
+ * 只在最短模拟时间后，用连续低能量窗口判定物理运动已经结束。
+ * 正常落地仍要求可行走支撑；但挂在墙边或几何夹缝中的低能量姿势也必须有有界出口。
+ */
 void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 {
 	const FVector LinearVelocity = Mesh->GetPhysicsLinearVelocity(Tuning->PelvisBone);
@@ -1103,10 +1106,12 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 		return;
 	}
 
-	if (bSupported && bSlowEnough)
+	if (bSlowEnough)
 	{
 		StableElapsedSeconds += DeltaTime;
-		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Simulating)
+		if (bSupported
+			&& !bFreeFallbackInvoked
+			&& State == EHeavyImpactState::Simulating)
 		{
 			if (!ApplyPhysicalStage(
 				Demo::HeavyImpact::ProfileLandingRecovery,
@@ -1121,7 +1126,10 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 
 		if (StableElapsedSeconds >= Tuning->RequiredStableSeconds)
 		{
-			EnterDowned(TEXT("Supported low-energy motion remained stable long enough."));
+			EnterDowned(
+				bSupported
+					? TEXT("Supported low-energy motion remained stable long enough.")
+					: TEXT("Unsupported low-energy pose remained stalled long enough."));
 			return;
 		}
 	}

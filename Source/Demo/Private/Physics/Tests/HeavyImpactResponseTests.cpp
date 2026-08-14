@@ -403,8 +403,8 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->MaximumPreparationSeconds, 0.18f);
 		TestEqual(TEXT("起身空间重试间隔必须足够短"),
 			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
-		TestEqual(TEXT("安全站位阻塞必须有 3 秒截止"),
-			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 3.0f);
+		TestEqual(TEXT("安全站位阻塞必须有 2 秒截止"),
+			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 2.0f);
 		TestEqual(TEXT("Snapshot 到起身动画的默认淡入必须稳定"),
 			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.30f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),
@@ -451,7 +451,7 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->RecoveryRetrySeconds - 0.01f;
 		TestFalse(TEXT("起身阻塞截止不得短于一次重试间隔"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
-		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 3.0f;
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 2.0f;
 		Fixture.Tuning->GroundProbeDistance = std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("任一调参阈值为 NaN 必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
@@ -461,7 +461,7 @@ namespace ZeroEscape::Physics::Tests
 		TestFalse(TEXT("任一调参阈值为 Inf 必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 
-		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 3.0f;
+		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 2.0f;
 		Fixture.Tuning->FlightControl.MaxTorqueMultiplier =
 			std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("任一阶段控制倍率为 NaN 必须被拒绝"),
@@ -491,7 +491,7 @@ namespace ZeroEscape::Physics::Tests
 		TestEqual(TEXT("Recovery retry default must remain bounded"),
 			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
 		TestEqual(TEXT("Recovery blocked deadline must remain bounded"),
-			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 3.0f);
+			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 2.0f);
 		TestTrue(TEXT("Recovery tuning fixture must begin valid"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 

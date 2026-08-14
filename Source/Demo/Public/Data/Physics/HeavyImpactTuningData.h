@@ -93,7 +93,7 @@ public:
 	/** 起身安全站位允许阻塞的最长时间；到期后以受击前 Capsule 位置为种子做一次有界安全搜索。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
 		meta = (ClampMin = "0.1", ClampMax = "10.0", Units = "s"))
-	float MaximumRecoveryBlockedSeconds = 3.0f;
+	float MaximumRecoveryBlockedSeconds = 2.0f;
 
 	/** Minimum Chaos contact impulse that may interrupt Downed recovery as a genuine second hit. */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Interruption",
@@ -179,7 +179,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.0"))
 	float StableAngularSpeedDegPerSecond = 90.0f;
 
-	/** 速度达标且有地面支撑必须持续的秒数。 */
+	/** 骨盆低线速和低角速必须连续保持的秒数；同时用于识别无地面支撑的墙边卡死。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.05"))
 	float RequiredStableSeconds = 0.35f;
 
