@@ -127,7 +127,12 @@ bool ASpikeWheelHazard::BuildRoute(FString& OutError)
 		return false;
 	}
 
-	FRandomStream Random(RouteVariantSeed);
+	const FVector ActorLocation = GetActorLocation();
+	uint32 EffectiveSeed = GetTypeHash(RouteVariantSeed);
+	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.X / TuningData->TileSizeCm)));
+	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Y / TuningData->TileSizeCm)));
+	EffectiveSeed = HashCombineFast(EffectiveSeed, GetTypeHash(FMath::RoundToInt(ActorLocation.Z / TuningData->TileSizeCm)));
+	FRandomStream Random(static_cast<int32>(EffectiveSeed));
 	const int32 PatternIndex = MatchingPatternIndices[Random.RandRange(0, MatchingPatternIndices.Num() - 1)];
 	const FSpikeWheelRoutePattern& Pattern = TuningData->RoutePatterns[PatternIndex];
 	const float MirrorSign = Random.RandRange(0, 1) == 0 ? 1.0f : -1.0f;

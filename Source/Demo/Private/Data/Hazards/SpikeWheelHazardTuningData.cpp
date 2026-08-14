@@ -21,6 +21,10 @@ USpikeWheelHazardTuningData::USpikeWheelHazardTuningData()
 
 	AddPattern(TEXT("OneCell_OffsetLoop"), 1, true,
 		{ {-0.30f, -0.18f}, {-0.14f, 0.30f}, {0.08f, -0.28f}, {0.30f, 0.18f}, {0.14f, 0.31f}, {-0.28f, 0.06f} });
+	AddPattern(TEXT("OneCell_DiagonalM"), 1, false,
+		{ {-0.32f, -0.28f}, {-0.16f, 0.29f}, {0.00f, -0.26f}, {0.17f, 0.30f}, {0.32f, -0.24f} });
+	AddPattern(TEXT("OneCell_CrossLoop"), 1, true,
+		{ {-0.30f, -0.26f}, {0.28f, 0.26f}, {0.30f, -0.24f}, {-0.28f, 0.25f} });
 	AddPattern(TEXT("TwoCell_OffsetW"), 2, false,
 		{ {-0.30f, -0.25f}, {-0.05f, 0.28f}, {0.25f, -0.28f}, {0.55f, 0.30f}, {0.85f, -0.25f}, {1.15f, 0.28f}, {1.30f, -0.10f} });
 	AddPattern(TEXT("TwoCell_LongDiagonal"), 2, true,

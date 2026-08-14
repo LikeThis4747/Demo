@@ -89,7 +89,7 @@ private:
 		meta = (AllowPrivateAccess = "true", ClampMin = "1", ClampMax = "3"))
 	int32 FootprintSpanTiles = 2;
 
-	/** Future PCG can set this per placed trap; it selects template, mirror, direction and start phase deterministically. */
+	/** Base seed. World-grid position is mixed in so separate placed traps vary deterministically. */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Hazard|Spike Wheel|Route", meta = (AllowPrivateAccess = "true"))
 	int32 RouteVariantSeed = 1337;
 

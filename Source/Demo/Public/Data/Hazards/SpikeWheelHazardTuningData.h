@@ -56,7 +56,7 @@ public:
 	float WheelRadiusCm = 55.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spike Wheel|Geometry", meta = (ClampMin = "0.0", ClampMax = "500.0", Units = "cm"))
-	float WheelCenterHeightCm = 55.0f;
+	float WheelCenterHeightCm = 0.0f;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Spike Wheel|Contact", meta = (ClampMin = "5.0", ClampMax = "250.0", Units = "cm"))
 	float HurtRadiusCm = 65.0f;
