@@ -40,7 +40,6 @@ namespace HeavyImpactRuntime
 	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
 	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
 	constexpr float AbsoluteMaximumRecoveryAdjustmentCm = 60.0f;
-	constexpr float AbsoluteMaximumFallbackAdjustmentCm = 200.0f;
 	constexpr float RecoveryWatchdogPaddingSeconds = 1.0f;
 	constexpr float RecoveryAsyncFrameDelaySeconds = 0.001f;
 	const FName RecoverySlotName(TEXT("DefaultSlot"));
@@ -817,7 +816,6 @@ bool UHeavyImpactResponseComponent::EnterPreparedPhysicalState(FString& OutReaso
 
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
-	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	PreparedEntryFrame = GFrameCounter;
 	TotalCommittedSeconds = 0.0f;
@@ -1044,7 +1042,6 @@ void UHeavyImpactResponseComponent::ResumeFromDowned(AActor* SourceActor)
 	bPhysicsBodyCollisionReleased = false;
 	bFreeFallbackInvoked = false;
 	bPendingDownedSleep = false;
-	bPreferPreImpactRecoveryLocation = false;
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	PendingRadialVelocityChange = FVector::ZeroVector;
 	PendingRadialSourceActor.Reset();
@@ -1212,7 +1209,7 @@ void UHeavyImpactResponseComponent::BeginSameSourceProtection()
 		World->GetTimeSeconds() + Tuning->SameSourceProtectionSeconds;
 }
 
-/** 将 Actor/Capsule 外壳跟到真实骨盆；只复制水平朝向，不复制 Pitch/Roll。 */
+/** 将 QueryOnly Actor/Capsule 外壳跟到真实骨盆；只复制水平朝向，不参与 Ragdoll 阻挡。 */
 void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 	float DeltaTime,
 	bool bSnap,
@@ -1230,7 +1227,8 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 		FHitResult GroundHit;
 		if (TryGetGroundSupport(GroundHit))
 		{
-			DesiredActorLocation.Z = GroundHit.ImpactPoint.Z + Capsule->GetScaledCapsuleHalfHeight();
+			DesiredActorLocation.Z =
+				GroundHit.ImpactPoint.Z + Capsule->GetScaledCapsuleHalfHeight();
 		}
 		else
 		{
@@ -1266,8 +1264,7 @@ void UHeavyImpactResponseComponent::UpdatePhysicalFollow(
 }
 
 /**
- * 只在最短模拟时间后，用连续低能量窗口判定物理运动已经结束。
- * 正常落地仍要求可行走支撑；但挂在墙边或几何夹缝中的低能量姿势也必须有有界出口。
+ * 最短模拟时间后仍允许连续低能量自然收口；所有持续物理状态同时受统一时长上限约束。
  */
 void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 {
@@ -1275,7 +1272,7 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 	const FVector AngularVelocityDeg = Mesh->GetPhysicsAngularVelocityInDegrees(Tuning->PelvisBone);
 	const float LinearSpeed = LinearVelocity.Size();
 	const float AngularSpeed = AngularVelocityDeg.Size();
-	const bool bSupportedSlowEnough = LinearSpeed <= Tuning->StableLinearSpeedCmPerSecond
+	const bool bSlowEnough = LinearSpeed <= Tuning->StableLinearSpeedCmPerSecond
 		&& AngularSpeed <= Tuning->StableAngularSpeedDegPerSecond;
 	const float ClearlyActiveLinearSpeed = Tuning->StableLinearSpeedCmPerSecond * 1.5f;
 	const bool bClearlyActive = LinearSpeed > ClearlyActiveLinearSpeed
@@ -1290,43 +1287,13 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 		return;
 	}
 
-	bool bUnsupportedShellOverlappingWorldStatic = false;
-	if (!bSupported)
+	if (TotalCommittedSeconds >= Tuning->MaximumSimulationSeconds)
 	{
-		if (const UWorld* World = GetWorld(); IsValid(World))
-		{
-			const float QueryRadius = FMath::Max(
-				1.0f,
-				Capsule->GetScaledCapsuleRadius() - 2.0f);
-			const float QueryHalfHeight = FMath::Max(
-				QueryRadius,
-				Capsule->GetScaledCapsuleHalfHeight() - 2.0f);
-			FCollisionObjectQueryParams Objects;
-			Objects.AddObjectTypesToQuery(ECC_WorldStatic);
-			const FCollisionQueryParams Params(
-				SCENE_QUERY_STAT(HeavyImpactUnsupportedShellOverlap),
-				false,
-				Character);
-			bUnsupportedShellOverlappingWorldStatic = World->OverlapAnyTestByObjectType(
-				Character->GetActorLocation(),
-				FQuat::Identity,
-				Objects,
-				FCollisionShape::MakeCapsule(QueryRadius, QueryHalfHeight),
-				Params);
-		}
+		EnterDowned(TEXT("Maximum HeavyImpact simulation duration elapsed."));
+		return;
 	}
 
-	// 贴墙身体可能在骨盆平移已经停止后，仍因接触求解保留持续速度抖动。
-	// 无支撑平移低于现有“明显运动”阈值，或 QueryOnly 外壳已经持续进入墙体时，
-	// 求解器速度不再阻断有界起身流程。
-	const bool bUnsupportedTranslationStalled = !bSupported
-		&& (LinearSpeed <= ClearlyActiveLinearSpeed
-			|| bUnsupportedShellOverlappingWorldStatic);
-	const bool bCanFinishPhysicalMotion = bSupported
-		? bSupportedSlowEnough
-		: bUnsupportedTranslationStalled;
-
-	if (bCanFinishPhysicalMotion)
+	if (bSlowEnough)
 	{
 		StableElapsedSeconds += DeltaTime;
 		if (bSupported
@@ -1346,18 +1313,13 @@ void UHeavyImpactResponseComponent::UpdateStability(const float DeltaTime)
 
 		if (StableElapsedSeconds >= Tuning->RequiredStableSeconds)
 		{
-			EnterDowned(
-				bSupported
-					? TEXT("Supported low-energy motion remained stable long enough.")
-					: TEXT("Unsupported low-energy pose remained stalled long enough."),
-				!bSupported);
+			EnterDowned(bSupported
+				? TEXT("Supported low-energy motion remained stable long enough.")
+				: TEXT("Unsupported low-energy motion remained stable long enough."));
 			return;
 		}
 	}
-	else if ((!bSupported
-		&& LinearSpeed > ClearlyActiveLinearSpeed
-		&& !bUnsupportedShellOverlappingWorldStatic)
-		|| (bSupported && bClearlyActive))
+	else if (bClearlyActive)
 	{
 		StableElapsedSeconds = 0.0f;
 		if (!bFreeFallbackInvoked && State == EHeavyImpactState::Settling)
@@ -1472,10 +1434,8 @@ void UHeavyImpactResponseComponent::EnterFreeFallback(const TCHAR* Reason)
 		Reason);
 }
 
-/** 对齐真实地面落点，调用 FreeFallback，并等下一次 PrePhysics 后再睡眠。 */
-void UHeavyImpactResponseComponent::EnterDowned(
-	const TCHAR* Reason,
-	const bool bShouldPreferPreImpactRecoveryLocation)
+/** 固定当前物理姿势，调用 FreeFallback，并等下一次 PrePhysics 后再睡眠。 */
+void UHeavyImpactResponseComponent::EnterDowned(const TCHAR* Reason)
 {
 	const bool bStartingNewDownedTransaction = State != EHeavyImpactState::Downed;
 	UpdatePhysicalFollow(0.0f, true, true);
@@ -1494,7 +1454,6 @@ void UHeavyImpactResponseComponent::EnterDowned(
 	if (bStartingNewDownedTransaction)
 	{
 		RecoveryBlockedStartTimeSeconds = -1.0;
-		bPreferPreImpactRecoveryLocation = bShouldPreferPreImpactRecoveryLocation;
 	}
 	bPendingDownedSleep = true;
 	SetState(EHeavyImpactState::Downed);
@@ -1589,36 +1548,17 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 		return;
 	}
 
-	// 墙边无支撑卡滞已经证明当前身体位置不适合作为站立胶囊种子。
-	// 先复用原有的完整胶囊、可行走地面校验，避免明知会失败仍等待到截止时间。
-	if (bPreferPreImpactRecoveryLocation)
-	{
-		FHeavyImpactRecoveryPlan PreferredPlan;
-		FString PreferredReason;
-		if (BuildPreImpactFallbackRecoveryPlan(PreferredPlan, PreferredReason)
-			&& BeginPhysicalToAnimationHandoff(PreferredPlan, PreferredReason))
-		{
-			UE_LOG(
-				LogHeavyImpact,
-				Warning,
-				TEXT("HeavyImpact recovery on %s immediately used a validated pre-impact-seeded location after an unsupported wall stall."),
-				*GetNameSafe(GetOwner()));
-			return;
-		}
-
-		// Handoff 基础设施失败可能已经恢复了新的 Downed 事务；旧请求不得继续写状态。
-		if (State != EHeavyImpactState::Downed
-			|| RecoveryPhase != EHeavyImpactRecoveryPhase::WaitingForSpace
-			|| RecoveryTransactionSerial != ExpectedTransactionSerial)
-		{
-			return;
-		}
-	}
-
 	FHeavyImpactRecoveryPlan Plan;
 	FString FailureReason;
-	if (BuildRecoveryPlan(Plan, FailureReason)
+	const bool bPlanBuilt = BuildRecoveryPlan(Plan, FailureReason);
+	if (bPlanBuilt
 		&& BeginPhysicalToAnimationHandoff(Plan, FailureReason))
+	{
+		return;
+	}
+	if (State != EHeavyImpactState::Downed
+		|| RecoveryPhase != EHeavyImpactRecoveryPhase::WaitingForSpace
+		|| RecoveryTransactionSerial != ExpectedTransactionSerial)
 	{
 		return;
 	}
@@ -1632,63 +1572,41 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 	const double BlockedSeconds = FMath::Max(0.0, NowSeconds - RecoveryBlockedStartTimeSeconds);
 	if (BlockedSeconds >= Tuning->MaximumRecoveryBlockedSeconds)
 	{
-		FHeavyImpactRecoveryPlan FallbackPlan;
-		FString FallbackReason;
-		const bool bFallbackPlanBuilt =
-			BuildPreImpactFallbackRecoveryPlan(FallbackPlan, FallbackReason);
-		if (bFallbackPlanBuilt
-			&& BeginPhysicalToAnimationHandoff(FallbackPlan, FallbackReason))
-		{
-			UE_LOG(
-				LogHeavyImpact,
-				Warning,
-				TEXT("HeavyImpact recovery on %s used a validated pre-impact-seeded location after %.2f blocked seconds."),
-				*GetNameSafe(GetOwner()),
-				BlockedSeconds);
-			return;
-		}
-
-		if (bFallbackPlanBuilt)
+		if (bPlanBuilt)
 		{
 			FHitResult EmergencyPlacementHit;
 			const bool bPlaced = Character->SetActorLocationAndRotation(
-				FallbackPlan.CapsuleLocation,
-				FallbackPlan.CapsuleRotation,
+				Plan.CapsuleLocation,
+				Plan.CapsuleRotation,
 				true,
 				&EmergencyPlacementHit,
 				ETeleportType::TeleportPhysics);
 			if (bPlaced
-				&& Character->GetActorLocation().Equals(FallbackPlan.CapsuleLocation, 1.0f))
+				&& Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f))
 			{
 				UE_LOG(
 					LogHeavyImpact,
 					Error,
 					TEXT("HeavyImpact animation handoff failed on %s after the recovery deadline: %s. Restoring gameplay without the get-up animation."),
 					*GetNameSafe(GetOwner()),
-					*FallbackReason);
+					*FailureReason);
 				SetState(EHeavyImpactState::Recovering);
 				RecoveryPhase = EHeavyImpactRecoveryPhase::None;
-				CompleteRecovery(TEXT("Infrastructure fallback restored gameplay at a validated location."), true);
+				CompleteRecovery(TEXT("Infrastructure fallback restored gameplay at a validated local location."), true);
 				return;
 			}
 		}
 
-		const FTransform LastResortTransform = RecoveryBaseline.PreImpactCharacterTransform;
-		Character->SetActorTransform(
-			LastResortTransform,
-			false,
-			nullptr,
-			ETeleportType::TeleportPhysics);
 		UE_LOG(
 			LogHeavyImpact,
 			Error,
-			TEXT("HeavyImpact could not resolve a safe get-up capsule on %s after %.2f seconds: %s. Restoring the validated pre-impact character transform without a get-up animation."),
+			TEXT("HeavyImpact could not resolve a safe local get-up capsule on %s after %.2f seconds: %s. Restoring gameplay at the current HeavyImpact location without a get-up animation."),
 			*GetNameSafe(GetOwner()),
 			BlockedSeconds,
-			*FallbackReason);
+			*FailureReason);
 		SetState(EHeavyImpactState::Recovering);
 		RecoveryPhase = EHeavyImpactRecoveryPhase::None;
-		CompleteRecovery(TEXT("Recovery deadline restored the pre-impact character transform."), true);
+		CompleteRecovery(TEXT("Recovery deadline restored gameplay at the current HeavyImpact location."), true);
 		return;
 	}
 
@@ -1708,72 +1626,6 @@ bool UHeavyImpactResponseComponent::BuildRecoveryPlan(
 		OutPlan.CapsuleRotation,
 		OutPlan.CapsuleLocation,
 		OutReason);
-}
-
-bool UHeavyImpactResponseComponent::BuildPreImpactFallbackRecoveryPlan(
-	FHeavyImpactRecoveryPlan& OutPlan,
-	FString& OutReason)
-{
-	OutPlan = FHeavyImpactRecoveryPlan();
-	if (!PopulateRecoveryAnimation(OutPlan, OutReason)
-		|| RecoveryBaseline.PreImpactCharacterTransform.ContainsNaN()
-		|| !RecoveryBaseline.PreImpactCharacterTransform.GetRotation().IsNormalized())
-	{
-		if (OutReason.IsEmpty())
-		{
-			OutReason = TEXT("Pre-impact Character transform is invalid.");
-		}
-		return false;
-	}
-
-	const FVector SeedAnchor = RecoveryBaseline.PreImpactCharacterTransform.GetLocation()
-		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
-	const FVector2D Directions[] = {
-		FVector2D(1.0f, 0.0f),
-		FVector2D(-1.0f, 0.0f),
-		FVector2D(0.0f, 1.0f),
-		FVector2D(0.0f, -1.0f),
-		FVector2D(1.0f, 1.0f).GetSafeNormal(),
-		FVector2D(1.0f, -1.0f).GetSafeNormal(),
-		FVector2D(-1.0f, 1.0f).GetSafeNormal(),
-		FVector2D(-1.0f, -1.0f).GetSafeNormal()
-	};
-	const float MaximumAdjustment = HeavyImpactRuntime::AbsoluteMaximumFallbackAdjustmentCm;
-	TArray<float, TInlineAllocator<16>> SearchRadii;
-	SearchRadii.Add(0.0f);
-	for (float Radius = Tuning->RecoverySearchStepCm;
-		Radius < MaximumAdjustment;
-		Radius += Tuning->RecoverySearchStepCm)
-	{
-		SearchRadii.Add(Radius);
-	}
-	SearchRadii.AddUnique(MaximumAdjustment);
-
-	for (const float Radius : SearchRadii)
-	{
-		const int32 DirectionCount = FMath::IsNearlyZero(Radius)
-			? 1
-			: UE_ARRAY_COUNT(Directions);
-		for (int32 DirectionIndex = 0; DirectionIndex < DirectionCount; ++DirectionIndex)
-		{
-			const FVector2D Offset = FMath::IsNearlyZero(Radius)
-				? FVector2D::ZeroVector
-				: Directions[DirectionIndex] * FMath::Min(Radius, MaximumAdjustment);
-			if (TryResolveRecoveryCandidate(
-					SeedAnchor,
-					Offset,
-					OutPlan.CapsuleRotation,
-					MaximumAdjustment,
-					OutPlan.CapsuleLocation))
-			{
-				OutReason.Reset();
-				return true;
-			}
-		}
-	}
-
-	OutReason = TEXT("Pre-impact safe-location seed no longer resolves to a walkable, non-overlapping standing capsule.");
-	return false;
 }
 
 bool UHeavyImpactResponseComponent::PopulateRecoveryAnimation(
@@ -1895,6 +1747,72 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(HeavyImpactRecoveryPath), false, Character);
 	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
 
+	// A full ragdoll owns its flight. Only if the final pelvis ended just across a structural wall
+	// do we use the pre-impact side to bias the bounded get-up placement back through that thin wall.
+	FHitResult CrossedWallHit;
+	FVector InwardWallDirection = FVector::ZeroVector;
+	bool bCrossedNearbyStructuralWall = false;
+	if (RecoveryBaseline.bValid)
+	{
+		const FVector PreImpactLocation =
+			RecoveryBaseline.PreImpactCharacterTransform.GetLocation();
+		const FVector HorizontalTraceEnd(
+			PelvisAnchor.X,
+			PelvisAnchor.Y,
+			PreImpactLocation.Z);
+		FCollisionObjectQueryParams WallObjects;
+		WallObjects.AddObjectTypesToQuery(ECC_WorldStatic);
+		FCollisionQueryParams WallQuery(
+			SCENE_QUERY_STAT(HeavyImpactRecoveryWallSide),
+			false,
+			Character);
+		if (World->LineTraceSingleByObjectType(
+				CrossedWallHit,
+				PreImpactLocation,
+				HorizontalTraceEnd,
+				WallObjects,
+				WallQuery))
+		{
+			InwardWallDirection = FVector::VectorPlaneProject(
+				CrossedWallHit.ImpactNormal,
+				FVector::UpVector).GetSafeNormal();
+			const float WallToPelvisDistance = FVector::Dist2D(
+				CrossedWallHit.ImpactPoint,
+				PelvisAnchor);
+			bCrossedNearbyStructuralWall = !InwardWallDirection.IsNearlyZero()
+				&& WallToPelvisDistance <= MaximumAdjustment + Radius;
+		}
+	}
+
+	// If the pelvis only just crossed a nearby structural wall, first try the exact
+	// standing-capsule clearance point on the pre-impact side. The pre-impact transform
+	// only identifies that side; it is never used as the recovery destination.
+	if (bCrossedNearbyStructuralWall)
+	{
+		constexpr float RecoveryWallClearanceCm = 2.0f;
+		const FVector DesiredInsideLocation = CrossedWallHit.ImpactPoint
+			+ InwardWallDirection * (Radius + RecoveryWallClearanceCm);
+		const FVector2D InwardOffset(
+			DesiredInsideLocation.X - PelvisAnchor.X,
+			DesiredInsideLocation.Y - PelvisAnchor.Y);
+		FVector InsideCandidate;
+		if (InwardOffset.Size() <= MaximumAdjustment + UE_KINDA_SMALL_NUMBER
+			&& TryResolveRecoveryCandidate(
+				PelvisAnchor,
+				InwardOffset,
+				UprightRotation,
+				MaximumAdjustment,
+				InsideCandidate)
+			&& FVector::DotProduct(
+				InsideCandidate - CrossedWallHit.ImpactPoint,
+				InwardWallDirection) >= Radius)
+		{
+			OutLocation = InsideCandidate;
+			OutReason.Reset();
+			return true;
+		}
+	}
+
 	// Prefer a full standing-capsule sweep whenever the prone pelvis has a nearby upright start.
 	// A wall corner may legitimately have no such start, so this is not a gate for the bounded
 	// search below; those cases use a smaller pelvis-clearance sweep and still require a fully
@@ -1966,10 +1884,21 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 				continue;
 			}
 
+			if (bCrossedNearbyStructuralWall)
+			{
+				const float CandidateClearance = FVector::DotProduct(
+					Candidate - CrossedWallHit.ImpactPoint,
+					InwardWallDirection);
+				if (CandidateClearance < Radius)
+				{
+					continue;
+				}
+			}
+
 			const FVector HorizontalDelta = FVector::VectorPlaneProject(
 				Candidate - PelvisAnchor,
 				FVector::UpVector);
-			if (!HorizontalDelta.IsNearlyZero(0.1f))
+			if (!bCrossedNearbyStructuralWall && !HorizontalDelta.IsNearlyZero(0.1f))
 			{
 				FHitResult PathHit;
 				bool bPathBlocked = false;
@@ -2505,7 +2434,6 @@ void UHeavyImpactResponseComponent::CompleteRecovery(
 	RecoveryBaseline.Reset();
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
-	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	PhysicsControl->SetComponentTickEnabled(false);
 	SetComponentTickEnabled(false);
@@ -2670,7 +2598,6 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 		PreparedEntryFrame = 0;
 		bPureRagdollComparisonActive = false;
 		bPhysicsBodyCollisionReleased = false;
-		bPreferPreImpactRecoveryLocation = false;
 		RecoveryBlockedStartTimeSeconds = -1.0;
 		SetComponentTickEnabled(false);
 		SetState(EHeavyImpactState::Inactive);
@@ -2705,7 +2632,6 @@ void UHeavyImpactResponseComponent::RestoreFailedPreparationTransition()
 	PreparedEntryFrame = 0;
 	bPureRagdollComparisonActive = false;
 	bPhysicsBodyCollisionReleased = false;
-	bPreferPreImpactRecoveryLocation = false;
 	RecoveryBlockedStartTimeSeconds = -1.0;
 	SetComponentTickEnabled(false);
 	SetState(EHeavyImpactState::Inactive);

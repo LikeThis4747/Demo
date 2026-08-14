@@ -75,6 +75,7 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		FMath::IsFinite(MaximumPreparationSeconds)
 		&& FMath::IsFinite(MinimumPreparationLeadSeconds)
 		&& FMath::IsFinite(MinimumSimulationSeconds)
+		&& FMath::IsFinite(MaximumSimulationSeconds)
 		&& FMath::IsFinite(StableLinearSpeedCmPerSecond)
 		&& FMath::IsFinite(StableAngularSpeedDegPerSecond)
 		&& FMath::IsFinite(RequiredStableSeconds)
@@ -103,6 +104,9 @@ bool UHeavyImpactTuningData::Validate(const USkeletalMeshComponent* Mesh, FText&
 		|| MinimumPreparationLeadSeconds <= 0.0f
 		|| MinimumPreparationLeadSeconds >= MaximumPreparationSeconds
 		|| MinimumSimulationSeconds < 0.0f
+		|| MaximumSimulationSeconds < 0.5f
+		|| MaximumSimulationSeconds > 5.0f
+		|| MaximumSimulationSeconds <= MinimumSimulationSeconds
 		|| StableLinearSpeedCmPerSecond < 0.0f
 		|| StableAngularSpeedDegPerSecond < 0.0f
 		|| RequiredStableSeconds <= 0.0f

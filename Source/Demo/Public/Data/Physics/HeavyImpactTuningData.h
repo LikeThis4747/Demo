@@ -90,7 +90,7 @@ public:
 		meta = (ClampMin = "0.1", ClampMax = "1.0", Units = "s"))
 	float RecoveryRetrySeconds = 0.20f;
 
-	/** 起身安全站位允许阻塞的最长时间；到期后以受击前 Capsule 位置为种子做一次有界安全搜索。 */
+	/** 起身安全站位允许阻塞的最长时间；到期后停止重试，不再回到受击前位置。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Timing",
 		meta = (ClampMin = "0.1", ClampMax = "10.0", Units = "s"))
 	float MaximumRecoveryBlockedSeconds = 1.5f;
@@ -171,6 +171,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Timing", meta = (ClampMin = "0.0"))
 	float MinimumSimulationSeconds = 0.25f;
 
+	/** 真实 Heavy 提交后允许持续 Chaos 模拟的最长时间；到期后忽略速度阈值并进入有界起身。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Timing",
+		meta = (ClampMin = "0.5", ClampMax = "5.0", Units = "s"))
+	float MaximumSimulationSeconds = 1.5f;
+
 	/** 骨盆低于该线速度才可计入稳定时间，单位为厘米/秒。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.0"))
 	float StableLinearSpeedCmPerSecond = 80.0f;
@@ -179,7 +184,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.0"))
 	float StableAngularSpeedDegPerSecond = 90.0f;
 
-	/** 有支撑时低线速和低角速必须连续保持的秒数；无支撑低平移或外壳入墙时用作强制收口窗口。 */
+	/** 自然低能量状态必须连续保持的秒数；最长等待仍由 MaximumSimulationSeconds 统一限制。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Stability", meta = (ClampMin = "0.05"))
 	float RequiredStableSeconds = 0.35f;
 

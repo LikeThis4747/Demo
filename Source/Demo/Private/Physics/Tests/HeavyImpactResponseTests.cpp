@@ -401,6 +401,8 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->SameSourceProtectionSeconds, 0.75f);
 		TestEqual(TEXT("共享接收端准备上限必须保留现有追猎者攻击的 0.10s ETA"),
 			Fixture.Tuning->MaximumPreparationSeconds, 0.18f);
+		TestEqual(TEXT("持续 HeavyImpact 物理模拟必须有统一上限"),
+			Fixture.Tuning->MaximumSimulationSeconds, 1.5f);
 		TestEqual(TEXT("起身空间重试间隔必须足够短"),
 			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
 		TestEqual(TEXT("安全站位阻塞必须有 1.5 秒截止"),
@@ -452,6 +454,17 @@ namespace ZeroEscape::Physics::Tests
 		TestFalse(TEXT("起身阻塞截止不得短于一次重试间隔"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
 		Fixture.Tuning->MaximumRecoveryBlockedSeconds = 1.5f;
+		Fixture.Tuning->MaximumSimulationSeconds =
+			std::numeric_limits<float>::quiet_NaN();
+		TestFalse(TEXT("持续模拟上限为 NaN 必须被拒绝"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->MaximumSimulationSeconds = 1.5f;
+
+		Fixture.Tuning->MaximumSimulationSeconds = Fixture.Tuning->MinimumSimulationSeconds;
+		TestFalse(TEXT("持续模拟上限必须晚于最短模拟时间"),
+			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
+		Fixture.Tuning->MaximumSimulationSeconds = 1.5f;
+
 		Fixture.Tuning->GroundProbeDistance = std::numeric_limits<float>::quiet_NaN();
 		TestFalse(TEXT("任一调参阈值为 NaN 必须被拒绝"),
 			Fixture.Tuning->Validate(Fixture.MeshComponent, Error));
