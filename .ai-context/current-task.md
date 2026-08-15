@@ -1,11 +1,11 @@
 # 当前任务
 
-- 任务：摆锤纯 Cube A/B 基线验证。
-- Owner：Codex /root；本次实现写入权已释放，等待用户手感验收。
-- 当前资产：Level0 单一纯 Engine Cube 摆锤；220x80x150 cm；PivotHeight 610 cm；MaximumPreparationLeadTime 0.08 s；BobBody 对 Pawn 仍为 Overlap。
-- 本次代码：未使用 Git 恢复文件，手工恢复 d819a1c2 的发送端 Prepare 表面间距、相对闭合速度和帧自适应预测；接收端 Heavy 状态机与 PCG 初始相位功能未改。
-- 验证：DemoEditor Win64 Development 完整构建成功，正式链接 UnrealEditor-Demo.dll 并写入 DemoEditor.target。
-- 基线提交：b320f057d50f7587d1baf347b42cb96ab239f4bf。
-- 代码提交：3e3ee56846b4b5597f441b01a4cf4f3684909c2c；已推送 origin/main 并核验远端同哈希。
-- 待办：用户在原复现点确认是否仍有“穿过身体后再击飞”；未验收前不实施新的分层碰撞方案。
-- 排除：两份 StandingImpact 资产、DOC/README.md、已删除 PPT 与既有 memory-bank 改动未纳入提交。
+- 任务：PCG 路线、机关与死路能量光团收口；新增高厅摆锤进入主要通行路线的软奖励。
+- Owner：Codex /root；技术实现与回归已完成，等待用户次日多 Seed 实玩验收。
+- 设计：稳定主路覆盖高厅可走格的比例以 0.15 进入现有候选路线质量分；无高厅时不参与归一化，覆盖为 0 的合法地图仍可生成。
+- 边界：未改 Population 预算、摆锤几何、高厅数量或能量光团合同；未实现“摆锤后另算光团支线”。
+- 验证：DemoEditor Win64 Development 完整构建；人工拓扑主路覆盖=1、绕开=0；完整 Demo.PCG 43/43，通过 PublicSeedStability900。
+- 90 Seed：支线约 2.452/2.755/3.349 条每层；规划 P95 约 519/765/775 ms，无性能回退。
+- 已验证工作区基线：90657e7eb6436c07cf94b513001d6b45eccb4f0e。
+- 本次实现提交：d3fa9cfed1a0ba5e71fc92d11526cca20ecc5900。
+- 待办：用户从正式入口实玩多个 Seed，确认摆锤是否更常落在主要通过路线；未验收前任务保持 active。

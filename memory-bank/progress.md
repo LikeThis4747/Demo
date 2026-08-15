@@ -72,3 +72,14 @@
 - Pure Cube asset baseline: b320f057, pushed and verified.
 - Old sender-side Prepare prediction manually restored; full DemoEditor build passed.
 - Code checkpoint: 3e3ee568, pushed and verified; player-feel acceptance remains pending.
+
+<!-- written by shiqiqiwang at 2026-08-15 15:53 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-15 15:55 UTC -->
+
+## M1 增量：高厅摆锤主路软奖励（2026-08-15，待用户验收）
+
+- [x] 高厅可走格投影、稳定主路覆盖率与 0.15 候选质量软评分。
+- [x] 主路覆盖/绕开人工拓扑、完整构建、Demo.PCG 43/43 与 PublicSeedStability900。
+- [ ] 用户多 Seed 实玩确认摆锤的主要路线利用率；未实现摆锤后独立光团支线。

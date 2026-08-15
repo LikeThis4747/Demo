@@ -67,3 +67,16 @@
 - 先将纯 Cube 的 BP、DataAsset 与 Level0 状态提交为 b320f057 并推送核验。
 - 手工恢复 d819a1c2 的表面间距、相对闭合速度和帧自适应 Prepare 预测；未改接收端 Heavy、Pawn=Overlap、0.08 s 数据或 PCG 相位。
 - 关闭编辑器后 DemoEditor Win64 Development 完整构建成功；3e3ee568 已推送 origin/main 并核验远端一致。待用户原复现点验收。
+
+<!-- written by shiqiqiwang at 2026-08-15 15:53 UTC -->
+
+
+<!-- written by Codex /root at 2026-08-15 15:55 UTC -->
+
+## 2026-08-15 — 高厅摆锤主路软奖励
+
+- 先将用户已验证的完整工作区提交为 90657e7 并推送内部 main，远端哈希核验一致。
+- 新增高厅可走格内部投影与稳定主路覆盖率；以 0.15 进入现有候选路线质量分。无高厅不参与归一化，覆盖为 0 仍合法。
+- 未改 Population 预算、摆锤几何、高厅数量或光团合同；“摆锤后另算光团支线”未实施。
+- 验证：完整构建；人工拓扑覆盖 1/0；Demo.PCG 43/43，含 PublicSeedStability900。90 Seed P95 约 519/765/775 ms。
+- 实现提交 d3fa9cfed1a0ba5e71fc92d11526cca20ecc5900；等待用户次日多 Seed 实玩验收。
