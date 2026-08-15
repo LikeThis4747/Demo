@@ -440,6 +440,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Input.PreferredMaxConsecutiveStraightTiles = 4;
 			Input.Constraints.SetNum(GridSize.X * GridSize.Y);
 			Input.StructureWalkableByCell.Init(0, GridSize.X * GridSize.Y);
+			Input.HighCeilingWalkableByCell.Init(0, GridSize.X * GridSize.Y);
 			for (int32 Index = 0; Index < Input.Constraints.Num(); ++Index)
 			{
 				Input.Constraints[Index].Coordinate = FIntPoint(
@@ -509,6 +510,38 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestTrue(TEXT("只绕过一条八边主路时替代覆盖应为 1/8"),
 			FMath::IsNearlyEqual(
 				Result.AlternativeRouteCoverageRatio, 1.0 / 8.0));
+
+		FZeroEscapeConstrainedFloorInput MainRouteHighRoomInput = Input;
+		for (const FIntPoint Coordinate : {FIntPoint(3, 3), FIntPoint(4, 3)})
+		{
+			const int32 Cell = Grid::ToIndex(Coordinate, GridSize);
+			MainRouteHighRoomInput.StructureWalkableByCell[Cell] = 1;
+			MainRouteHighRoomInput.HighCeilingWalkableByCell[Cell] = 1;
+		}
+		FZeroEscapeConstrainedFloorResult MainRouteHighRoomResult;
+		TestTrue(TEXT("主路穿过高厅的人工路线图必须可分析"),
+			Testing::AnalyzeCollapsedRouteStructureForTesting(
+				MainRouteHighRoomInput, OpeningMasks, MainRouteHighRoomResult));
+		TestEqual(TEXT("两个高厅可走格必须全部进入稳定主路"),
+			MainRouteHighRoomResult.HighCeilingWalkableCellCount, 2);
+		TestTrue(TEXT("主路完整穿过高厅时覆盖率必须为 1"),
+			FMath::IsNearlyEqual(
+				MainRouteHighRoomResult.HighCeilingMainRouteCoverageRatio, 1.0));
+
+		FZeroEscapeConstrainedFloorInput BypassHighRoomInput = Input;
+		for (const FIntPoint Coordinate : {FIntPoint(6, 4), FIntPoint(7, 4)})
+		{
+			const int32 Cell = Grid::ToIndex(Coordinate, GridSize);
+			BypassHighRoomInput.StructureWalkableByCell[Cell] = 1;
+			BypassHighRoomInput.HighCeilingWalkableByCell[Cell] = 1;
+		}
+		FZeroEscapeConstrainedFloorResult BypassHighRoomResult;
+		TestTrue(TEXT("可被主路绕过的高厅人工路线图仍必须合法"),
+			Testing::AnalyzeCollapsedRouteStructureForTesting(
+				BypassHighRoomInput, OpeningMasks, BypassHighRoomResult));
+		TestTrue(TEXT("稳定主路绕过高厅时覆盖率必须为 0"),
+			FMath::IsNearlyZero(
+				BypassHighRoomResult.HighCeilingMainRouteCoverageRatio));
 		return true;
 	}
 

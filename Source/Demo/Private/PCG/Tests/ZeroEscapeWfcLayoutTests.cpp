@@ -823,6 +823,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Input.Constraints = MakeDenseConstraints(
 			Input.GridSize, EGridCellDomain::Optional);
 		Input.StructureWalkableByCell.Init(0, Input.Constraints.Num());
+		Input.HighCeilingWalkableByCell.Init(0, Input.Constraints.Num());
 		Input.Constraints[Grid::ToIndex(
 			Input.RequiredEnterCoordinate, Input.GridSize)].Domain =
 			EGridCellDomain::Required;

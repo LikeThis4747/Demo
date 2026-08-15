@@ -38,6 +38,8 @@ namespace ZeroEscape::LevelGeneration
 		FIntPoint RequiredLeaveCoordinate = FIntPoint::ZeroValue;
 		TArray<FGridCellConstraint> Constraints;
 		TArray<uint8> StructureWalkableByCell;
+		/** 结构可走格中属于高厅的子集，只用于候选路线质量软评分。 */
+		TArray<uint8> HighCeilingWalkableByCell;
 		/** 仅保留可玩性所需的硬下限：一层 2 格，其他层 1 格。 */
 		int32 MinTotalWalkableCellCount = 1;
 		int32 MaxTotalWalkableCellCount = 1;
@@ -69,6 +71,9 @@ namespace ZeroEscape::LevelGeneration
 		int32 RequiredRouteLengthTiles = 0;
 		int32 FarthestRouteLengthTiles = 0;
 		double RouteCoverageRatio = 0.0;
+		int32 HighCeilingWalkableCellCount = 0;
+		/** 稳定主路覆盖的高厅可走格比例；不参与合法性判定。 */
+		double HighCeilingMainRouteCoverageRatio = 0.0;
 		TArray<FZeroEscapeGeneratedRewardBranch> CandidateRewardBranches;
 		int32 OneCellTerminalSpurCount = 0;
 		double CandidateRewardBranchCellRatio = 0.0;

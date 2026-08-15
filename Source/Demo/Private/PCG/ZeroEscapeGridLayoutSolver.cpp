@@ -508,6 +508,7 @@ namespace ZeroEscape::LevelGeneration
 				|| CellCount64 > GenerationLimits::MaxGridCells
 				|| Input.Constraints.Num() != CellCount64
 				|| Input.StructureWalkableByCell.Num() != CellCount64
+				|| Input.HighCeilingWalkableByCell.Num() != CellCount64
 				|| !Grid::IsInside(Input.RequiredEnterCoordinate, Input.GridSize)
 				|| !Grid::IsInside(Input.RequiredLeaveCoordinate, Input.GridSize)
 				|| Input.RequiredEnterCoordinate == Input.RequiredLeaveCoordinate
@@ -567,6 +568,9 @@ namespace ZeroEscape::LevelGeneration
 					DenseIndex / Input.GridSize.X);
 				if (Cell.Coordinate != Expected
 					|| Input.StructureWalkableByCell[DenseIndex] > 1
+					|| Input.HighCeilingWalkableByCell[DenseIndex] > 1
+					|| (Input.HighCeilingWalkableByCell[DenseIndex] != 0
+						&& Input.StructureWalkableByCell[DenseIndex] == 0)
 					|| (Input.StructureWalkableByCell[DenseIndex] != 0
 						&& Cell.Domain != EGridCellDomain::Required))
 				{
@@ -954,6 +958,8 @@ namespace ZeroEscape::LevelGeneration
 			InOutResult.OneCellTerminalSpurCount = 0;
 			InOutResult.CandidateRewardBranchCellRatio = 0.0;
 			InOutResult.AlternativeRouteCoverageRatio = 0.0;
+			InOutResult.HighCeilingWalkableCellCount = 0;
+			InOutResult.HighCeilingMainRouteCoverageRatio = 0.0;
 			InOutResult.StableMainRouteEdgeCount = 0;
 			InOutResult.ReadableTurnCount = 0;
 			InOutResult.LongestStraightRunTiles = 0;
@@ -973,6 +979,23 @@ namespace ZeroEscape::LevelGeneration
 			}
 
 			InOutResult.StableMainRouteEdgeCount = MainPath.Num() - 1;
+			for (const uint8 HighCeilingMarker : Input.HighCeilingWalkableByCell)
+			{
+				InOutResult.HighCeilingWalkableCellCount +=
+					HighCeilingMarker != 0 ? 1 : 0;
+			}
+			int32 HighCeilingMainRouteCellCount = 0;
+			for (const int32 Cell : MainPath)
+			{
+				HighCeilingMainRouteCellCount +=
+					Input.HighCeilingWalkableByCell.IsValidIndex(Cell)
+					&& Input.HighCeilingWalkableByCell[Cell] != 0 ? 1 : 0;
+			}
+			InOutResult.HighCeilingMainRouteCoverageRatio =
+				InOutResult.HighCeilingWalkableCellCount > 0
+					? static_cast<double>(HighCeilingMainRouteCellCount)
+						/ InOutResult.HighCeilingWalkableCellCount
+					: 0.0;
 			InOutResult.LongestStraightRunTiles = MeasureLongestStraightRun(
 				Input.GridSize, OpeningMasks);
 			TArray<int32> RunLengths;
@@ -1202,6 +1225,10 @@ namespace ZeroEscape::LevelGeneration
 			{
 				AddChannel(0.20, Candidate.AlternativeRouteCoverageRatio
 					/ Input.PreferredAlternativeRouteCoverageRatio);
+			}
+			if (Candidate.HighCeilingWalkableCellCount > 0)
+			{
+				AddChannel(0.15, Candidate.HighCeilingMainRouteCoverageRatio);
 			}
 			const double ArtifactFit = 1.0 / (
 				1.0 + 0.5 * Candidate.OneCellTerminalSpurCount

@@ -2148,6 +2148,7 @@ namespace ZeroEscape::LevelGeneration
 			const int32 CellCount = State.GridSize.X * State.GridSize.Y;
 			FloorInput.Constraints.SetNum(CellCount);
 			FloorInput.StructureWalkableByCell.Init(0, CellCount);
+			FloorInput.HighCeilingWalkableByCell.Init(0, CellCount);
 			for (int32 Y = 0; Y < State.GridSize.Y; ++Y)
 			{
 				for (int32 X = 0; X < State.GridSize.X; ++X)
@@ -2185,6 +2186,13 @@ namespace ZeroEscape::LevelGeneration
 					case EReservedCellUse::StructureWalkable:
 						Constraint.Domain = EGridCellDomain::Required;
 						FloorInput.StructureWalkableByCell[DenseIndex] = 1;
+						if (State.Structures.IsValidIndex(
+								Reservation->OwnerStableStructureId)
+							&& State.Structures[Reservation->OwnerStableStructureId].Kind
+								== EZeroEscapeStructureKind::HighCeilingRoom)
+						{
+							FloorInput.HighCeilingWalkableByCell[DenseIndex] = 1;
+						}
 						break;
 					case EReservedCellUse::StructureSolid:
 					case EReservedCellUse::Clearance:
