@@ -1,82 +1,27 @@
 # Daily Log — Demo
 
-> 按日期倒序；仅保留完成、验证、决定与遗留，过程细节见任务卡、DailyReport 与审计归档。
+> 按日期倒序；仅保留完成、验证、决定与遗留，过程细节见任务卡、DailyPlan、夜报和提交记录。
 
-## 2026-08-15 夜间只读审计（覆盖上次夜跑后的 2026-08-14 工作）
+## 2026-08-16 夜间只读审计（覆盖 2026-08-15 白天工作）
 
-- PCG：发射器收敛为单格占用，新增转角/2～3 格远距组合软奖励，正式权重 3/4/6；摆锤、地刺、冲锤、刺轮使用公开 Seed/类型/锚点派生确定性相位，合法性与公开 Seed 语义不变。
-- PCG 验证沿用白天证据：Demo 模块构建成功；Population 15/15、Runtime Navigation Gate 1/1；L_Game Seed 12345 两次布局哈希、机关/资源数量与首摆锤相位一致。
-- HeavyImpact：完成 Accepted 后不可正常回滚、低能量无支撑收口、2 秒有界恢复、PostPhysics 起身交接和冲锤 0.60 来源响应比例；构建、7/7 受击自动化和关键资产回读通过，真实机关/墙边/起身画面仍待用户验收。
-- 追猎者：近战增加 70 cm 高度差上限，隔层改为严格位置寻路；构建与攻击自动化 1/1 通过，原折返楼梯需用户 PIE 复验。
-- 资产只读审计已执行：官方与本地 UE MCP 在线，L_Game 打开、PIE 停止；L_Game、Level0、玩家/追猎者、Population/Presentation、冲锤和刺轮关键资产非 dirty，蓝图父类与主要 DataAsset 引用正确。
-- 运行风险：L_Game 静态存在 Runtime Generator、NavMeshBoundsVolume 与 RecastNavMesh，但较早保存日志仍出现运行时 Recast 缺失和 Heavy 恢复错误；日志早于后续提交，不证明当前仍失败，必须在同一正式一局复验。
-- 新玩法优先建议：灰盒“磁吸电芯送达出口插槽”，复用现有磁力、Exit 与机关路线压力，不新增任务框架。
-- Git：origin/快照/推送结果记录在 `claude/artifacts/nightly/2026-08-15.md` 和自动化回报。
+- PCG：完成奖励支线/端点能量光团、上下文机关评分、资源硬间距移除和高厅主路覆盖 0.15 软奖励；保持公开 Seed、合法性、Population 预算和光团合同。
+- PCG 白天证据：UE5.8 完整构建；Demo.PCG 43/43，含 PublicSeedStability900；90 Seed P95 约 519/765/775 ms。玩家多 Seed 路线/节奏/光团可读性仍待验收。
+- 物理与表现：摆锤恢复纯 Cube 和旧 Prepare；Heavy 统一保留 0.15 秒 PhysicsBody 阻挡；爆裂投掷红光/火星/火焰烟雾与普通投掷 1.5 秒 Stop 已形成技术证据，均待玩家画面复测。
+- 资产只读审计已执行：官方与本地 UE MCP 在线，Level0 打开、PIE 停止；关键关卡、Blueprint 和 DataAsset 非 Dirty；摆锤/冲锤父类正确，Population 仍引用 BP_ThrowEnergyOrb。
+- 风险：2026-08-15 保存日志记录 21 个 BP_MagneticProp 破碎配置错误；当前未运行 PIE，不能确认是否仍存在，次日应在正式一局复验并采集 Actor/组件证据。
+- 新玩法优先建议：把现有光团转为“磁吸电芯”，送入出口插槽后解锁 Exit；先做一个目标链，不新增任务框架。
+- Git：夜间快照与推送结果见 `claude/artifacts/nightly/2026-08-16.md`。
 
-## 2026-08-14 白天汇总
+## 2026-08-15 白天汇总
 
-- 固定 Seed/软质量 PCG、刺轮初版与火星修正、玩家 Stop 三方向、制导/磁力 Light、追猎者全局追踪/楼梯限制、HeavyImpact 恢复和冲锤响应比例均形成阶段技术证据。
-- PCG 空白段与高厅灯光使用既有评分内的软覆盖奖励；资源密度 12/100，高厅两盏 Movable 灯；未增加硬拒绝或生成重试。
-- 未完成项统一为：正式一局动态 Recast/真实追猎者多层追逐，Heavy/刺轮/攻击/PCG 节奏用户验收，最小目标链、首批音效和 Development 打包。
+- PCG 路线/机关/奖励支线、高厅摆锤主路软奖励、爆裂投掷表现、普通投掷 Stop 与 Heavy 接触窗口均形成阶段提交。
+- 技术回归通过，但动态 Recast/真实追猎者多层追逐、玩家路线观感、Heavy/爆裂/Stop 画面与 Development 打包尚未闭环。
 
-## 2026-08-01 至 2026-08-13 摘要
+## 2026-08-01 至 2026-08-14 摘要
 
 - 主菜单 Seed/难度 → PCG/Population → 玩家/追猎者 → Exit/死亡/暂停/结算/重开闭环已形成。
-- 多层路线采用“跨层宏结构 → 逐层二维 WFC → 合并整栋通行图”；Population 已按机关优先、资源后置分层。
-- 摆锤、冲锤、预判抛射、HeavyImpact 起身恢复、磁力破碎 P0 与 StandingImpact 形成阶段证据；正式一局动态导航与首轮 Development 打包未闭环。
+- 多层 PCG、Population、摆锤/冲锤/刺轮、磁力/投掷、HeavyImpact 与追猎者形成阶段证据；正式一局动态导航、玩家手感和打包仍是交付门槛。
 
 ## 2026-07 月度摘要
 
 - 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
-- PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow；追猎者、磁力、生命链路和第三方资产筛选形成基础。
-
-<!-- written by shiqiqiwang at 2026-08-15 08:14 UTC -->
-
-## 2026-08-15 — 摆锤/冲锤灰盒替换（Codex /root）
-
-- 完成：冲锤使用 `SM_HydroLab_VentB1`，补无碰撞薄实体背盖；摆锤保留长方体并应用 HydroLab 工业材质，加宽至 440 cm、支点抬高至 650 cm。
-- 验证：两个 Blueprint 编译保存；DataAsset 与组件属性回读、非 Dirty 检查通过；PIE Simulate 启动运行正常且本次未新增 Error。
-- 遗留：用户在关卡中验收冲锤绕背封闭、摆锤侧穿与倒地夹体边界。
-
-<!-- written by shiqiqiwang at 2026-08-15 08:21 UTC -->
-
-- Level0 落地补充：旧机关实例存在历史组件覆盖，已按原位置/名称/标签用更新后的同一 Blueprint 重建；地图保存后新视觉、摆锤 220 半宽碰撞与 650 支点回读正确，PIE 未新增 Error。
-
-<!-- written by shiqiqiwang at 2026-08-15 12:42 UTC -->
-
-## 2026-08-15 — PCG 路线、机关与死路能量光团（Codex /root）
-
-- 完成：软路线草图、坍缩后图评分与奖励支线；机关预算/类型/组合/空白覆盖重调；资源硬间距移除；奖励支线尽头独立能量光团与 Spawn 链。
-- 验证：完整构建；正式资产回读和 Blueprint warning-as-error 编译；Population 16/16、Demo.PCG 43/43、900 Seed 稳定性；L_Game Seed 12345 产出 3 层、6 光团、50 机关、21 资源。
-- 性能/质量：90 Seed P95 约 565~842 ms；奖励支线约 1.77/层，一格终止凸起约 2.11~3.04/层，替代路线覆盖约 0.004~0.008。
-- 遗留：用户实玩验收路线、机关节奏与光团可读性；不把 3/4/5 支线和多主路标成已达成。光团吸收及能量规则不在本轮。
-- Git：a9e0acc2f40059387a380b3c16b1d0f5c1be699d 已推送内部 main 并完成远端哈希核验；排除 Level0、StandingImpact、DOC README 与 PPT。
-
-<!-- written by shiqiqiwang at 2026-08-15 14:30 UTC -->
-
-- 摆锤重受击时序：确认运行态 BobBody 碰撞与 CCD 正常，问题是加宽外侧命中跨过 0.08s 预测窗口；DataAsset 的 MaximumPreparationLeadTime 调为 0.16s，LookAhead 维持 850cm，外观/碰撞尺寸不变。
-
-<!-- written by shiqiqiwang at 2026-08-15 14:44 UTC -->
-
-- 摆锤最终回退：用户要求停止改造。已删除 PawnStopper，恢复纯 Engine Cube、无材质覆盖、220x80x150 cm、PivotHeight 610 cm、MaximumPreparationLeadTime 0.08s；Level0 原位重建为单一实例并保存。此前 0.16s 修正已撤销。
-
-<!-- written by shiqiqiwang at 2026-08-15 15:22 UTC -->
-
-## 2026-08-15 — 摆锤 Prepare 旧基线 A/B
-
-- 先将纯 Cube 的 BP、DataAsset 与 Level0 状态提交为 b320f057 并推送核验。
-- 手工恢复 d819a1c2 的表面间距、相对闭合速度和帧自适应 Prepare 预测；未改接收端 Heavy、Pawn=Overlap、0.08 s 数据或 PCG 相位。
-- 关闭编辑器后 DemoEditor Win64 Development 完整构建成功；3e3ee568 已推送 origin/main 并核验远端一致。待用户原复现点验收。
-
-<!-- written by shiqiqiwang at 2026-08-15 15:53 UTC -->
-
-
-<!-- written by Codex /root at 2026-08-15 15:55 UTC -->
-
-## 2026-08-15 — 高厅摆锤主路软奖励
-
-- 先将用户已验证的完整工作区提交为 90657e7 并推送内部 main，远端哈希核验一致。
-- 新增高厅可走格内部投影与稳定主路覆盖率；以 0.15 进入现有候选路线质量分。无高厅不参与归一化，覆盖为 0 仍合法。
-- 未改 Population 预算、摆锤几何、高厅数量或光团合同；“摆锤后另算光团支线”未实施。
-- 验证：完整构建；人工拓扑覆盖 1/0；Demo.PCG 43/43，含 PublicSeedStability900。90 Seed P95 约 519/765/775 ms。
-- 实现提交 d3fa9cfed1a0ba5e71fc92d11526cca20ecc5900；等待用户次日多 Seed 实玩验收。
