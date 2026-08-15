@@ -1,11 +1,11 @@
 # 当前任务
 
-- 任务：实现 PCG 路线结构优化、机关放置规则与死路能量光团。
-- Owner：Codex /root；当前唯一实现写入会话。
-- 阶段：用户已确认审计修订方案；正在完成 Git 基线门禁，尚未修改本轮 PCG 实现文件。
-- 实施顺序：A1 软路线引导 → A2 图分析/奖励支线 → B 机关与资源权重 → C 能量光团。
-- 硬边界：不替换 WFC，不新建房间/走廊语义系统，不引入通用 Manager/Tarjan，不实现能量数值、行走充能、Exit 百分比或 HUD。
-- 验证：每个检查点独立构建、自动化和回退；UPROPERTY/USTRUCT 变更必须关闭 Editor 完整构建后再迁移资产。
-- 基线：起始 HEAD e439a367cb05e09272477c7214298d5447584500；内部 origin/main 同哈希；已有 Stop 与摆锤/冲锤实现将先形成基线提交并远端核验。
-- 排除：不暂存或修改 DOC/PPT/2026客户端超新星命题&答辩模版参考.pptx 与其现有 DOC/README.md 索引改动。
-- 既有待验收：普通磁力投掷 Stop 动画、摆锤/冲锤灰盒均已完成自动验证，仅待用户画面/手感验收。
+- 任务：PCG 路线结构优化、机关放置规则与死路能量光团已完成技术实现，等待用户游玩验收。
+- Owner：Codex /root；实现文件写入权可释放，任务卡仍保持 active，不能提前标记用户验收完成。
+- 已完成：A1 软路线引导、A2 成功树后图分析/奖励支线、B 机关与资源权重、C 独立能量光团放置与 Spawn。
+- 技术证据：UE 5.8 完整构建；Demo.PCG.Population 16/16；完整 Demo.PCG 43/43，含 PublicSeedStability900 与 RouteQuality90；正式 L_Game Seed 12345 成功生成 3 层、6 支线/光团、50 机关、21 资源。
+- 当前质量边界：90 Seed 奖励支线约 1.77/层，未稳定达到 3/4/5；替代路线覆盖约 0.004~0.008，不能宣称多主路已解决。
+- 玩家速度：Population 从正式玩家 Blueprint 类 CDO 读取名义 MaxWalkSpeed=400 cm/s，不读取受击瞬态实例速度。
+- 提交：a9e0acc2f40059387a380b3c16b1d0f5c1be699d 已推送内部 origin/main，远端 refs/heads/main 同哈希。
+- 待办：用户从正式 L_Game 入口多 Seed 验收路线观感、长空白、机关节奏与能量光团可读性；光团吸收/能量数值/行走充能/Exit 百分比/HUD 不在本任务。
+- 排除且未提交：Level0、两份 StandingImpact 资产、DOC/README.md 与已删除 PPT。

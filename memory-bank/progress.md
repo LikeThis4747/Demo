@@ -47,3 +47,12 @@
 <!-- written by shiqiqiwang at 2026-08-15 08:21 UTC -->
 
 - Level0 已完成实例级落地：冲锤与摆锤各一个，无旧实例残留；地图保存与 PIE smoke 通过，待玩家手感验收。
+
+<!-- written by shiqiqiwang at 2026-08-15 12:42 UTC -->
+
+## M1 增量：路线结构、上下文机关与能量光团（2026-08-15，待用户验收）
+
+- [x] 坍缩前软路线提示、成功树后图分析、RewardBranch schema/hash、上下文机关 log2 权重、整数预算成本、资源硬间距移除。
+- [x] 每条最终奖励支线端点独立放置能量光团；正式 DataAsset/Blueprint/材质已迁移、编译和回读。
+- [x] UE 完整构建；Demo.PCG 43/43、Population 16/16、PublicSeedStability900、RouteQuality90 与正式 L_Game Seed 12345 运行通过。
+- [ ] 玩家多 Seed 验收；当前约 1.77 奖励支线/层且替代路线覆盖接近 0，3/4/5 支线中心值与多主路仍未稳定达到。
