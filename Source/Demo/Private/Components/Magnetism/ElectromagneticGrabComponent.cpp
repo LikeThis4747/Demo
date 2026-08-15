@@ -607,6 +607,14 @@ void UElectromagneticGrabComponent::SetExplosionModeActive(const bool bActive)
 	}
 
 	bExplosionModeActive = bActive;
+	if (UMagneticObjectComponent* MagneticObject = HeldMagneticObject.Get())
+	{
+		MagneticObject->SetExplosionPresentationActive(
+			HeldComponent.Get(),
+			bExplosionModeActive && IsValid(TuningData)
+				? TuningData->ExplosionArmedOverlayMaterial.Get()
+				: nullptr);
+	}
 	if (!bExplosionModeActive)
 	{
 		ExplosionModeActivatedWorldTimeSeconds = -1.0;

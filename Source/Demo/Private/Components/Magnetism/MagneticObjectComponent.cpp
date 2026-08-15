@@ -11,6 +11,7 @@
 
 #include "CollisionQueryParams.h"
 #include "CollisionShape.h"
+#include "Components/MeshComponent.h"
 #include "Components/Physics/HeavyImpactResponseComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Data/Magnetism/MagneticGrabTuningData.h"
@@ -21,6 +22,9 @@
 #include "GameFramework/Pawn.h"
 #include "Interfaces/CharacterImpactReceiver.h"
 #include "Kismet/GameplayStatics.h"
+#include "Materials/MaterialInterface.h"
+#include "Particles/ParticleSystem.h"
+#include "Particles/ParticleSystemComponent.h"
 #include "Physics/CharacterImpactTypes.h"
 #include "Physics/DemoCollisionChannels.h"
 #include "Physics/DemoHitTags.h"
@@ -41,6 +45,43 @@ bool UMagneticObjectComponent::CanGrab(const UPrimitiveComponent* CandidateCompo
 		&& IsValid(CandidateComponent)
 		&& CandidateComponent->IsSimulatingPhysics()
 		&& CandidateComponent->GetMass() <= MaxAllowedMass;
+}
+
+/** Overlay 只覆盖当前精确网格；切换目标前先恢复旧目标，避免红光残留。 */
+void UMagneticObjectComponent::SetExplosionPresentationActive(
+	UPrimitiveComponent* TargetPrimitive,
+	UMaterialInterface* OverlayMaterial)
+{
+	if (!IsValid(OverlayMaterial))
+	{
+		RestoreExplosionPresentation();
+		return;
+	}
+
+	UMeshComponent* Mesh = Cast<UMeshComponent>(TargetPrimitive);
+	if (!IsValid(Mesh))
+	{
+		return;
+	}
+
+	if (ExplosionPresentationMesh.Get() != Mesh)
+	{
+		RestoreExplosionPresentation();
+		ExplosionPresentationMesh = Mesh;
+		PreviousExplosionOverlayMaterial = Mesh->GetOverlayMaterial();
+	}
+	Mesh->SetOverlayMaterial(OverlayMaterial);
+}
+
+/** 所有取消、放下、重抓、超时和爆炸收口都经过此处恢复原 Overlay。 */
+void UMagneticObjectComponent::RestoreExplosionPresentation()
+{
+	if (UMeshComponent* Mesh = ExplosionPresentationMesh.Get())
+	{
+		Mesh->SetOverlayMaterial(PreviousExplosionOverlayMaterial.Get());
+	}
+	ExplosionPresentationMesh.Reset();
+	PreviousExplosionOverlayMaterial = nullptr;
 }
 
 /** 保存一次精确碰撞基线并建立 Light/破碎共享的正式投掷命中事务。 */
@@ -111,6 +152,12 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	bExplosionImpactWindowActive = bArmExplosion;
 	bKeepMonitoringForBreak = bEnableBreakMonitoring;
 	bImpactConsumed = false;
+	if (bArmExplosion)
+	{
+		SetExplosionPresentationActive(
+			ThrownPrimitive,
+			ExplosionTuning->ExplosionArmedOverlayMaterial.Get());
+	}
 
 	ThrownPrimitive->SetCollisionObjectType(Demo::CollisionChannels::AttackProjectileBody);
 	ThrownPrimitive->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
@@ -149,6 +196,8 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 /** 清除全部异步入口、解绑唯一 Hit，并严格恢复正式投掷前的碰撞和 Tag。 */
 void UMagneticObjectComponent::DisarmThrownImpact()
 {
+	RestoreExplosionPresentation();
+
 	if (UWorld* World = GetWorld())
 	{
 		FTimerManager& TimerManager = World->GetTimerManager();
@@ -331,6 +380,7 @@ void UMagneticObjectComponent::TriggerExplosion(const FVector& ExplosionOrigin)
 	{
 		return;
 	}
+	SpawnExplosionPresentation(ExplosionOrigin, *ExplosionTuning);
 
 	FCollisionObjectQueryParams ObjectQuery;
 	ObjectQuery.AddObjectTypesToQuery(ECC_Pawn);
@@ -425,6 +475,66 @@ void UMagneticObjectComponent::TriggerExplosion(const FVector& ExplosionOrigin)
 		*GetNameSafe(GetOwner()),
 		*ExplosionOrigin.ToCompactString(),
 		AffectedActors.Num());
+}
+
+/** 火星和火焰烟雾生成在世界中；原投掷物随后破碎或 Disarm 不会截断表现。 */
+void UMagneticObjectComponent::SpawnExplosionPresentation(
+	const FVector& ExplosionOrigin,
+	const UMagneticGrabTuningData& ExplosionTuning)
+{
+	UParticleSystemComponent* Sparks = nullptr;
+	if (IsValid(ExplosionTuning.ExplosionSparkEffect.Get()))
+	{
+		const float SparkScale =
+			ExplosionTuning.ExplosionRadius / ExplosionTuning.ExplosionSparkReferenceRadius;
+		Sparks = UGameplayStatics::SpawnEmitterAtLocation(
+			this,
+			ExplosionTuning.ExplosionSparkEffect.Get(),
+			ExplosionOrigin,
+			FRotator::ZeroRotator,
+			FVector(SparkScale),
+			true,
+			EPSCPoolMethod::AutoRelease,
+			true);
+	}
+	if (IsValid(Sparks))
+	{
+		FTimerHandle DeactivateTimerHandle;
+		GetWorld()->GetTimerManager().SetTimer(
+			DeactivateTimerHandle,
+			FTimerDelegate::CreateWeakLambda(Sparks, [Sparks]()
+			{
+				Sparks->DeactivateSystem();
+			}),
+			ExplosionTuning.ExplosionSparkEmissionSeconds,
+			false);
+	}
+
+	UParticleSystemComponent* FireSmoke = nullptr;
+	if (IsValid(ExplosionTuning.ExplosionFireSmokeEffect.Get()))
+	{
+		FireSmoke = UGameplayStatics::SpawnEmitterAtLocation(
+			this,
+			ExplosionTuning.ExplosionFireSmokeEffect.Get(),
+			ExplosionOrigin,
+			FRotator::ZeroRotator,
+			FVector(ExplosionTuning.ExplosionFireSmokeVisualScale),
+			true,
+			EPSCPoolMethod::AutoRelease,
+			true);
+	}
+	if (IsValid(FireSmoke))
+	{
+		FTimerHandle DeactivateTimerHandle;
+		GetWorld()->GetTimerManager().SetTimer(
+			DeactivateTimerHandle,
+			FTimerDelegate::CreateWeakLambda(FireSmoke, [FireSmoke]()
+			{
+				FireSmoke->DeactivateSystem();
+			}),
+			ExplosionTuning.ExplosionFireSmokeEmissionSeconds,
+			false);
+	}
 }
 
 /** Light 请求同帧消费完成后，在 next-tick 安全恢复攻击身份或完整事务。 */

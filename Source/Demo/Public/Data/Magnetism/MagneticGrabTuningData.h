@@ -14,6 +14,9 @@
 
 #include "MagneticGrabTuningData.generated.h"
 
+class UMaterialInterface;
+class UParticleSystem;
+
 /** 玩家磁力抓取基线的独立调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
 UCLASS(BlueprintType)
 class DEMO_API UMagneticGrabTuningData final : public UDataAsset
@@ -196,6 +199,34 @@ public:
 	/** 只放大本次爆裂破碎的现有碎片分离速度；普通破碎始终使用 1。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "1.0", ClampMax = "10.0", UIMin = "1.0", UIMax = "5.0"))
 	float ExplosionFragmentSeparationMultiplier = 2.5f;
+
+	/** 持有或飞行中的爆裂物覆盖材质；为空时只跳过红光，不改变玩法事务。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现")
+	TObjectPtr<UMaterialInterface> ExplosionArmedOverlayMaterial = nullptr;
+
+	/** 从爆点向四周散射的橙黄火星；最远扩散距离用于自然提示实际作用范围。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现")
+	TObjectPtr<UParticleSystem> ExplosionSparkEffect = nullptr;
+
+	/** 在真实爆点短时发射后自然消散的火焰与烟雾效果。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现")
+	TObjectPtr<UParticleSystem> ExplosionFireSmokeEffect = nullptr;
+
+	/** 火星资产在缩放为 1 时的参考半径；实际缩放为 ExplosionRadius 除以该值。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现", meta = (ClampMin = "1.0", ClampMax = "2000.0", UIMin = "50.0", UIMax = "500.0", Units = "cm"))
+	float ExplosionSparkReferenceRadius = 100.0f;
+
+	/** 火星停止继续发射前的时间；已生成火星仍会自然飞散。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现", meta = (ClampMin = "0.01", ClampMax = "1.0", UIMin = "0.05", UIMax = "0.5", Units = "s"))
+	float ExplosionSparkEmissionSeconds = 0.10f;
+
+	/** 火焰和烟雾 Cascade 的统一世界缩放。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现", meta = (ClampMin = "0.1", ClampMax = "10.0", UIMin = "0.1", UIMax = "5.0"))
+	float ExplosionFireSmokeVisualScale = 0.75f;
+
+	/** 循环火焰/烟雾停止继续发射前的时间；已生成粒子仍自然消散。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现", meta = (ClampMin = "0.01", ClampMax = "2.0", UIMin = "0.05", UIMax = "1.0", Units = "s"))
+	float ExplosionFireSmokeEmissionSeconds = 0.18f;
 
 	/**
 	 * 对应 C++ 属性 AimTraceDistance，由 CalculateAimPoint 决定准星射线最大距离，单位 cm。

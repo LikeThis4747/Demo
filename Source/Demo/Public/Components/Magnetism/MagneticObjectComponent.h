@@ -20,6 +20,8 @@
 class AActor;
 class UCharacterImpactSourceProfile;
 class UMagneticGrabTuningData;
+class UMaterialInterface;
+class UMeshComponent;
 class UPrimitiveComponent;
 
 /** 正式投掷事务过滤投掷者后，为墙体、道具和角色统一广播的原生阻挡命中。 */
@@ -59,6 +61,11 @@ public:
 
 	/** 幂等结束当前投掷事务并精确恢复该 Primitive 的全部碰撞快照。 */
 	void DisarmThrownImpact();
+
+	/** 设置或恢复精确持有/投掷网格的爆裂 Overlay；不改变原基础材质。 */
+	void SetExplosionPresentationActive(
+		UPrimitiveComponent* TargetPrimitive,
+		UMaterialInterface* OverlayMaterial);
 
 	/** 返回当前是否仍由本组件持有正式投掷碰撞事务。 */
 	bool IsThrownImpactArmed() const { return ArmedPrimitive.IsValid(); }
@@ -117,6 +124,14 @@ private:
 	/** 对 Pawn 做一次 Actor 去重范围查询，并结算距离衰减伤害与独立径向 Heavy。 */
 	void TriggerExplosion(const FVector& ExplosionOrigin);
 
+	/** 在真实爆点生成核心、范围外圈与短时火焰烟雾，不依赖原道具继续存活。 */
+	void SpawnExplosionPresentation(
+		const FVector& ExplosionOrigin,
+		const UMagneticGrabTuningData& ExplosionTuning);
+
+	/** 恢复红光启用前的 Overlay，并清空唯一表现目标。 */
+	void RestoreExplosionPresentation();
+
 	/** 恢复原 ObjectType、Responses、Profile 与 Tag，同时继续临时保留 Hit 通知和 CCD。 */
 	void RestoreAttackIdentityButKeepHitMonitoring();
 
@@ -146,6 +161,14 @@ private:
 
 	/** 仅爆裂投掷持有现有磁力 DA；普通投掷保持为空，不读取任何爆裂参数。 */
 	TWeakObjectPtr<UMagneticGrabTuningData> ActiveExplosionTuning;
+
+	/** 当前被红光 Overlay 覆盖的精确网格；持有切换与投掷事务共享同一份状态。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UMeshComponent> ExplosionPresentationMesh;
+
+	/** 红光启用前的 Overlay；退出任意爆裂路径时原样恢复。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> PreviousExplosionOverlayMaterial = nullptr;
 
 	/** 正式投掷前的唯一恢复基线；Light 与破碎不得各存一份。 */
 	FThrownImpactCollisionSnapshot CollisionSnapshot;
