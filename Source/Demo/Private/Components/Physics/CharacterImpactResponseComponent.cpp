@@ -243,7 +243,9 @@ EStandingImpactSubmitResult UCharacterImpactResponseComponent::SubmitImpact(
 	ScheduleEndTimer(ActiveEndTimeSeconds);
 	if (bShouldStartAnimation)
 	{
-		PlayReactionAnimation(Request.WorldDirection);
+		PlayReactionAnimation(
+			Request.WorldDirection,
+			Spec.bMatchReactionAnimationToDuration);
 	}
 
 	return EStandingImpactSubmitResult::Applied;
@@ -709,7 +711,9 @@ UAnimSequenceBase* UCharacterImpactResponseComponent::SelectReactionAnimation(
 	return Tuning->FrontReaction;
 }
 
-void UCharacterImpactResponseComponent::PlayReactionAnimation(const FVector& WorldDirection)
+void UCharacterImpactResponseComponent::PlayReactionAnimation(
+	const FVector& WorldDirection,
+	const bool bMatchImpactDuration)
 {
 	UAnimSequenceBase* Animation = SelectReactionAnimation(WorldDirection);
 	UAnimInstance* AnimInstance = IsValid(Mesh) ? Mesh->GetAnimInstance() : nullptr;
@@ -719,12 +723,24 @@ void UCharacterImpactResponseComponent::PlayReactionAnimation(const FVector& Wor
 	}
 
 	StopReactionAnimation(true);
+	float PlayRate = Tuning->MontagePlayRate;
+	if (bMatchImpactDuration)
+	{
+		const float RemainingDurationSeconds =
+			ActiveEndTimeSeconds - GetWorld()->GetTimeSeconds();
+		const float AnimationLengthSeconds = Animation->GetPlayLength();
+		if (RemainingDurationSeconds > UE_SMALL_NUMBER
+			&& AnimationLengthSeconds > UE_SMALL_NUMBER)
+		{
+			PlayRate = AnimationLengthSeconds / RemainingDurationSeconds;
+		}
+	}
 	ActiveLightMontage = AnimInstance->PlaySlotAnimationAsDynamicMontage(
 		Animation,
 		Demo::CharacterImpact::DefaultSlot,
 		Tuning->MontageBlendInSeconds,
 		Tuning->MontageBlendOutSeconds,
-		Tuning->MontagePlayRate,
+		PlayRate,
 		1,
 		-1.0f,
 		0.0f);

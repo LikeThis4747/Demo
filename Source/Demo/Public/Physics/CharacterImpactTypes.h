@@ -54,6 +54,10 @@ struct DEMO_API FStandingImpactReactionSpec
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Standing Impact")
 	bool bPlayReactionAnimation = false;
 
+	/** 让单次反应动画按本次实际 Stop 时长调整播放速度；不循环，也不改变玩法时长。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Standing Impact")
+	bool bMatchReactionAnimationToDuration = false;
+
 	/** 该来源是否允许接收者叠加短暂的局部物理表现；不改变 Slow / Stop 玩法结果。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Standing Impact")
 	bool bApplyPhysicalReaction = false;

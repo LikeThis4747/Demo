@@ -35,3 +35,15 @@
 - 自动化、静态 Recast Actor 和资产非 dirty 不等于正式一局动态导航或玩家手感验收。
 - 最近保存日志中的 Recast 缺失/Heavy 恢复错误早于后续修正，只能作为复验目标，不作为当前故障定论。
 - 不恢复全身常驻受控物理、Light/Heavy 大一体化或跨对象磁力事务方案。
+
+<!-- written by shiqiqiwang at 2026-08-15 08:14 UTC -->
+
+### 摆锤/冲锤视觉替换（2026-08-15，待用户验收）
+
+- `BP_BatteringRamHazard`：VentB1 外壳 + 无碰撞金属背盖，视觉尺寸对齐 120x280x280 cm。
+- `BP_PendulumHazard` / `DA_PendulumHazard_Default`：锤体 440x80x150 cm，PivotHeight 650 cm，最低点理论净空 55 cm；应用 HydroLab 工业材质。
+- 自动验证通过；玩家手感与外观验收未完成。
+
+<!-- written by shiqiqiwang at 2026-08-15 08:21 UTC -->
+
+- Level0 已完成实例级落地：冲锤与摆锤各一个，无旧实例残留；地图保存与 PIE smoke 通过，待玩家手感验收。

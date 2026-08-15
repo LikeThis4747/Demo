@@ -29,3 +29,15 @@
 
 - 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
 - PCG 从二维 Grid-WFC 推进到 Runtime HISM、Population、最小 RoundFlow；追猎者、磁力、生命链路和第三方资产筛选形成基础。
+
+<!-- written by shiqiqiwang at 2026-08-15 08:14 UTC -->
+
+## 2026-08-15 — 摆锤/冲锤灰盒替换（Codex /root）
+
+- 完成：冲锤使用 `SM_HydroLab_VentB1`，补无碰撞薄实体背盖；摆锤保留长方体并应用 HydroLab 工业材质，加宽至 440 cm、支点抬高至 650 cm。
+- 验证：两个 Blueprint 编译保存；DataAsset 与组件属性回读、非 Dirty 检查通过；PIE Simulate 启动运行正常且本次未新增 Error。
+- 遗留：用户在关卡中验收冲锤绕背封闭、摆锤侧穿与倒地夹体边界。
+
+<!-- written by shiqiqiwang at 2026-08-15 08:21 UTC -->
+
+- Level0 落地补充：旧机关实例存在历史组件覆盖，已按原位置/名称/标签用更新后的同一 Blueprint 重建；地图保存后新视觉、摆锤 220 半宽碰撞与 650 支点回读正确，PIE 未新增 Error。

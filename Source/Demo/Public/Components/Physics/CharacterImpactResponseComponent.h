@@ -73,7 +73,10 @@ private:
 	void RecordRecentImpactId(const FGuid& ImpactId);
 	bool HasSeenImpactId(const FGuid& ImpactId) const;
 	UAnimSequenceBase* SelectReactionAnimation(const FVector& WorldDirection) const;
-	void PlayReactionAnimation(const FVector& WorldDirection);
+	/** 播放一次方向反应；按来源需要可将播放速度适配到当前 Light 剩余时长。 */
+	void PlayReactionAnimation(
+		const FVector& WorldDirection,
+		bool bMatchImpactDuration);
 	void StopReactionAnimation(bool bImmediate);
 	void HandleReactionMontageEnded(UAnimMontage* Montage, bool bInterrupted);
 	bool ResolvePhysicalHit(
