@@ -641,6 +641,7 @@ namespace ZeroEscape::LevelGeneration
 			case EPopulationPlacementKind::GuidedLauncher: return &Scoring.LauncherRisk;
 			case EPopulationPlacementKind::SpikeWheel: return &Scoring.WheelRisk;
 			case EPopulationPlacementKind::MagneticResource: return nullptr;
+			case EPopulationPlacementKind::EnergyOrb: return nullptr;
 			}
 			return nullptr;
 		}
@@ -655,6 +656,24 @@ namespace ZeroEscape::LevelGeneration
 				? -1.0f
 				: Risk->TraversalPressurePerSecond * RepresentativeTraversalSeconds
 					+ Risk->HitConsequencePressure;
+		}
+
+		int32 HazardBudgetCostTenthsForKind(
+			const EPopulationPlacementKind Kind,
+			const FZeroEscapeHazardBudgetCostTuning& Costs)
+		{
+			switch (Kind)
+			{
+			case EPopulationPlacementKind::Pendulum: return Costs.PendulumCostTenths;
+			case EPopulationPlacementKind::SpikeTrap: return Costs.SpikeTrapCostTenths;
+			case EPopulationPlacementKind::BatteringRam: return Costs.BatteringRamCostTenths;
+			case EPopulationPlacementKind::GuidedLauncher:
+				return Costs.GuidedLauncherCostTenths;
+			case EPopulationPlacementKind::SpikeWheel: return Costs.SpikeWheelCostTenths;
+			case EPopulationPlacementKind::MagneticResource: return 0;
+			case EPopulationPlacementKind::EnergyOrb: return 0;
+			}
+			return 0;
 		}
 
 		bool IsWheelRamPair(
@@ -691,19 +710,67 @@ namespace ZeroEscape::LevelGeneration
 		}
 
 		/** 紧邻不加分，随后随图距离线性增至现有机关组半径处的满额奖励。 */
-		float LauncherCombinationDistanceSignal(
+		float LauncherCombinationLog2Bonus(
 			const int32 Distance,
-			const int32 GroupRadiusTiles)
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring)
 		{
-			if (Distance <= 1 || GroupRadiusTiles <= 1)
+			if (Distance <= 1)
 			{
-				return 0.0f;
+				return Scoring.LauncherCombinationDistanceOneLog2Bonus;
 			}
-			return FMath::Clamp(
-				static_cast<float>(Distance - 1)
-					/ static_cast<float>(GroupRadiusTiles - 1),
-				0.0f,
-				1.0f);
+			return Distance == 2
+				? Scoring.LauncherCombinationDistanceTwoLog2Bonus
+				: Scoring.LauncherCombinationDistanceThreePlusLog2Bonus;
+		}
+
+		float LauncherCombinationPressureSignal(
+			const int32 Distance,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring)
+		{
+			const float Maximum =
+				Scoring.LauncherCombinationDistanceThreePlusLog2Bonus;
+			return Maximum > KINDA_SMALL_NUMBER
+				? LauncherCombinationLog2Bonus(Distance, Scoring) / Maximum
+				: 0.0f;
+		}
+
+		bool IsRewardBranchApproachAddress(
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const FIntVector Address)
+		{
+			for (const FZeroEscapeGeneratedRewardBranch& Branch : Plan.RewardBranches)
+			{
+				if (Branch.GatewayCoordinate == Address)
+				{
+					return true;
+				}
+				for (int32 Index = 0; Index + 1 < Branch.PathCoordinates.Num(); ++Index)
+				{
+					if (Branch.PathCoordinates[Index] == Address)
+					{
+						return true;
+					}
+				}
+			}
+			return false;
+		}
+
+		float CalculateRouteCoverageLog2Contribution(
+			const int32 NearestHazardDistance,
+			const FZeroEscapeHazardPlacementScoringTuning& Scoring)
+		{
+			if (NearestHazardDistance == UnreachableDistance)
+			{
+				return Scoring.RouteCoverageLog2Bonus;
+			}
+			const int32 ExcessDistance = FMath::Max(
+				0,
+				NearestHazardDistance - Scoring.RouteCoverageStartDistanceTiles + 1);
+			const float RawContribution =
+				Scoring.RouteCoverageLinearLog2PerTile * ExcessDistance
+				+ Scoring.RouteCoverageQuadraticLog2PerTileSquared
+					* ExcessDistance * ExcessDistance;
+			return FMath::Min(Scoring.RouteCoverageLog2Bonus, RawContribution);
 		}
 
 		float CalculateGroupTargetPressure(
@@ -798,13 +865,32 @@ namespace ZeroEscape::LevelGeneration
 				&& Scoring.LauncherCornerLog2Bonus >= 0.0f
 				&& FMath::IsFinite(Scoring.RouteCoverageLog2Bonus)
 				&& Scoring.RouteCoverageLog2Bonus >= 0.0f
-				&& Scoring.RouteCoverageLog2Bonus <= 4.0f
+				&& Scoring.RouteCoverageLog2Bonus <= 5.0f
+				&& Scoring.RouteCoverageStartDistanceTiles >= 2
+				&& Scoring.RouteCoverageStartDistanceTiles <= 16
+				&& FMath::IsFinite(Scoring.RouteCoverageLinearLog2PerTile)
+				&& Scoring.RouteCoverageLinearLog2PerTile >= 0.0f
+				&& FMath::IsFinite(
+					Scoring.RouteCoverageQuadraticLog2PerTileSquared)
+				&& Scoring.RouteCoverageQuadraticLog2PerTileSquared >= 0.0f
 				&& FMath::IsFinite(Scoring.WheelRamLog2Bonus)
 				&& Scoring.WheelRamLog2Bonus >= 0.0f
 				&& FMath::IsFinite(Scoring.WheelSpikeLog2Bonus)
 				&& Scoring.WheelSpikeLog2Bonus >= 0.0f
-				&& FMath::IsFinite(Scoring.LauncherCombinationLog2Bonus)
-				&& Scoring.LauncherCombinationLog2Bonus >= 0.0f
+				&& FMath::IsFinite(
+					Scoring.LauncherCombinationDistanceOneLog2Bonus)
+				&& Scoring.LauncherCombinationDistanceOneLog2Bonus >= 0.0f
+				&& FMath::IsFinite(
+					Scoring.LauncherCombinationDistanceTwoLog2Bonus)
+				&& Scoring.LauncherCombinationDistanceTwoLog2Bonus
+					>= Scoring.LauncherCombinationDistanceOneLog2Bonus
+				&& FMath::IsFinite(
+					Scoring.LauncherCombinationDistanceThreePlusLog2Bonus)
+				&& Scoring.LauncherCombinationDistanceThreePlusLog2Bonus
+					>= Scoring.LauncherCombinationDistanceTwoLog2Bonus
+				&& FMath::IsFinite(Scoring.RewardBranchCombinationMultiplier)
+				&& Scoring.RewardBranchCombinationMultiplier >= 1.0f
+				&& Scoring.RewardBranchCombinationMultiplier <= 2.0f
 				&& FMath::IsFinite(Scoring.SoloWheelLog2Contribution)
 				&& Scoring.SoloWheelLog2Contribution <= 0.0f
 				&& Scoring.RecentKindWindow >= 1
@@ -840,8 +926,9 @@ namespace ZeroEscape::LevelGeneration
 			{
 				const int32 Index = static_cast<int32>(Difficulty.Difficulty);
 				if (Index < 0 || Index >= Counts.Num()
-					|| !FMath::IsFinite(Difficulty.Hazards.ExpectedHazardsPer100GameplayCells)
-					|| Difficulty.Hazards.ExpectedHazardsPer100GameplayCells < 0.0f
+					|| !FMath::IsFinite(
+						Difficulty.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells)
+					|| Difficulty.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells < 0.0f
 					|| Difficulty.Hazards.SpikeTrapWeight < 0
 					|| Difficulty.Hazards.BatteringRamWeight < 0
 					|| Difficulty.Hazards.GuidedLauncherWeight < 0
@@ -852,7 +939,7 @@ namespace ZeroEscape::LevelGeneration
 					|| Difficulty.Hazards.TargetPressureAtExit <= 0.0f
 					|| !FMath::IsFinite(Difficulty.Resources.ExpectedResourcesPer100GameplayCells)
 					|| Difficulty.Resources.ExpectedResourcesPer100GameplayCells < 0.0f
-					|| Difficulty.Resources.MinimumRouteSpacingTiles < 1)
+					|| Difficulty.Resources.CoverageReferenceDistanceTiles < 1)
 				{
 					OutError = TEXT("Population 难度数值非法。");
 					return nullptr;
@@ -877,11 +964,11 @@ namespace ZeroEscape::LevelGeneration
 			const FZeroEscapeHazardPopulationAssembly& Hazards,
 			const FZeroEscapeResourcePopulationAssembly& Resources,
 			const FZeroEscapePopulationDifficultySettings& Difficulty,
-			int32& OutHazardDensityTarget,
+			int32& OutHazardBudgetTargetTenths,
 			int32& OutResourceTarget,
 			FString& OutError)
 		{
-			OutHazardDensityTarget = 0;
+			OutHazardBudgetTargetTenths = 0;
 			OutResourceTarget = 0;
 			const int64 MaxGeneratedAddresses =
 				static_cast<int64>(GenerationLimits::MaxGridCells)
@@ -909,6 +996,11 @@ namespace ZeroEscape::LevelGeneration
 				return false;
 			}
 			if (Hazards.SpikeTrapActorCount <= 0
+				|| Hazards.BudgetCosts.PendulumCostTenths <= 0
+				|| Hazards.BudgetCosts.SpikeTrapCostTenths <= 0
+				|| Hazards.BudgetCosts.BatteringRamCostTenths <= 0
+				|| Hazards.BudgetCosts.GuidedLauncherCostTenths <= 0
+				|| Hazards.BudgetCosts.SpikeWheelCostTenths <= 0
 				|| !FMath::IsFinite(Hazards.SpikeTrapLateralSpacingCm)
 				|| Hazards.SpikeTrapLateralSpacingCm < 0.0f
 				|| !FMath::IsFinite(Hazards.SpikeTrapFloorOffsetCm)
@@ -922,6 +1014,9 @@ namespace ZeroEscape::LevelGeneration
 				|| Hazards.GuidedLauncherMountHeightCm < 0.0f
 				|| !IsValidScoringTuning(Hazards.PlacementScoring)
 				|| !FMath::IsFinite(Resources.SpawnZOffsetCm)
+				|| !FMath::IsFinite(Resources.EnergyOrbSpawnZOffsetCm)
+				|| Resources.EnergyOrbSpawnZOffsetCm < 0.0f
+				|| Resources.EnergyOrbSpawnZOffsetCm > 500.0f
 				|| !FMath::IsFinite(Resources.PlacementFootprintRadiusCm)
 				|| Resources.PlacementFootprintRadiusCm < 0.0f
 				|| Resources.PlacementFootprintRadiusCm >= Plan.LogicalTileSizeCm * 0.5
@@ -943,22 +1038,52 @@ namespace ZeroEscape::LevelGeneration
 					++MandatoryPendulumCount;
 				}
 			}
-			const double HazardRaw = GameplayArea
-				* static_cast<double>(Difficulty.Hazards.ExpectedHazardsPer100GameplayCells) / 100.0;
+			const double HazardRawTenths = GameplayArea
+				* static_cast<double>(
+					Difficulty.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells)
+				* 10.0 / 100.0;
 			const double ResourceRaw = GameplayArea
 				* static_cast<double>(Difficulty.Resources.ExpectedResourcesPer100GameplayCells) / 100.0;
-			if (!FMath::IsFinite(HazardRaw) || !FMath::IsFinite(ResourceRaw)
-				|| HazardRaw > MaxGeneratedAddresses || ResourceRaw > MaxGeneratedAddresses)
+			if (!FMath::IsFinite(HazardRawTenths) || !FMath::IsFinite(ResourceRaw)
+				|| HazardRawTenths > MAX_int32 || ResourceRaw > MaxGeneratedAddresses)
 			{
 				OutError = TEXT("Population 密度目标超过安全预算。");
 				return false;
 			}
-			OutHazardDensityTarget = static_cast<int32>(FMath::RoundToInt64(HazardRaw));
+			const int64 MandatoryPendulumBudgetTenths = MandatoryPendulumCount
+				* Hazards.BudgetCosts.PendulumCostTenths;
+			OutHazardBudgetTargetTenths = static_cast<int32>(FMath::Max<int64>(
+				FMath::RoundToInt64(HazardRawTenths),
+				MandatoryPendulumBudgetTenths));
 			OutResourceTarget = static_cast<int32>(FMath::RoundToInt64(ResourceRaw));
-			const int64 EffectiveHazardTarget = FMath::Max<int64>(
-				OutHazardDensityTarget, MandatoryPendulumCount);
-			const int64 MaximumOrdinaryHazards = FMath::Max<int64>(
-				0, EffectiveHazardTarget - MandatoryPendulumCount);
+			const int64 RemainingBudgetTenths = FMath::Max<int64>(
+				0, OutHazardBudgetTargetTenths - MandatoryPendulumBudgetTenths);
+			int64 MinimumEnabledCostTenths = MAX_int64;
+			if (Difficulty.Hazards.SpikeTrapWeight > 0)
+			{
+				MinimumEnabledCostTenths = FMath::Min<int64>(
+					MinimumEnabledCostTenths, Hazards.BudgetCosts.SpikeTrapCostTenths);
+			}
+			if (Difficulty.Hazards.BatteringRamWeight > 0)
+			{
+				MinimumEnabledCostTenths = FMath::Min<int64>(
+					MinimumEnabledCostTenths, Hazards.BudgetCosts.BatteringRamCostTenths);
+			}
+			if (Difficulty.Hazards.GuidedLauncherWeight > 0)
+			{
+				MinimumEnabledCostTenths = FMath::Min<int64>(
+					MinimumEnabledCostTenths, Hazards.BudgetCosts.GuidedLauncherCostTenths);
+			}
+			if (Difficulty.Hazards.SpikeWheelWeight > 0)
+			{
+				MinimumEnabledCostTenths = FMath::Min<int64>(
+					MinimumEnabledCostTenths, Hazards.BudgetCosts.SpikeWheelCostTenths);
+			}
+			const int64 MaximumOrdinaryHazards =
+				RemainingBudgetTenths > 0 && MinimumEnabledCostTenths != MAX_int64
+					? FMath::DivideAndRoundUp(
+						RemainingBudgetTenths, MinimumEnabledCostTenths)
+					: 0;
 			int64 MaximumActorsPerOrdinaryHazard = 0;
 			if (Difficulty.Hazards.SpikeTrapWeight > 0)
 			{
@@ -982,7 +1107,8 @@ namespace ZeroEscape::LevelGeneration
 			}
 			const int64 WorstActorCount = MandatoryPendulumCount
 				+ MaximumOrdinaryHazards * MaximumActorsPerOrdinaryHazard
-				+ OutResourceTarget;
+				+ OutResourceTarget
+				+ Plan.RewardBranches.Num();
 			const int64 WeightSum = static_cast<int64>(Difficulty.Hazards.SpikeTrapWeight)
 				+ Difficulty.Hazards.BatteringRamWeight
 				+ Difficulty.Hazards.GuidedLauncherWeight
@@ -1318,27 +1444,33 @@ namespace ZeroEscape::LevelGeneration
 				}
 			}
 
-			float BestLauncherCombinationScale = 0.0f;
+			float BestLauncherCombinationLog2 = 0.0f;
+			float BestLauncherCombinationPressureScale = 0.0f;
 			for (const FNearbyHazard& Nearby : NearbyHazards)
 			{
 				const EPopulationPlacementKind AcceptedKind =
 					State.AcceptedHazards[Nearby.PlacementIndex].Kind;
 				if (IsLauncherCombinationPair(Candidate.Kind, AcceptedKind))
 				{
-					BestLauncherCombinationScale = FMath::Max(
-						BestLauncherCombinationScale,
-						LauncherCombinationDistanceSignal(
-							Nearby.Distance,
-							Scoring.GroupRadiusTiles));
+					BestLauncherCombinationLog2 = FMath::Max(
+						BestLauncherCombinationLog2,
+						LauncherCombinationLog2Bonus(Nearby.Distance, Scoring));
+					BestLauncherCombinationPressureScale = FMath::Max(
+						BestLauncherCombinationPressureScale,
+						LauncherCombinationPressureSignal(Nearby.Distance, Scoring));
 				}
 			}
 			BestCombinationLog2 = FMath::Max(
 				BestCombinationLog2,
-				Scoring.LauncherCombinationLog2Bonus
-					* BestLauncherCombinationScale);
+				BestLauncherCombinationLog2);
+			if (BestCombinationLog2 > 0.0f
+				&& IsRewardBranchApproachAddress(Plan, Candidate.AnchorAddress))
+			{
+				BestCombinationLog2 *= Scoring.RewardBranchCombinationMultiplier;
+			}
 			OutEvaluation.AddedCombinationPressure +=
 				Scoring.LauncherCombinationPressureBonus
-					* BestLauncherCombinationScale;
+					* BestLauncherCombinationPressureScale;
 
 			const float BasePressure = BasePressureForKind(
 				Candidate.Kind, Scoring, RepresentativeTraversalSeconds);
@@ -1370,15 +1502,9 @@ namespace ZeroEscape::LevelGeneration
 				NearestHazardDistance = FMath::Min(
 					NearestHazardDistance, State.NearestHazardDistances[Node]);
 			}
-			const float RouteCoverageSignal = NearestHazardDistance == UnreachableDistance
-				? 1.0f
-				: FMath::Clamp(
-					static_cast<float>(NearestHazardDistance - Scoring.GroupRadiusTiles)
-						/ Scoring.GroupRadiusTiles,
-					0.0f,
-					1.0f);
 			OutEvaluation.Score.Position = Variant.PositionLog2Contribution
-				+ Scoring.RouteCoverageLog2Bonus * RouteCoverageSignal;
+				+ CalculateRouteCoverageLog2Contribution(
+					NearestHazardDistance, Scoring);
 			OutEvaluation.Score.Progress = Scoring.ProgressLog2Strength
 				* (2.0f * OutEvaluation.CandidateProgress01 - 1.0f);
 			OutEvaluation.Score.GroupPressure =
@@ -1582,6 +1708,7 @@ namespace ZeroEscape::LevelGeneration
 			case EPopulationPlacementKind::GuidedLauncher: ++InOutCounts.GuidedLaunchers; break;
 			case EPopulationPlacementKind::SpikeWheel: ++InOutCounts.SpikeWheels; break;
 			case EPopulationPlacementKind::MagneticResource: break;
+			case EPopulationPlacementKind::EnergyOrb: break;
 			}
 		}
 
@@ -1829,7 +1956,7 @@ namespace ZeroEscape::LevelGeneration
 			const FZeroEscapeHazardPopulationAssembly& Hazards,
 			const FZeroEscapePopulationDifficultySettings& Difficulty,
 			const FTraversalGraph& Graph,
-			const int32 HazardDensityTarget,
+			const int32 HazardBudgetTargetTenths,
 			FRandomStream& Rng,
 			FPopulationPlacementPlan& InOutPlan,
 			TSet<FIntVector>& OutResourceBlockedAddresses,
@@ -1847,6 +1974,9 @@ namespace ZeroEscape::LevelGeneration
 				OutError = TEXT("玩家出生点或 Exit 不在完整通行图中。");
 				return false;
 			}
+			InOutPlan.HazardStats.TargetBudgetTenths = HazardBudgetTargetTenths;
+			InOutPlan.HazardStats.TargetCount = FMath::DivideAndRoundUp(
+				HazardBudgetTargetTenths, 10);
 
 			for (const FZeroEscapeGeneratedStructure& Structure : Plan.Structures)
 			{
@@ -1862,6 +1992,12 @@ namespace ZeroEscape::LevelGeneration
 					return false;
 				}
 				const FPlacementVariant& Variant = Candidate.Variants[0];
+				if (VariantHasOperationConflict(
+						Variant, OutResourceBlockedAddresses))
+				{
+					OutError = TEXT("奖励光团端点与强制摆锤占用冲突。");
+					return false;
+				}
 				FHazardCandidateEvaluation Evaluation;
 				if (!EvaluateHazardCandidate(
 						Candidate,
@@ -1901,10 +2037,10 @@ namespace ZeroEscape::LevelGeneration
 					OutError = TEXT("强制摆锤无法提交机关组状态。");
 					return false;
 				}
+				InOutPlan.HazardStats.ActualBudgetTenths +=
+					Hazards.BudgetCosts.PendulumCostTenths;
 			}
 
-			InOutPlan.HazardStats.TargetCount = FMath::Max(
-				HazardDensityTarget, InOutPlan.KindCounts.Pendulums);
 			TArray<FPlacementCandidate> Spikes;
 			TArray<FPlacementCandidate> Rams;
 			TArray<FPlacementCandidate> Launchers;
@@ -1924,9 +2060,11 @@ namespace ZeroEscape::LevelGeneration
 			InOutPlan.KindCounts.WheelCandidateAnchors = Wheels.Num();
 			InOutPlan.HazardStats.CandidateAnchorCount =
 				Spikes.Num() + Rams.Num() + Launchers.Num() + Wheels.Num();
-			int32 Remaining = InOutPlan.HazardStats.TargetCount
-				- InOutPlan.KindCounts.Pendulums;
-			while (Remaining > 0)
+			int32 RemainingBudgetTenths = FMath::Max(
+				0,
+				HazardBudgetTargetTenths
+					- InOutPlan.HazardStats.ActualBudgetTenths);
+			while (RemainingBudgetTenths > 0)
 			{
 				TArray<FScoredKindPool> Pools;
 				if (!BuildScoredKindPool(
@@ -2079,11 +2217,21 @@ namespace ZeroEscape::LevelGeneration
 					OutError = TEXT("选中机关无法提交组状态。");
 					return false;
 				}
-				--Remaining;
+				const int32 PlacementCostTenths = HazardBudgetCostTenthsForKind(
+					Candidate.Kind, Hazards.BudgetCosts);
+				InOutPlan.HazardStats.ActualBudgetTenths += PlacementCostTenths;
+				RemainingBudgetTenths = FMath::Max(
+					0,
+					HazardBudgetTargetTenths
+						- InOutPlan.HazardStats.ActualBudgetTenths);
 			}
 			InOutPlan.HazardStats.ActualCount = InOutPlan.HazardPlacements.Num();
-			InOutPlan.HazardStats.UnderfilledCount = FMath::Max(
-				0, InOutPlan.HazardStats.TargetCount - InOutPlan.HazardStats.ActualCount);
+			InOutPlan.HazardStats.UnderfilledBudgetTenths = FMath::Max(
+				0,
+				HazardBudgetTargetTenths - InOutPlan.HazardStats.ActualBudgetTenths);
+			InOutPlan.HazardStats.UnderfilledCount = FMath::DivideAndRoundUp(
+				InOutPlan.HazardStats.UnderfilledBudgetTenths,
+				10);
 			return FinalizeHazardGroups(
 				Plan,
 				Difficulty.Hazards,
@@ -2093,6 +2241,59 @@ namespace ZeroEscape::LevelGeneration
 				State,
 				InOutPlan,
 				OutError);
+		}
+
+		bool ReserveEnergyOrbEndpoints(
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const FTraversalGraph& Graph,
+			TSet<FIntVector>& InOutReservedAddresses,
+			FString& OutError)
+		{
+			TSet<FIntVector> OrdinaryAddresses;
+			OrdinaryAddresses.Reserve(Plan.OrdinaryCells.Num());
+			for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+			{
+				OrdinaryAddresses.Add(Cell.Coordinate);
+			}
+			for (const FZeroEscapeGeneratedRewardBranch& Branch : Plan.RewardBranches)
+			{
+				const FIntVector Endpoint = Branch.EndpointCoordinate;
+				if (Branch.PathCoordinates.IsEmpty()
+					|| Branch.PathCoordinates.Last() != Endpoint
+					|| IsFlowCoordinate(Plan, Endpoint)
+					|| !OrdinaryAddresses.Contains(Endpoint)
+					|| !Graph.NodeByAddress.Contains(Endpoint)
+					|| InOutReservedAddresses.Contains(Endpoint))
+				{
+					OutError = TEXT("奖励支线光团端点非法、重复或与流程锚点冲突。");
+					return false;
+				}
+				InOutReservedAddresses.Add(Endpoint);
+			}
+			return true;
+		}
+
+		void AppendEnergyOrbPlacements(
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const double FloorTopZCm,
+			const FZeroEscapeResourcePopulationAssembly& Resources,
+			FPopulationPlacementPlan& InOutPlan)
+		{
+			InOutPlan.EnergyOrbPlacements.Reserve(Plan.RewardBranches.Num());
+			for (const FZeroEscapeGeneratedRewardBranch& Branch : Plan.RewardBranches)
+			{
+				FPopulationPlannedPlacement Placement;
+				Placement.Kind = EPopulationPlacementKind::EnergyOrb;
+				Placement.AnchorAddress = Branch.EndpointCoordinate;
+				Placement.LocalSpawnTransforms.Add(FTransform(
+					FQuat::Identity,
+					AddressFloorLocation(
+						Plan, Branch.EndpointCoordinate, FloorTopZCm)
+						+ FVector(0.0, 0.0, Resources.EnergyOrbSpawnZOffsetCm)));
+				Placement.ResourceBlockedAddresses.Add(Branch.EndpointCoordinate);
+				InOutPlan.EnergyOrbPlacements.Add(MoveTemp(Placement));
+			}
+			InOutPlan.KindCounts.EnergyOrbs = InOutPlan.EnergyOrbPlacements.Num();
 		}
 
 		void PlanResources(
@@ -2135,8 +2336,6 @@ namespace ZeroEscape::LevelGeneration
 			RemainingAnchors.Sort(CoordinateLess);
 			InOutPlan.ResourceStats.TargetCount = ResourceTarget;
 			InOutPlan.ResourceStats.CandidateAnchorCount = RemainingAnchors.Num();
-			TArray<int32> NearestResourceDistances;
-			NearestResourceDistances.Init(UnreachableDistance, Graph.Addresses.Num());
 			TArray<int32> NearestContentDistances;
 			NearestContentDistances.Init(UnreachableDistance, Graph.Addresses.Num());
 			TArray<int32> HazardNodes;
@@ -2152,24 +2351,7 @@ namespace ZeroEscape::LevelGeneration
 			TArray<FIntVector> SelectedAnchors;
 			while (SelectedAnchors.Num() < ResourceTarget && !RemainingAnchors.IsEmpty())
 			{
-				// 资源之间的物理间距仍是合法性边界；先稳定移除不再可行的锚点，
-				// 再在全部合法锚点中做非零软加权，避免“抽中后拒绝”稀释支持效果。
-				for (int32 Index = RemainingAnchors.Num() - 1; Index >= 0; --Index)
-				{
-					const int32 Node = Graph.NodeByAddress.FindChecked(
-						RemainingAnchors[Index]);
-					if (NearestResourceDistances[Node]
-						< Difficulty.Resources.MinimumRouteSpacingTiles)
-					{
-						RemainingAnchors.RemoveAt(Index, 1, EAllowShrinking::No);
-						++InOutPlan.ResourceStats.SpacingRejectedCount;
-					}
-				}
-				if (RemainingAnchors.IsEmpty())
-				{
-					break;
-				}
-
+				// 同格与机关/光团占用已在候选阶段剔除；剩余锚点只做非零软加权。
 				const int32 PickIndex = PickWeightedIndex(
 					RemainingAnchors,
 					[&SupportPriorityByAddress,
@@ -2188,8 +2370,8 @@ namespace ZeroEscape::LevelGeneration
 							? 1.0f
 							: FMath::Clamp(
 								static_cast<float>(NearestDistance
-									- Difficulty.Resources.MinimumRouteSpacingTiles)
-									/ Difficulty.Resources.MinimumRouteSpacingTiles,
+									- Difficulty.Resources.CoverageReferenceDistanceTiles)
+									/ Difficulty.Resources.CoverageReferenceDistanceTiles,
 								0.0f,
 								1.0f);
 						const double CoverageLog2 = static_cast<double>(CoverageSignal)
@@ -2205,8 +2387,6 @@ namespace ZeroEscape::LevelGeneration
 				RemainingAnchors.RemoveAt(PickIndex, 1, EAllowShrinking::No);
 				const int32 Node = Graph.NodeByAddress.FindChecked(Address);
 				SelectedAnchors.Add(Address);
-				UpdateNearestDistances(
-					Graph, TConstArrayView<int32>(&Node, 1), NearestResourceDistances);
 				UpdateNearestDistances(
 					Graph, TConstArrayView<int32>(&Node, 1), NearestContentDistances);
 			}
@@ -2250,6 +2430,10 @@ namespace ZeroEscape::LevelGeneration
 			{
 				ActorCount += Placement.LocalSpawnTransforms.Num();
 			}
+			for (const FPopulationPlannedPlacement& Placement : Plan.EnergyOrbPlacements)
+			{
+				ActorCount += Placement.LocalSpawnTransforms.Num();
+			}
 			const int64 Maximum = static_cast<int64>(GenerationLimits::MaxGridCells)
 				* GenerationLimits::MaxFloorCount;
 			if (ActorCount > Maximum)
@@ -2286,7 +2470,7 @@ namespace ZeroEscape::LevelGeneration
 		{
 			return EPopulationPlacementResult::InvalidConfiguration;
 		}
-		int32 HazardDensityTarget = 0;
+		int32 HazardBudgetTargetTenths = 0;
 		int32 ResourceTarget = 0;
 		if (!ValidateAssemblyAndTargets(
 				LevelPlan,
@@ -2294,7 +2478,7 @@ namespace ZeroEscape::LevelGeneration
 				HazardAssembly,
 				ResourceAssembly,
 				*Difficulty,
-				HazardDensityTarget,
+				HazardBudgetTargetTenths,
 				ResourceTarget,
 				OutError))
 		{
@@ -2325,6 +2509,14 @@ namespace ZeroEscape::LevelGeneration
 			ERandomDomain::ResourcePopulationPlacement);
 		FPopulationPlacementPlan WorkingPlan;
 		TSet<FIntVector> ResourceBlockedAddresses;
+		if (!ReserveEnergyOrbEndpoints(
+				LevelPlan,
+				Graph,
+				ResourceBlockedAddresses,
+				OutError))
+		{
+			return EPopulationPlacementResult::InvalidPlan;
+		}
 		if (!PlanHazards(
 				LevelPlan,
 				FloorTopZCm,
@@ -2332,7 +2524,7 @@ namespace ZeroEscape::LevelGeneration
 				HazardAssembly,
 				*Difficulty,
 				Graph,
-				HazardDensityTarget,
+				HazardBudgetTargetTenths,
 				HazardRng,
 				WorkingPlan,
 				ResourceBlockedAddresses,
@@ -2349,6 +2541,11 @@ namespace ZeroEscape::LevelGeneration
 			ResourceTarget,
 			ResourceBlockedAddresses,
 			ResourceRng,
+			WorkingPlan);
+		AppendEnergyOrbPlacements(
+			LevelPlan,
+			FloorTopZCm,
+			ResourceAssembly,
 			WorkingPlan);
 		if (!ValidateActorBudget(WorkingPlan, OutError))
 		{

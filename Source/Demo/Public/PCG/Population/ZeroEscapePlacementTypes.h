@@ -102,8 +102,23 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 	 * 不设置最大空白长度，也不会令任何合法候选权重归零。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
-		meta = (ClampMin = "0.0", ClampMax = "4.0"))
-	float RouteCoverageLog2Bonus = 0.5f;
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	float RouteCoverageLog2Bonus = 5.0f;
+
+	/** 连续空白从该图距离开始获得覆盖奖励；更近的候选保持中性。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
+		meta = (ClampMin = "2", ClampMax = "16"))
+	int32 RouteCoverageStartDistanceTiles = 4;
+
+	/** 空白距离超过起点后，每格增加的线性 log2 奖励。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
+		meta = (ClampMin = "0.0", ClampMax = "2.0"))
+	float RouteCoverageLinearLog2PerTile = 0.35f;
+
+	/** 空白距离超过起点后，每格平方增加的 log2 奖励。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring",
+		meta = (ClampMin = "0.0", ClampMax = "0.5"))
+	float RouteCoverageQuadraticLog2PerTileSquared = 0.03f;
 
 	/** 刺轮与相邻冲锤的强组合奖励。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
@@ -115,13 +130,23 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
 	float WheelSpikeLog2Bonus = 2.25f;
 
-	/**
-	 * 发射器与另一类机关在组半径内形成远距配合时的最大 log2 奖励。
-	 * 实际奖励随图距离递增；没有搭档只是不加分，绝不拒绝候选。
-	 */
+	/** 发射器与另一类机关图距离为 1 时的轻度 log2 组合奖励。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
 		meta = (ClampMin = "0.0", ClampMax = "5.0"))
-	float LauncherCombinationLog2Bonus = 1.5f;
+	float LauncherCombinationDistanceOneLog2Bonus = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	float LauncherCombinationDistanceTwoLog2Bonus = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
+		meta = (ClampMin = "0.0", ClampMax = "5.0"))
+	float LauncherCombinationDistanceThreePlusLog2Bonus = 1.75f;
+
+	/** 奖励支线入口到能量光团前的正组合奖励倍率；不改变压力诊断。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
+		meta = (ClampMin = "1.0", ClampMax = "2.0"))
+	float RewardBranchCombinationMultiplier = 1.2f;
 
 	/** 刺轮没有冲锤或地刺搭档时的轻微贡献；保持有限且不归零。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
@@ -174,16 +199,43 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 	float LauncherCombinationPressureBonus = 0.5f;
 };
 
+/** 各机关消耗的标准预算，单位为十分之一；10 等于一个完整机关预算。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeHazardBudgetCostTuning
+{
+	GENERATED_BODY()
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget",
+		meta = (ClampMin = "1", ClampMax = "100"))
+	int32 PendulumCostTenths = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget",
+		meta = (ClampMin = "1", ClampMax = "100"))
+	int32 SpikeTrapCostTenths = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget",
+		meta = (ClampMin = "1", ClampMax = "100"))
+	int32 BatteringRamCostTenths = 10;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget",
+		meta = (ClampMin = "1", ClampMax = "100"))
+	int32 GuidedLauncherCostTenths = 7;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget",
+		meta = (ClampMin = "1", ClampMax = "100"))
+	int32 SpikeWheelCostTenths = 5;
+};
+
 /** 一档难度中的机关密度、普通机关构成与变化压力目标。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeHazardPopulationTuning
 {
 	GENERATED_BODY()
 
-	/** 每 100 个玩法面积格期望出现多少处机关；一组地刺按一处计数。 */
+	/** 每 100 个玩法面积格的标准机关预算；1.0 等于 10 个十分之一预算。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards",
 		meta = (ClampMin = "0.0"))
-	float ExpectedHazardsPer100GameplayCells = 0.0f;
+	float ExpectedHazardBudgetUnitsPer100GameplayCells = 0.0f;
 
 	/** 四类普通机关的基础类型权重；0 表示本难度不抽取该类。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards",
@@ -225,10 +277,10 @@ struct DEMO_API FZeroEscapeResourcePopulationTuning
 		meta = (ClampMin = "0.0"))
 	float ExpectedResourcesPer100GameplayCells = 0.0f;
 
-	/** 资源锚点之间的最小整栋通行图距离，单位：格。 */
+	/** 资源覆盖软奖励的参考图距离；不会禁止两个资源相邻或成簇。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources",
 		meta = (ClampMin = "1"))
-	int32 MinimumRouteSpacingTiles = 1;
+	int32 CoverageReferenceDistanceTiles = 3;
 };
 
 /** Profile 必须恰好提供 Easy、Normal、Hard 各一条。 */
@@ -271,6 +323,10 @@ struct DEMO_API FZeroEscapeHazardPopulationAssembly
 	/** 普通机关共享的评分、分组、压力与组合参数。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Scoring")
 	FZeroEscapeHazardPlacementScoringTuning PlacementScoring;
+
+	/** 发射器与刺轮以较低成本消耗全局机关预算，但仍各自生成一个机关。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Budget")
+	FZeroEscapeHazardBudgetCostTuning BudgetCosts;
 
 	/** 一处地刺生成的 Actor 数；当前正式装配为两个。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Spike",
@@ -316,9 +372,18 @@ struct DEMO_API FZeroEscapeResourcePopulationAssembly
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources")
 	TSoftClassPtr<AActor> MagneticResourceClass;
 
+	/** 奖励支线终点的投掷能量补给光团；本轮只负责视觉与触碰体。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources|Energy Orb")
+	TSoftClassPtr<AActor> EnergyOrbClass;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources",
 		meta = (Units = "cm"))
 	float SpawnZOffsetCm = 50.0f;
+
+	/** 光团中心相对奖励支线终点地板面的高度。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources|Energy Orb",
+		meta = (ClampMin = "0.0", ClampMax = "500.0", Units = "cm"))
+	float EnergyOrbSpawnZOffsetCm = 100.0f;
 
 	/** 从逻辑格边缘向内保留的安全距离；不参与资源之间的泊松间距。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Resources",

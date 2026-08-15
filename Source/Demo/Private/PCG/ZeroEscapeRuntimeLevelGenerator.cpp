@@ -946,11 +946,20 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 	State = bSuccess
 		? EZeroEscapeRuntimeGenerationState::Ready
 		: EZeroEscapeRuntimeGenerationState::Failed;
+	int32 OneCellTerminalSpurCount = 0;
+	double AlternativeCoverageTotal = 0.0;
+	for (const FZeroEscapeGeneratedFloorSummary& Floor : LastPlan.Floors)
+	{
+		OneCellTerminalSpurCount += Floor.OneCellTerminalSpurCount;
+		AlternativeCoverageTotal += Floor.AlternativeRouteCoverageRatio;
+	}
+	const double MeanAlternativeCoverage = LastPlan.Floors.IsEmpty()
+		? 0.0 : AlternativeCoverageTotal / LastPlan.Floors.Num();
 
 	UE_LOG(
 		LogZeroEscapePCG,
 		Display,
-		TEXT("ZE_PCG_RESULT schema=6 operation=%lld success=%d seed=%d difficulty=%s stage=%s failure=%s floors=%d ordinary=%d structures=%d walkable=%d whole_attempts=%d structure_candidates=%d wfc_candidates=%d backtracks=%d instances=%d hism=%d nav_projects=%d nav_paths=%d nav_nodes=%d nav_ms=%.3f layout_hash=%lld total_ms=%.3f message=\"%s\""),
+		TEXT("ZE_PCG_RESULT schema=7 operation=%lld success=%d seed=%d difficulty=%s stage=%s failure=%s floors=%d ordinary=%d structures=%d reward_branches=%d terminal_spurs=%d alternative_coverage_mean=%.3f walkable=%d whole_attempts=%d structure_candidates=%d wfc_candidates=%d backtracks=%d instances=%d hism=%d nav_projects=%d nav_paths=%d nav_nodes=%d nav_ms=%.3f layout_hash=%lld total_ms=%.3f message=\"%s\""),
 		static_cast<long long>(ActiveOperationId),
 		bSuccess ? 1 : 0,
 		ActiveRequest.Seed,
@@ -960,6 +969,9 @@ void AZeroEscapeRuntimeLevelGenerator::FinishGeneration(
 		LastReport.Metrics.GeneratedFloorCount,
 		ActiveOrdinaryCellCount,
 		ActiveStructureCount,
+		LastPlan.RewardBranches.Num(),
+		OneCellTerminalSpurCount,
+		MeanAlternativeCoverage,
 		LastReport.Metrics.WalkableCellCount,
 		LastReport.Metrics.WholeLayoutAttemptCount,
 		LastReport.Metrics.StructureCandidateEvaluationCount,

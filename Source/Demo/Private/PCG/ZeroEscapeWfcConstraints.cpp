@@ -844,6 +844,27 @@ namespace ZeroEscape::LevelGeneration
 			OutError = TEXT("WFC PreferredMaxConsecutiveStraightTiles 不能小于 0。");
 			return false;
 		}
+		if (!FMath::IsFinite(Settings.OpeningPreferenceLog2Strength)
+			|| Settings.OpeningPreferenceLog2Strength < 0.0f
+			|| Settings.OpeningPreferenceLog2Strength > 4.0f
+			|| (!Settings.OpeningPreferencesByCell.IsEmpty()
+				&& Settings.OpeningPreferencesByCell.Num() != CellCount))
+		{
+			OutError = TEXT("WFC 开口偏好强度或稠密数组数量非法。");
+			return false;
+		}
+		for (const FWfcCellOpeningPreference& Preference :
+			Settings.OpeningPreferencesByCell)
+		{
+			if (((Preference.PreferredOpenMask | Preference.PreferredClosedMask)
+					& static_cast<uint8>(~ZeroEscape::Grid::AllOpenEdges)) != 0
+				|| (Preference.PreferredOpenMask
+					& Preference.PreferredClosedMask) != 0)
+			{
+				OutError = TEXT("WFC 单格开口偏好使用非法 bit 或同时要求开关同一条边。");
+				return false;
+			}
+		}
 
 		if (Settings.MaxCandidateAttempts <= 0 || Settings.MaxBacktrackCount <= 0)
 		{

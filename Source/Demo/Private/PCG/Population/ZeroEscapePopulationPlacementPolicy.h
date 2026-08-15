@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapePopulationPlacementPolicy.h
- * 职责：把最终空间 Plan 与三档 Population 纯值配置原子规划为机关层和资源层放置结果。
+ * 职责：把最终空间 Plan 与三档 Population 配置原子规划为机关、资源和奖励光团放置结果。
  * 边界：不访问 UObject、World 或资产；不加载 Class、不 Spawn，也不修改输入 Plan。
  */
 
@@ -22,7 +22,8 @@ namespace ZeroEscape::LevelGeneration
 		BatteringRam = 2,
 		GuidedLauncher = 3,
 		MagneticResource = 4,
-		SpikeWheel = 5
+		SpikeWheel = 5,
+		EnergyOrb = 6
 	};
 
 	enum class EPopulationPlacementResult : uint8
@@ -100,6 +101,7 @@ namespace ZeroEscape::LevelGeneration
 		int32 GuidedLaunchers = 0;
 		int32 SpikeWheels = 0;
 		int32 MagneticResources = 0;
+		int32 EnergyOrbs = 0;
 		int32 SpikeCandidateAnchors = 0;
 		int32 RamCandidateAnchors = 0;
 		int32 LauncherCandidateAnchors = 0;
@@ -117,12 +119,17 @@ namespace ZeroEscape::LevelGeneration
 		int32 CandidateAnchorCount = 0;
 		int32 SpacingRejectedCount = 0;
 		int32 UnderfilledCount = 0;
+		/** 机关层使用，单位为十分之一标准机关；资源层保持 0。 */
+		int32 TargetBudgetTenths = 0;
+		int32 ActualBudgetTenths = 0;
+		int32 UnderfilledBudgetTenths = 0;
 	};
 
 	struct FPopulationPlacementPlan
 	{
 		TArray<FPopulationPlannedPlacement> HazardPlacements;
 		TArray<FPopulationPlannedPlacement> ResourcePlacements;
+		TArray<FPopulationPlannedPlacement> EnergyOrbPlacements;
 		TArray<FPopulationHazardGroupRecord> HazardGroups;
 		FPopulationKindCounts KindCounts;
 		FPopulationLayerStats HazardStats;
@@ -132,7 +139,7 @@ namespace ZeroEscape::LevelGeneration
 	class FPopulationPlacementPolicy final
 	{
 	public:
-		/** 成功时原子提交完整两层计划；失败时 OutPlan 保持空值。 */
+		/** 成功时原子提交完整三类计划；失败时 OutPlan 保持空值。 */
 		static EPopulationPlacementResult BuildPlan(
 			const FZeroEscapeGeneratedLevelPlan& LevelPlan,
 			double FloorTopZCm,

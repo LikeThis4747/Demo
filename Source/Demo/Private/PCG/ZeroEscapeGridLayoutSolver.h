@@ -51,6 +51,13 @@ namespace ZeroEscape::LevelGeneration
 		int32 PreferredOrdinaryWalkableCellCount = 1;
 		int32 PreferredMaxConsecutiveStraightTiles = 0;
 		double PreferredRouteCoverageRatio = 0.0;
+		double PreferredRewardBranchCellRatio = 0.0;
+		double PreferredAlternativeRouteCoverageRatio = 0.0;
+		float RouteQualityEarlyAcceptThreshold = 0.0f;
+		float RouteOpeningPreferenceLog2Strength = 0.0f;
+		int32 MinimumRewardBranchLengthTiles = 3;
+		int32 MaximumPreferredRewardBranchLengthTiles = 6;
+		int32 PreferredRewardBranchCount = 0;
 	};
 
 	/** 一层成功叶子的稠密 OpeningMask 和同一次 BFS 派生指标。 */
@@ -62,6 +69,15 @@ namespace ZeroEscape::LevelGeneration
 		int32 RequiredRouteLengthTiles = 0;
 		int32 FarthestRouteLengthTiles = 0;
 		double RouteCoverageRatio = 0.0;
+		TArray<FZeroEscapeGeneratedRewardBranch> CandidateRewardBranches;
+		int32 OneCellTerminalSpurCount = 0;
+		double CandidateRewardBranchCellRatio = 0.0;
+		double AlternativeRouteCoverageRatio = 0.0;
+		int32 StableMainRouteEdgeCount = 0;
+		int32 ReadableTurnCount = 0;
+		int32 LongestStraightRunTiles = 0;
+		double OneTileRunRatio = 1.0;
+		bool bSoftRouteAnalysisSucceeded = false;
 	};
 
 	class FGridLayoutSolver final
@@ -78,4 +94,20 @@ namespace ZeroEscape::LevelGeneration
 			FZeroEscapeConstrainedFloorResult& OutResult,
 			FZeroEscapeGenerationReport& OutReport);
 	};
+
+#if WITH_DEV_AUTOMATION_TESTS
+	namespace Testing
+	{
+		/** 使用生产代价函数测量一串移动方向，供软路线曲线自动化锁定。 */
+		int64 MeasurePreferredPathDirectionCost(
+			TConstArrayView<uint8> Directions,
+			int32 PreferredStraightTiles);
+
+		/** 对人工 OpeningMask 图运行生产路线分析，供支线/绕路/伪凸起自动化使用。 */
+		bool AnalyzeCollapsedRouteStructureForTesting(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			TConstArrayView<uint8> OpeningMasks,
+			FZeroEscapeConstrainedFloorResult& OutResult);
+	}
+#endif
 }

@@ -19,6 +19,7 @@
 #include "UObject/UObjectGlobals.h"
 
 #include "PCG/ZeroEscapeGenerationCore.h"
+#include "PCG/ZeroEscapeGridLayoutSolver.h"
 #include "PCG/Layout/ZeroEscapeMultiFloorLayoutPlanner.h"
 
 namespace ZeroEscape::LevelGeneration::Tests
@@ -404,6 +405,111 @@ namespace ZeroEscape::LevelGeneration::Tests
 				}
 			}
 		}
+
+		void AddOpeningEdge(
+			const FIntPoint GridSize,
+			const FIntPoint First,
+			const FIntPoint Second,
+			TArray<uint8>& InOutOpeningMasks)
+		{
+			for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+			{
+				if (Grid::Step(First, Direction) != Second)
+				{
+					continue;
+				}
+				InOutOpeningMasks[Grid::ToIndex(First, GridSize)] |=
+					Grid::DirectionBit(Direction);
+				InOutOpeningMasks[Grid::ToIndex(Second, GridSize)] |=
+					Grid::DirectionBit(Grid::OppositeDirectionIndex(Direction));
+				return;
+			}
+		}
+
+		FZeroEscapeConstrainedFloorInput MakeRouteAnalysisInput(
+			const FIntPoint GridSize,
+			const FIntPoint Enter,
+			const FIntPoint Leave)
+		{
+			FZeroEscapeConstrainedFloorInput Input;
+			Input.FloorIndex = 0;
+			Input.GridSize = GridSize;
+			Input.RequiredEnterCoordinate = Enter;
+			Input.RequiredLeaveCoordinate = Leave;
+			Input.MinimumRewardBranchLengthTiles = 3;
+			Input.PreferredMaxConsecutiveStraightTiles = 4;
+			Input.Constraints.SetNum(GridSize.X * GridSize.Y);
+			Input.StructureWalkableByCell.Init(0, GridSize.X * GridSize.Y);
+			for (int32 Index = 0; Index < Input.Constraints.Num(); ++Index)
+			{
+				Input.Constraints[Index].Coordinate = FIntPoint(
+					Index % GridSize.X, Index / GridSize.X);
+			}
+			return Input;
+		}
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeCollapsedRouteStructureAnalysisTest,
+		"Demo.PCG.Unit.Grid.CollapsedRouteStructureAnalysis",
+		EAutomationTestFlags_ApplicationContextMask
+			| EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeCollapsedRouteStructureAnalysisTest::RunTest(
+		const FString& Parameters)
+	{
+		using namespace MultiFloorLayoutTestsPrivate;
+		(void)Parameters;
+		const FIntPoint GridSize(9, 6);
+		const FZeroEscapeConstrainedFloorInput Input = MakeRouteAnalysisInput(
+			GridSize, FIntPoint(0, 3), FIntPoint(8, 3));
+		TArray<uint8> OpeningMasks;
+		OpeningMasks.Init(0, GridSize.X * GridSize.Y);
+		for (int32 X = 0; X < 8; ++X)
+		{
+			AddOpeningEdge(
+				GridSize, FIntPoint(X, 3), FIntPoint(X + 1, 3), OpeningMasks);
+		}
+		AddOpeningEdge(
+			GridSize, FIntPoint(2, 3), FIntPoint(2, 4), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(4, 3), FIntPoint(4, 2), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(4, 2), FIntPoint(5, 2), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(5, 2), FIntPoint(5, 1), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(6, 3), FIntPoint(6, 4), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(6, 4), FIntPoint(7, 4), OpeningMasks);
+		AddOpeningEdge(
+			GridSize, FIntPoint(7, 4), FIntPoint(7, 3), OpeningMasks);
+
+		FZeroEscapeConstrainedFloorResult Result;
+		TestTrue(TEXT("人工路线图的软分析必须成功"),
+			Testing::AnalyzeCollapsedRouteStructureForTesting(
+				Input, OpeningMasks, Result));
+		TestEqual(TEXT("一格侧凸不能截断八格长直统计"),
+			Result.LongestStraightRunTiles, 8);
+		TestEqual(TEXT("只有真实的一格终止凸起计入 artifact"),
+			Result.OneCellTerminalSpurCount, 1);
+		TestEqual(TEXT("转弯 degree-2 链应识别为一条奖励支线"),
+			Result.CandidateRewardBranches.Num(), 1);
+		if (!Result.CandidateRewardBranches.IsEmpty())
+		{
+			const FZeroEscapeGeneratedRewardBranch& Branch =
+				Result.CandidateRewardBranches[0];
+			TestEqual(TEXT("支线 Gateway 必须回溯到稳定主路"),
+				Branch.GatewayCoordinate, FIntVector(4, 3, 0));
+			TestEqual(TEXT("支线转角不会截断长度"),
+				Branch.PathCoordinates.Num(), 3);
+			TestEqual(TEXT("支线 Endpoint 必须是最深普通死路格"),
+				Branch.EndpointCoordinate, FIntVector(5, 1, 0));
+		}
+		TestTrue(TEXT("只绕过一条八边主路时替代覆盖应为 1/8"),
+			FMath::IsNearlyEqual(
+				Result.AlternativeRouteCoverageRatio, 1.0 / 8.0));
+		return true;
 	}
 
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -467,18 +573,35 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestTrue(TEXT("高天花板房间不能全部位于顶层"), bHasNonTopHighRoom);
 
 		int32 SummedWalkable = 0;
+		int32 SummedRewardBranches = 0;
 		for (const FZeroEscapeGeneratedFloorSummary& Floor : FirstPlan.Floors)
 		{
 			SummedWalkable += Floor.TotalWalkableCellCount;
+			SummedRewardBranches += Floor.RewardBranchCount;
 			const int32 HardOrdinaryMinimum = Floor.FloorIndex == 0 ? 2 : 1;
 			TestTrue(TEXT("每层只保留玩家可用性所需的普通格硬下限"),
 				Floor.OrdinaryWalkableCellCount
 					>= HardOrdinaryMinimum);
 			TestTrue(TEXT("软质量指标必须仍可测量"),
 				FMath::IsFinite(Floor.SpatialSeparationRatio)
-					&& FMath::IsFinite(Floor.RouteCoverageRatio));
+					&& FMath::IsFinite(Floor.RouteCoverageRatio)
+					&& FMath::IsFinite(Floor.RewardBranchCellRatio)
+					&& FMath::IsFinite(Floor.AlternativeRouteCoverageRatio));
+			TestTrue(TEXT("奖励支线与一格凸起都不得超过真实死路数"),
+				Floor.RewardBranchCount <= Floor.JunctionMetrics.DeadEndCount
+					&& Floor.OneCellTerminalSpurCount
+						<= Floor.JunctionMetrics.DeadEndCount);
 		}
 		TestTrue(TEXT("整栋硬合法结果必须包含可走格"), SummedWalkable > 0);
+		TestEqual(TEXT("逐层奖励支线统计必须等于最终 Plan 数组"),
+			SummedRewardBranches, FirstPlan.RewardBranches.Num());
+		for (const FZeroEscapeGeneratedRewardBranch& Branch : FirstPlan.RewardBranches)
+		{
+			TestTrue(TEXT("最终奖励支线必须避开玩家、追猎者与 Exit"),
+				!Branch.PathCoordinates.Contains(FirstPlan.PlayerSpawnCoordinate)
+					&& !Branch.PathCoordinates.Contains(FirstPlan.PursuerSpawnCoordinate)
+					&& !Branch.PathCoordinates.Contains(FirstPlan.ExitCoordinate));
+		}
 		TestEqual(TEXT("报告必须按楼层保留 WFC 指标"),
 			FirstReport.Metrics.FloorWfcMetrics.Num(), FirstPlan.FloorCount);
 		int32 FloorSolveAttempts = 0;
@@ -588,6 +711,8 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FMultiFloorLayoutPlanner::Solve(Input, ReplayPlan, ReplayReport));
 		TestEqual(TEXT("同 Seed、难度和逻辑 Profile 必须复现规范 Hash"),
 			ReplayPlan.CanonicalLayoutHash, FirstPlan.CanonicalLayoutHash);
+		TestEqual(TEXT("同 Seed 必须复现最终奖励支线数量"),
+			ReplayPlan.RewardBranches.Num(), FirstPlan.RewardBranches.Num());
 		TestEqual(TEXT("同 Seed 必须复现追猎者出生点"),
 			ReplayPlan.PursuerSpawnCoordinate, FirstPlan.PursuerSpawnCoordinate);
 
@@ -669,6 +794,83 @@ namespace ZeroEscape::LevelGeneration::Tests
 		}
 		TestTrue(TEXT("三间配合每层上限一间时顶层必须出现房间"),
 			bFoundTopFloorRoom);
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeRouteQualityQuickSweepTest,
+		"Demo.PCG.Stress.RouteQuality90",
+		EAutomationTestFlags_ApplicationContextMask
+			| EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeRouteQualityQuickSweepTest::RunTest(
+		const FString& Parameters)
+	{
+		(void)Parameters;
+		const UZeroEscapeLevelGenerationProfile* Profile =
+			LoadObject<UZeroEscapeLevelGenerationProfile>(
+				nullptr,
+				TEXT("/Game/ZeroEscape/Generation/Data/DA_LevelGenerationProfile.DA_LevelGenerationProfile"));
+		if (!TestNotNull(TEXT("快速路线质量 Sweep 必须加载正式 Profile"), Profile))
+		{
+			return true;
+		}
+		constexpr EZeroEscapeDifficulty Difficulties[] = {
+			EZeroEscapeDifficulty::Easy,
+			EZeroEscapeDifficulty::Normal,
+			EZeroEscapeDifficulty::Hard };
+		for (const EZeroEscapeDifficulty Difficulty : Difficulties)
+		{
+			int32 FloorCount = 0;
+			int32 RewardBranchCount = 0;
+			int32 OneCellSpurCount = 0;
+			double AlternativeCoverageTotal = 0.0;
+			double WfcSolveAttemptsPerFloorTotal = 0.0;
+			TArray<double> PlanningTimes;
+			for (int32 Seed = 0; Seed < 30; ++Seed)
+			{
+				FZeroEscapeGenerationRequest Request;
+				Request.Seed = Seed;
+				Request.Difficulty = Difficulty;
+				FResolvedGenerationInput Input;
+				FZeroEscapeGenerationReport ResolveReport;
+				FZeroEscapeGeneratedLevelPlan Plan;
+				FZeroEscapeGenerationReport SolveReport;
+				if (!FGenerationCore::ResolveGenerationInput(
+						*Profile, Request, Input, ResolveReport)
+					|| !FMultiFloorLayoutPlanner::Solve(
+						Input, Plan, SolveReport))
+				{
+					AddError(FString::Printf(
+						TEXT("快速路线质量 Sweep 失败：Difficulty=%d Seed=%d Message=%s/%s"),
+						static_cast<int32>(Difficulty), Seed,
+						*ResolveReport.Message, *SolveReport.Message));
+					return true;
+				}
+				FloorCount += Plan.FloorCount;
+				RewardBranchCount += Plan.RewardBranches.Num();
+				for (const FZeroEscapeGeneratedFloorSummary& Floor : Plan.Floors)
+				{
+					OneCellSpurCount += Floor.OneCellTerminalSpurCount;
+					AlternativeCoverageTotal += Floor.AlternativeRouteCoverageRatio;
+				}
+				WfcSolveAttemptsPerFloorTotal +=
+					static_cast<double>(SolveReport.Metrics.WfcSolveAttemptCount)
+						/ Plan.FloorCount;
+				PlanningTimes.Add(SolveReport.Metrics.PlanningMilliseconds);
+			}
+			PlanningTimes.Sort();
+			const double P95Milliseconds = PlanningTimes[
+				FMath::FloorToInt(0.95 * (PlanningTimes.Num() - 1))];
+			AddInfo(FString::Printf(
+				TEXT("ZE_PCG_ROUTE_QUALITY difficulty=%d samples=30 branches_per_floor=%.3f one_cell_spurs_per_floor=%.3f alternative_coverage=%.3f wfc_trees_per_floor=%.3f planning_p95_ms=%.3f"),
+				static_cast<int32>(Difficulty),
+				static_cast<double>(RewardBranchCount) / FloorCount,
+				static_cast<double>(OneCellSpurCount) / FloorCount,
+				AlternativeCoverageTotal / FloorCount,
+				WfcSolveAttemptsPerFloorTotal / PlanningTimes.Num(),
+				P95Milliseconds));
+		}
 		return true;
 	}
 

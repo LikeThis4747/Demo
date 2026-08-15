@@ -37,6 +37,22 @@ struct DEMO_API FZeroEscapeSharedRouteConstraints
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology", meta = (ClampMin = "1"))
 	int32 MaxConsecutiveStraightTiles = 4;
 
+	/** 软路线开口提示写入 WFC 候选权重的 log2 强度；0 表示关闭提示。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology|Soft Route", meta = (ClampMin = "0.0", ClampMax = "4.0"))
+	float RouteOpeningPreferenceLog2Strength = 1.5f;
+
+	/** 密度精确且综合路线质量达到该值时，可提前接受当前楼层候选。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology|Soft Route", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float RouteQualityEarlyAcceptThreshold = 0.82f;
+
+	/** 奖励支线从 Gateway 外侧到终点的最短格数；只参与软提示与评价。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology|Reward Branch", meta = (ClampMin = "3", ClampMax = "12"))
+	int32 MinimumRewardBranchLengthTiles = 3;
+
+	/** 奖励支线软提示的偏好长度上限；不是最终地图的硬长度上限。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Topology|Reward Branch", meta = (ClampMin = "3", ClampMax = "12"))
+	int32 MaximumPreferredRewardBranchLengthTiles = 6;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Anchors", meta = (ClampMin = "0.0", Units = "cm"))
 	double AnchorHeightCm = 100.0;
 };
@@ -304,6 +320,18 @@ struct DEMO_API FZeroEscapeDifficultyDefinition
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double MinRequiredRouteCoverageRatio = 0.75;
+
+	/** 每层奖励支线数量的软中心值；容量不足时由普通格占比进一步下调。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0", ClampMax = "12"))
+	int32 PreferredRewardBranchCount = 4;
+
+	/** 奖励支线最多占普通格软目标的比例，用于防止支线反客为主。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0.0", ClampMax = "0.5"))
+	double PreferredRewardBranchCellRatio = 0.30;
+
+	/** 稳定主路线中希望可被其他路线绕过的边比例；0 表示关闭该评价通道。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Route", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double PreferredAlternativeRouteCoverageRatio = 0.40;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Stairs", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double MinAdditionalStairSeparationRatio = 0.25;

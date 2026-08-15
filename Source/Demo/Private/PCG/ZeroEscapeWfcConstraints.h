@@ -29,6 +29,13 @@ namespace ZeroEscape::LevelGeneration
 	 */
 	using FWfcDomain = uint16;
 
+	/** 项目软路线草图对单格四条边的非强制开闭偏好。 */
+	struct FWfcCellOpeningPreference
+	{
+		uint8 PreferredOpenMask = 0;
+		uint8 PreferredClosedMask = 0;
+	};
+
 	/** 当前搜索分支被哪一项非局部约束证明为不可行。 */
 	enum class EWfcConstraintContradiction : uint8
 	{
@@ -70,6 +77,12 @@ namespace ZeroEscape::LevelGeneration
 		 * 它不得参与约束传播或把任何合法 OpeningMask 的权重降为零。
 		 */
 		int32 PreferredMaxConsecutiveStraightTiles = 0;
+
+		/** 与稠密 Cell 下标一一对应；空数组表示关闭软路线开口提示。 */
+		TArray<FWfcCellOpeningPreference> OpeningPreferencesByCell;
+
+		/** 开口匹配信号的 log2 权重强度；所有合法候选仍保持正权重。 */
+		float OpeningPreferenceLog2Strength = 0.0f;
 
 		/**
 		 * Solver 可把某个决策 Cell 赋为 singleton 的最大候选尝试次数。

@@ -153,4 +153,16 @@ namespace ZeroEscape::LevelGeneration
 			TArray<uint8>& OutOpeningMaskByCell,
 			FZeroEscapeGenerationReport& OutReport);
 	};
+
+#if WITH_DEV_AUTOMATION_TESTS
+	namespace Testing
+	{
+		/** 直接复用生产权重映射，验证相反提示仍保留正权重。 */
+		int32 ApplyOpeningPreferenceWeight(
+			uint8 OpeningMask,
+			int32 BaseWeight,
+			const FWfcCellOpeningPreference& Preference,
+			float Log2Strength);
+	}
+#endif
 }

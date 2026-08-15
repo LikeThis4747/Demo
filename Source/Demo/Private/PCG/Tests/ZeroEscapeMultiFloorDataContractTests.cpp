@@ -643,6 +643,62 @@ namespace ZeroEscape::LevelGeneration::Tests
 			FGenerationCore::ComputeCanonicalLayoutHash(DifferentWholeBuildingTotal),
 			BaselineHash);
 
+		FZeroEscapeGeneratedLevelPlan WithRewardBranch = Baseline;
+		for (const FIntVector Coordinate : {
+			FIntVector(2, 3, 0), FIntVector(3, 3, 0), FIntVector(3, 4, 0)})
+		{
+			FZeroEscapeGeneratedOrdinaryCell& Cell =
+				WithRewardBranch.OrdinaryCells.AddDefaulted_GetRef();
+			Cell.Coordinate = Coordinate;
+			Cell.OpeningMask = Grid::DirectionBit(1);
+		}
+		WithRewardBranch.OrdinaryCells.Sort(
+			[](const FZeroEscapeGeneratedOrdinaryCell& A,
+				const FZeroEscapeGeneratedOrdinaryCell& B)
+			{
+				return A.Coordinate.Z != B.Coordinate.Z
+					? A.Coordinate.Z < B.Coordinate.Z
+					: A.Coordinate.Y != B.Coordinate.Y
+						? A.Coordinate.Y < B.Coordinate.Y
+						: A.Coordinate.X < B.Coordinate.X;
+			});
+		FZeroEscapeGeneratedRewardBranch& RewardBranch =
+			WithRewardBranch.RewardBranches.AddDefaulted_GetRef();
+		RewardBranch.GatewayCoordinate = FIntVector(2, 4, 0);
+		RewardBranch.PathCoordinates = {
+			FIntVector(2, 3, 0), FIntVector(3, 3, 0), FIntVector(3, 4, 0)};
+		RewardBranch.EndpointCoordinate = RewardBranch.PathCoordinates.Last();
+		WithRewardBranch.Floors[0].OrdinaryWalkableCellCount = 5;
+		WithRewardBranch.Floors[0].TotalWalkableCellCount = 7;
+		WithRewardBranch.Floors[0].RewardBranchCount = 1;
+		WithRewardBranch.Floors[0].RewardBranchCellRatio = 3.0 / 5.0;
+		const int64 RewardBranchHash =
+			FGenerationCore::ComputeCanonicalLayoutHash(WithRewardBranch);
+		TestTrue(TEXT("合法奖励支线必须进入非零规范 Hash"), RewardBranchHash != 0);
+		TestNotEqual(TEXT("奖励支线必须改变地图身份"),
+			RewardBranchHash, BaselineHash);
+
+		FZeroEscapeGeneratedLevelPlan DifferentAlternativeCoverage = Baseline;
+		DifferentAlternativeCoverage.Floors[0].AlternativeRouteCoverageRatio = 0.25;
+		TestNotEqual(TEXT("替代路线覆盖诊断必须进入 Hash"),
+			FGenerationCore::ComputeCanonicalLayoutHash(DifferentAlternativeCoverage),
+			BaselineHash);
+
+		FZeroEscapeGeneratedLevelPlan DuplicateRewardEndpoint = WithRewardBranch;
+		const FZeroEscapeGeneratedRewardBranch RepeatedRewardBranch =
+			DuplicateRewardEndpoint.RewardBranches[0];
+		DuplicateRewardEndpoint.RewardBranches.Add(RepeatedRewardBranch);
+		TestEqual(TEXT("重复奖励支线端点必须拒绝 Hash"),
+			FGenerationCore::ComputeCanonicalLayoutHash(DuplicateRewardEndpoint),
+			static_cast<int64>(0));
+
+		FZeroEscapeGeneratedLevelPlan FlowAnchorRewardPath = WithRewardBranch;
+		FlowAnchorRewardPath.RewardBranches[0].PathCoordinates[0] =
+			FlowAnchorRewardPath.PlayerSpawnCoordinate;
+		TestEqual(TEXT("奖励支线 Path 与流程锚点冲突必须拒绝 Hash"),
+			FGenerationCore::ComputeCanonicalLayoutHash(FlowAnchorRewardPath),
+			static_cast<int64>(0));
+
 		FZeroEscapeGeneratedLevelPlan InvalidSpawnFloor = Baseline;
 		InvalidSpawnFloor.PlayerSpawnCoordinate.Z = 1;
 		TestEqual(TEXT("玩家不在一楼的 Plan 必须拒绝 Hash"),

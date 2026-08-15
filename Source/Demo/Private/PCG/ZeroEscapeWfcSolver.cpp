@@ -381,6 +381,38 @@ namespace ZeroEscape::LevelGeneration
 			return FMath::CountBits(static_cast<uint32>(Domain));
 		}
 
+		/** 把开闭匹配信号映射到有界正整数权重；只影响候选顺序，不删除状态。 */
+		int32 ApplyOpeningPreferenceMultiplier(
+			const uint8 OpeningMask,
+			const int32 BaseWeight,
+			const FWfcCellOpeningPreference& Preference,
+			const float Log2Strength)
+		{
+			const uint8 RelevantMask = static_cast<uint8>(
+				Preference.PreferredOpenMask | Preference.PreferredClosedMask);
+			const int32 RelevantCount = FMath::CountBits(
+				static_cast<uint32>(RelevantMask));
+			if (RelevantCount == 0 || Log2Strength <= 0.0f)
+			{
+				return FMath::Max(1, BaseWeight);
+			}
+
+			const uint8 ClosedMask = static_cast<uint8>(
+				(~OpeningMask) & Grid::AllOpenEdges);
+			const int32 MatchedCount = FMath::CountBits(static_cast<uint32>(
+				(OpeningMask & Preference.PreferredOpenMask)
+				| (ClosedMask & Preference.PreferredClosedMask)));
+			const int32 MismatchedCount = RelevantCount - MatchedCount;
+			const double Signal = static_cast<double>(MatchedCount - MismatchedCount)
+				/ RelevantCount;
+			const double Multiplier = FMath::Pow(
+				2.0, Signal * static_cast<double>(Log2Strength));
+			const int64 Adjusted = FMath::RoundToInt64(
+				static_cast<double>(FMath::Max(1, BaseWeight)) * Multiplier);
+			return static_cast<int32>(FMath::Clamp<int64>(
+				Adjusted, 1, MAX_int32 / CanonicalVariantCount));
+		}
+
 		/** 只把已经折叠且沿给定轴贯通的邻格计入已形成直线。 */
 		int32 CountCollapsedStraightNeighbors(
 			const FIntPoint GridSize,
@@ -419,34 +451,46 @@ namespace ZeroEscape::LevelGeneration
 			const TArray<FWfcDomain>& Domains,
 			const FZeroEscapeWfcSolveSettings& Settings)
 		{
-			if (Settings.PreferredMaxConsecutiveStraightTiles <= 0)
+			int32 AdjustedWeight = Variant.Weight;
+			if (Settings.PreferredMaxConsecutiveStraightTiles > 0)
 			{
-				return Variant.Weight;
+				const FIntPoint Coordinate(CellIndex % GridSize.X, CellIndex / GridSize.X);
+				const uint8 HorizontalMask = static_cast<uint8>(
+					Grid::DirectionBit(1) | Grid::DirectionBit(3));
+				const uint8 VerticalMask = static_cast<uint8>(
+					Grid::DirectionBit(0) | Grid::DirectionBit(2));
+				const int32 HorizontalRun =
+					(Variant.OpeningMask & HorizontalMask) == HorizontalMask
+					? 1 + CountCollapsedStraightNeighbors(
+						GridSize, Coordinate, FIntPoint(1, 0), HorizontalMask, Domains)
+						+ CountCollapsedStraightNeighbors(
+							GridSize, Coordinate, FIntPoint(-1, 0), HorizontalMask, Domains)
+					: 0;
+				const int32 VerticalRun =
+					(Variant.OpeningMask & VerticalMask) == VerticalMask
+					? 1 + CountCollapsedStraightNeighbors(
+						GridSize, Coordinate, FIntPoint(0, 1), VerticalMask, Domains)
+						+ CountCollapsedStraightNeighbors(
+							GridSize, Coordinate, FIntPoint(0, -1), VerticalMask, Domains)
+					: 0;
+
+				const int32 Excess = FMath::Max(
+					0, FMath::Max(HorizontalRun, VerticalRun)
+						- Settings.PreferredMaxConsecutiveStraightTiles);
+				const int64 Divisor = 1 + static_cast<int64>(Excess) * Excess;
+				AdjustedWeight = FMath::Max(
+					1, static_cast<int32>(Variant.Weight / Divisor));
 			}
 
-			const FIntPoint Coordinate(CellIndex % GridSize.X, CellIndex / GridSize.X);
-			const uint8 HorizontalMask = static_cast<uint8>(
-				ZeroEscape::Grid::DirectionBit(1) | ZeroEscape::Grid::DirectionBit(3));
-			const uint8 VerticalMask = static_cast<uint8>(
-				ZeroEscape::Grid::DirectionBit(0) | ZeroEscape::Grid::DirectionBit(2));
-			const int32 HorizontalRun = (Variant.OpeningMask & HorizontalMask) == HorizontalMask
-				? 1 + CountCollapsedStraightNeighbors(
-					GridSize, Coordinate, FIntPoint(1, 0), HorizontalMask, Domains)
-					+ CountCollapsedStraightNeighbors(
-						GridSize, Coordinate, FIntPoint(-1, 0), HorizontalMask, Domains)
-				: 0;
-			const int32 VerticalRun = (Variant.OpeningMask & VerticalMask) == VerticalMask
-				? 1 + CountCollapsedStraightNeighbors(
-					GridSize, Coordinate, FIntPoint(0, 1), VerticalMask, Domains)
-					+ CountCollapsedStraightNeighbors(
-						GridSize, Coordinate, FIntPoint(0, -1), VerticalMask, Domains)
-				: 0;
-
-			const int32 Excess = FMath::Max(0,
-				FMath::Max(HorizontalRun, VerticalRun)
-					- Settings.PreferredMaxConsecutiveStraightTiles);
-			const int64 Divisor = 1 + static_cast<int64>(Excess) * Excess;
-			return FMath::Max(1, static_cast<int32>(Variant.Weight / Divisor));
+			if (Settings.OpeningPreferencesByCell.IsValidIndex(CellIndex))
+			{
+				AdjustedWeight = ApplyOpeningPreferenceMultiplier(
+					Variant.OpeningMask,
+					AdjustedWeight,
+					Settings.OpeningPreferencesByCell[CellIndex],
+					Settings.OpeningPreferenceLog2Strength);
+			}
+			return AdjustedWeight;
 		}
 
 		/** 计算带权 Shannon 熵；相同熵时由调用方保留较小稠密下标。 */
@@ -1381,4 +1425,16 @@ namespace ZeroEscape::LevelGeneration
 			}
 		}
 	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int32 Testing::ApplyOpeningPreferenceWeight(
+		const uint8 OpeningMask,
+		const int32 BaseWeight,
+		const FWfcCellOpeningPreference& Preference,
+		const float Log2Strength)
+	{
+		return WfcSolverPrivate::ApplyOpeningPreferenceMultiplier(
+			OpeningMask, BaseWeight, Preference, Log2Strength);
+	}
+#endif
 }

@@ -142,6 +142,33 @@ namespace ZeroEscape::LevelGeneration::Tests
 			return Plan;
 		}
 
+		FZeroEscapeGeneratedLevelPlan MakeRewardBranchPlan(
+			const int32 Seed = 840000)
+		{
+			FZeroEscapeGeneratedLevelPlan Plan = MakeLinearPlan(Seed, false);
+			for (FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
+			{
+				if (Cell.Coordinate == FIntVector(3, 0, 0))
+				{
+					Cell.OpeningMask |= North;
+					break;
+				}
+			}
+			Plan.OrdinaryCells.Add(MakeCell(FIntVector(3, 1, 0), South | North));
+			Plan.OrdinaryCells.Add(MakeCell(FIntVector(3, 2, 0), South | North));
+			Plan.OrdinaryCells.Add(MakeCell(FIntVector(3, 3, 0), South));
+
+			FZeroEscapeGeneratedRewardBranch Branch;
+			Branch.GatewayCoordinate = FIntVector(3, 0, 0);
+			Branch.EndpointCoordinate = FIntVector(3, 3, 0);
+			Branch.PathCoordinates = {
+				FIntVector(3, 1, 0),
+				FIntVector(3, 2, 0),
+				FIntVector(3, 3, 0) };
+			Plan.RewardBranches.Add(MoveTemp(Branch));
+			return Plan;
+		}
+
 		FZeroEscapeGeneratedLevelPlan MakeSingleClosedWallPlan()
 		{
 			FZeroEscapeGeneratedLevelPlan Plan;
@@ -257,13 +284,13 @@ namespace ZeroEscape::LevelGeneration::Tests
 			{
 				FZeroEscapePopulationDifficultySettings& Entry = Result.AddDefaulted_GetRef();
 				Entry.Difficulty = Difficulty;
-				Entry.Hazards.ExpectedHazardsPer100GameplayCells = HazardDensity;
+				Entry.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells = HazardDensity;
 				Entry.Hazards.SpikeTrapWeight = 1;
 				Entry.Hazards.BatteringRamWeight = 1;
 				Entry.Hazards.GuidedLauncherWeight = 1;
 				Entry.Hazards.SpikeWheelWeight = 0;
 				Entry.Resources.ExpectedResourcesPer100GameplayCells = ResourceDensity;
-				Entry.Resources.MinimumRouteSpacingTiles = 2;
+				Entry.Resources.CoverageReferenceDistanceTiles = 2;
 			}
 			return Result;
 		}
@@ -299,6 +326,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		{
 			FZeroEscapeResourcePopulationAssembly Result;
 			Result.SpawnZOffsetCm = 50.0f;
+			Result.EnergyOrbSpawnZOffsetCm = 100.0f;
 			Result.PlacementFootprintRadiusCm = 75.0f;
 			return Result;
 		}
@@ -475,6 +503,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestTrue(TEXT("配置失败保持空计划"),
 			Result.HazardPlacements.IsEmpty()
 				&& Result.ResourcePlacements.IsEmpty()
+				&& Result.EnergyOrbPlacements.IsEmpty()
 				&& Result.HazardGroups.IsEmpty());
 
 		FZeroEscapeHazardPopulationAssembly DisabledSpikeHazards = Hazards;
@@ -549,6 +578,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			TestTrue(TEXT("非法玩家速度失败保持原子空计划"),
 				Result.HazardPlacements.IsEmpty()
 					&& Result.ResourcePlacements.IsEmpty()
+					&& Result.EnergyOrbPlacements.IsEmpty()
 					&& Result.HazardGroups.IsEmpty());
 		}
 		return true;
@@ -573,7 +603,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Hazards.PlacementScoring.MaximumRecentKindPenalty = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
-			MakeDifficulties(2.5f, 0.0f);
+			MakeDifficulties(1.25f, 0.0f);
 		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
 		{
 			Difficulty.Hazards.SpikeTrapWeight = 1;
@@ -714,6 +744,109 @@ namespace ZeroEscape::LevelGeneration::Tests
 	}
 
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapePopulationEnergyOrbPlanningTest,
+		"Demo.PCG.Population.EnergyOrbPlanning",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapePopulationEnergyOrbPlanningTest::RunTest(
+		const FString& Parameters)
+	{
+		(void)Parameters;
+		FZeroEscapeGeneratedLevelPlan Plan = MakeRewardBranchPlan();
+		const FIntVector Endpoint = Plan.RewardBranches[0].EndpointCoordinate;
+		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
+		const TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
+			MakeDifficulties(20.0f, 40.0f);
+
+		FPopulationPlacementPlan First;
+		FPopulationPlacementPlan Replay;
+		FString Error;
+		TestTrue(TEXT("奖励支线光团规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, First, Error)
+				== EPopulationPlacementResult::Success);
+		TestTrue(TEXT("奖励支线光团同 Seed 重放成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, Replay, Error)
+				== EPopulationPlacementResult::Success);
+		TestEqual(TEXT("每条奖励支线恰好一个光团"),
+			First.EnergyOrbPlacements.Num(), Plan.RewardBranches.Num());
+		TestEqual(TEXT("光团独立计数与数组一致"),
+			First.KindCounts.EnergyOrbs, First.EnergyOrbPlacements.Num());
+		TestEqual(TEXT("普通资源统计不混入光团"),
+			First.ResourceStats.ActualCount, First.ResourcePlacements.Num());
+		TestTrue(TEXT("光团同 Seed 完全复现"),
+			PlacementsEqual(First.EnergyOrbPlacements, Replay.EnergyOrbPlacements));
+
+		if (First.EnergyOrbPlacements.Num() == 1)
+		{
+			const FPopulationPlannedPlacement& Orb = First.EnergyOrbPlacements[0];
+			TestTrue(TEXT("光团使用独立放置类型"),
+				Orb.Kind == EPopulationPlacementKind::EnergyOrb);
+			TestTrue(TEXT("光团锚定奖励支线端点"), Orb.AnchorAddress == Endpoint);
+			TestEqual(TEXT("光团只有一个 Actor Transform"),
+				Orb.LocalSpawnTransforms.Num(), 1);
+			TestTrue(TEXT("光团占用记录只包含自身端点"),
+				Orb.ResourceBlockedAddresses.Num() == 1
+					&& Orb.ResourceBlockedAddresses[0] == Endpoint);
+			if (Orb.LocalSpawnTransforms.Num() == 1)
+			{
+				const FVector ExpectedLocation(
+					Endpoint.X * Plan.LogicalTileSizeCm,
+					Endpoint.Y * Plan.LogicalTileSizeCm,
+					Resources.EnergyOrbSpawnZOffsetCm);
+				TestTrue(TEXT("光团位置由端点与配置高度确定"),
+					Orb.LocalSpawnTransforms[0].GetLocation().Equals(
+						ExpectedLocation, KINDA_SMALL_NUMBER));
+			}
+		}
+		for (const FPopulationPlannedPlacement& Hazard : First.HazardPlacements)
+		{
+			TestFalse(TEXT("机关不得占用光团端点"),
+				Hazard.ResourceBlockedAddresses.Contains(Endpoint));
+		}
+		for (const FPopulationPlannedPlacement& Resource : First.ResourcePlacements)
+		{
+			TestTrue(TEXT("普通资源不得占用光团端点"),
+				Resource.AnchorAddress != Endpoint);
+		}
+
+		Resources.EnergyOrbSpawnZOffsetCm = 180.0f;
+		FPopulationPlacementPlan HeightChanged;
+		TestTrue(TEXT("只修改光团高度仍规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, HeightChanged, Error)
+				== EPopulationPlacementResult::Success);
+		TestTrue(TEXT("光团配置不洗牌机关"),
+			PlacementsEqual(First.HazardPlacements, HeightChanged.HazardPlacements));
+		TestTrue(TEXT("光团配置不洗牌普通资源"),
+			PlacementsEqual(First.ResourcePlacements, HeightChanged.ResourcePlacements));
+		TestFalse(TEXT("光团高度配置实际改变光团 Transform"),
+			PlacementsEqual(
+				First.EnergyOrbPlacements, HeightChanged.EnergyOrbPlacements));
+
+		FZeroEscapeGeneratedLevelPlan InvalidEndpoint = Plan;
+		InvalidEndpoint.RewardBranches[0].EndpointCoordinate =
+			InvalidEndpoint.PlayerSpawnCoordinate;
+		FPopulationPlacementPlan InvalidResult;
+		TestTrue(TEXT("流程锚点不能成为光团端点"),
+			FPopulationPlacementPolicy::BuildPlan(
+				InvalidEndpoint, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, InvalidResult, Error)
+				== EPopulationPlacementResult::InvalidPlan);
+		TestTrue(TEXT("非法光团端点保持原子空计划"),
+			InvalidResult.HazardPlacements.IsEmpty()
+				&& InvalidResult.ResourcePlacements.IsEmpty()
+				&& InvalidResult.EnergyOrbPlacements.IsEmpty()
+				&& InvalidResult.HazardGroups.IsEmpty());
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FZeroEscapePopulationResourceSupportBiasTest,
 		"Demo.PCG.Population.ResourceSupportBias",
 		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -736,7 +869,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Difficulty.Hazards.BatteringRamWeight = 3;
 			Difficulty.Hazards.GuidedLauncherWeight = 3;
 			Difficulty.Hazards.SpikeWheelWeight = 2;
-			Difficulty.Resources.MinimumRouteSpacingTiles = 1;
+			Difficulty.Resources.CoverageReferenceDistanceTiles = 1;
 		}
 
 		int32 BaselineSafeApproachHits = 0;
@@ -846,7 +979,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 			Difficulty.Hazards.BatteringRamWeight = 3;
 			Difficulty.Hazards.GuidedLauncherWeight = 3;
 			Difficulty.Hazards.SpikeWheelWeight = 2;
-			Difficulty.Resources.MinimumRouteSpacingTiles = 3;
+			Difficulty.Resources.CoverageReferenceDistanceTiles = 3;
 		}
 
 		constexpr int32 SeedCount = 512;
@@ -934,7 +1067,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
 			MakeDifficulties(0.0f, 40.0f);
-		Difficulties[1].Resources.MinimumRouteSpacingTiles = 3;
+		Difficulties[1].Resources.CoverageReferenceDistanceTiles = 3;
 		FPopulationPlacementPlan Result;
 		FString Error;
 		TestTrue(TEXT("跨层图距离等于半径时放满"),
@@ -952,14 +1085,18 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestTrue(TEXT("低层锚点被选中"), Anchors.Contains(FIntVector(0, 1, 0)));
 		TestTrue(TEXT("高层锚点被选中"), Anchors.Contains(FIntVector(0, 1, 1)));
 
-		Difficulties[1].Resources.MinimumRouteSpacingTiles = 4;
+		Difficulties[1].Resources.CoverageReferenceDistanceTiles = 4;
 		TestTrue(TEXT("跨层半径 4 的欠填仍成功"),
 			FPopulationPlacementPolicy::BuildPlan(
 				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
 				Hazards, Resources, Difficulties, Result, Error)
 				== EPopulationPlacementResult::Success);
-		TestEqual(TEXT("跨层半径 4 只保留一个"), Result.ResourceStats.ActualCount, 1);
-		TestEqual(TEXT("跨层半径 4 精确欠填一个"), Result.ResourceStats.UnderfilledCount, 1);
+		TestEqual(TEXT("资源覆盖参考距离不得减少合法资源数量"),
+			Result.ResourceStats.ActualCount, 2);
+		TestEqual(TEXT("资源相邻不再产生硬间距欠填"),
+			Result.ResourceStats.UnderfilledCount, 0);
+		TestEqual(TEXT("资源层不再记录硬间距拒绝"),
+			Result.ResourceStats.SpacingRejectedCount, 0);
 		return true;
 	}
 
@@ -979,7 +1116,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Hazards.PlacementScoring.TypeContextStrength = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
-			MakeDifficulties(6.25f, 0.0f);
+			MakeDifficulties(4.375f, 0.0f);
 		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
 		{
 			Difficulty.Hazards.SpikeTrapWeight = 1;
@@ -1036,7 +1173,9 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Hazards.PlacementScoring.ProgressLog2Strength = 0.0f;
 		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
 		Hazards.PlacementScoring.MaximumRecentKindPenalty = 0.0f;
-		Hazards.PlacementScoring.LauncherCombinationLog2Bonus = 1.5f;
+		Hazards.PlacementScoring.LauncherCombinationDistanceOneLog2Bonus = 0.25f;
+		Hazards.PlacementScoring.LauncherCombinationDistanceTwoLog2Bonus = 1.0f;
+		Hazards.PlacementScoring.LauncherCombinationDistanceThreePlusLog2Bonus = 1.75f;
 		Hazards.PlacementScoring.LauncherCombinationPressureBonus = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
@@ -1125,15 +1264,20 @@ namespace ZeroEscape::LevelGeneration::Tests
 					const int32 Distance = FMath::Abs(
 						PathIndex(Placement.AnchorAddress)
 							- PathIndex(Previous.AnchorAddress));
-					if (Distance > 1
+					if (Distance >= 1
 						&& Distance <= Hazards.PlacementScoring.GroupRadiusTiles)
 					{
-						const float Signal = static_cast<float>(Distance - 1)
-							/ (Hazards.PlacementScoring.GroupRadiusTiles - 1);
+						const float DistanceBonus = Distance == 1
+							? Hazards.PlacementScoring
+								.LauncherCombinationDistanceOneLog2Bonus
+							: Distance == 2
+								? Hazards.PlacementScoring
+									.LauncherCombinationDistanceTwoLog2Bonus
+								: Hazards.PlacementScoring
+									.LauncherCombinationDistanceThreePlusLog2Bonus;
 						ExpectedCombination = FMath::Max(
 							ExpectedCombination,
-							Hazards.PlacementScoring.LauncherCombinationLog2Bonus
-								* Signal);
+							DistanceBonus);
 					}
 				}
 				TestTrue(TEXT("发射器组合分只按 2-3 格软距离曲线计算"),
@@ -1184,7 +1328,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
-			MakeDifficulties(2.5f, 0.0f);
+			MakeDifficulties(1.25f, 0.0f);
 		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
 		{
 			Difficulty.Hazards.SpikeTrapWeight = 0;
@@ -1302,11 +1446,12 @@ namespace ZeroEscape::LevelGeneration::Tests
 					*Error));
 				return false;
 			}
-			if (Result.HazardStats.TargetCount != 8
-				|| Result.HazardStats.ActualCount != 8)
+			if (Result.HazardStats.TargetBudgetTenths != 80
+				|| Result.HazardStats.ActualBudgetTenths < 80
+				|| Result.HazardStats.UnderfilledBudgetTenths != 0)
 			{
 				AddError(FString::Printf(
-					TEXT("组合频率夹具 Seed=%d 未稳定生成 8 个机关。"),
+					TEXT("组合频率夹具 Seed=%d 未稳定满足 8.0 标准机关预算。"),
 					Plan.Signature.Seed));
 				return false;
 			}
@@ -1521,7 +1666,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties = MakeDifficulties(0.0f, 100.0f);
-		Difficulties[1].Resources.MinimumRouteSpacingTiles = 20;
+		Difficulties[1].Resources.CoverageReferenceDistanceTiles = 20;
 		FPopulationPlacementPlan Result;
 		FString Error;
 		TestTrue(TEXT("候选不足仍是成功结果"),
@@ -1551,7 +1696,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		}
 
 		Difficulties = MakeDifficulties(0.0f, 50.0f);
-		Difficulties[1].Resources.MinimumRouteSpacingTiles = 2;
+		Difficulties[1].Resources.CoverageReferenceDistanceTiles = 2;
 		FPopulationPlacementPlan Jittered;
 		TestTrue(TEXT("多资源格内随机规划成功"),
 			FPopulationPlacementPolicy::BuildPlan(
@@ -1655,6 +1800,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestTrue(TEXT("畸形高厅失败保持空计划"),
 			Result.HazardPlacements.IsEmpty()
 				&& Result.ResourcePlacements.IsEmpty()
+				&& Result.EnergyOrbPlacements.IsEmpty()
 				&& Result.HazardGroups.IsEmpty());
 		return true;
 	}

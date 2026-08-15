@@ -308,6 +308,58 @@ namespace ZeroEscape::LevelGeneration::Tests
 		return true;
 	}
 
+	/** 验证软路线提示只改变正权重，并锁定方向感知代价对长直和锯齿的排序。 */
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapeWfcRouteOpeningPreferenceTest,
+		"Demo.PCG.WFC.RouteOpeningPreference",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapeWfcRouteOpeningPreferenceTest::RunTest(const FString& Parameters)
+	{
+		using namespace WfcLayoutTestsPrivate;
+		(void)Parameters;
+		FWfcCellOpeningPreference Preference;
+		Preference.PreferredOpenMask = Grid::DirectionBit(1);
+		Preference.PreferredClosedMask = Grid::DirectionBit(3);
+		const int32 PerfectWeight = Testing::ApplyOpeningPreferenceWeight(
+			Grid::DirectionBit(1), 100, Preference, 1.5f);
+		const int32 NeutralWeight = Testing::ApplyOpeningPreferenceWeight(
+			static_cast<uint8>(Grid::DirectionBit(1) | Grid::DirectionBit(3)),
+			100, Preference, 1.5f);
+		const int32 OppositeWeight = Testing::ApplyOpeningPreferenceWeight(
+			Grid::DirectionBit(3), 100, Preference, 1.5f);
+		TestTrue(TEXT("完全匹配、半匹配和完全相反必须保持严格权重顺序"),
+			PerfectWeight > NeutralWeight && NeutralWeight > OppositeWeight);
+		TestTrue(TEXT("完全相反的合法 OpeningMask 仍必须保留正权重"),
+			OppositeWeight > 0);
+
+		TArray<uint8> FiveStraight;
+		FiveStraight.Init(1, 5);
+		TArray<uint8> EightStraight;
+		EightStraight.Init(1, 8);
+		const TArray<uint8> Sawtooth = {1, 0, 1, 0};
+		const TArray<uint8> ReadableTurns = {1, 1, 0, 0};
+		TestTrue(TEXT("8 格直线必须严格比 5 格直线昂贵"),
+			Testing::MeasurePreferredPathDirectionCost(EightStraight, 4)
+				> Testing::MeasurePreferredPathDirectionCost(FiveStraight, 4));
+		TestTrue(TEXT("每格转向的锯齿必须比两格一转的路线昂贵"),
+			Testing::MeasurePreferredPathDirectionCost(Sawtooth, 4)
+				> Testing::MeasurePreferredPathDirectionCost(ReadableTurns, 4));
+
+		FZeroEscapeWfcSolveSettings Settings = MakeWfcSettings(
+			FIntPoint(0, 0), 1, 4, 2);
+		Settings.OpeningPreferenceLog2Strength = 1.5f;
+		Settings.OpeningPreferencesByCell.Init(FWfcCellOpeningPreference(), 4);
+		FString Error;
+		TestTrue(TEXT("合法稠密软提示必须通过设置校验"),
+			FWfcConstraints::ValidateSolveSettings(FIntPoint(2, 2), Settings, Error));
+		Settings.OpeningPreferencesByCell[0].PreferredOpenMask = Grid::DirectionBit(0);
+		Settings.OpeningPreferencesByCell[0].PreferredClosedMask = Grid::DirectionBit(0);
+		TestFalse(TEXT("同一 bit 同时偏好开关必须拒绝为配置错误"),
+			FWfcConstraints::ValidateSolveSettings(FIntPoint(2, 2), Settings, Error));
+		return true;
+	}
+
 	/** 直接验证 Count、MaxConsecutive 与 Connected 的矛盾证明和稳定 Ban 输出。 */
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FZeroEscapeGlobalWfcConstraintContractsTest,
@@ -786,6 +838,10 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Input.PreferredOrdinaryWalkableCellCount = 20;
 		Input.PreferredMaxConsecutiveStraightTiles = 4;
 		Input.PreferredRouteCoverageRatio = 0.75;
+		Input.RouteOpeningPreferenceLog2Strength = 1.5f;
+		Input.MinimumRewardBranchLengthTiles = 3;
+		Input.MaximumPreferredRewardBranchLengthTiles = 6;
+		Input.PreferredRewardBranchCount = 2;
 
 		FZeroEscapeSharedWfcBudget FirstBudget;
 		FZeroEscapeSharedWfcBudget ReplayBudget;
@@ -808,6 +864,21 @@ namespace ZeroEscape::LevelGeneration::Tests
 			First.RequiredRouteLengthTiles > 0);
 		TestEqual(TEXT("兜底不得伪造 WFC 搜索树消耗"),
 			FirstReport.Metrics.WfcSolveAttemptCount, 0);
+
+		FZeroEscapeConstrainedFloorInput ChangedAttemptLimit = Input;
+		ChangedAttemptLimit.MaxSolveAttemptsForThisFloor = 1;
+		FZeroEscapeSharedWfcBudget ChangedBudget;
+		FZeroEscapeConstrainedFloorResult ChangedResult;
+		FZeroEscapeGenerationReport ChangedReport;
+		TestTrue(TEXT("调整真实 WFC 树上限后零预算兜底仍必须成功"),
+			FGridLayoutSolver::SolveConstrainedFloor(
+				ChangedAttemptLimit,
+				Weights,
+				ChangedBudget,
+				ChangedResult,
+				ChangedReport));
+		TestEqual(TEXT("独立兜底 salt 不得随真实 WFC 树上限改变布局"),
+			First.OpeningMaskByCell, ChangedResult.OpeningMaskByCell);
 		return true;
 	}
 }

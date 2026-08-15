@@ -88,6 +88,37 @@ namespace ZeroEscape::LevelGeneration
 				: CoordinateLess(A.SecondCoordinate, B.SecondCoordinate);
 		}
 
+		bool RewardBranchLess(
+			const FZeroEscapeGeneratedRewardBranch& A,
+			const FZeroEscapeGeneratedRewardBranch& B)
+		{
+			if (A.EndpointCoordinate != B.EndpointCoordinate)
+			{
+				return CoordinateLess(A.EndpointCoordinate, B.EndpointCoordinate);
+			}
+			if (A.GatewayCoordinate != B.GatewayCoordinate)
+			{
+				return CoordinateLess(A.GatewayCoordinate, B.GatewayCoordinate);
+			}
+			const int32 CommonCount = FMath::Min(
+				A.PathCoordinates.Num(), B.PathCoordinates.Num());
+			for (int32 Index = 0; Index < CommonCount; ++Index)
+			{
+				if (A.PathCoordinates[Index] != B.PathCoordinates[Index])
+				{
+					return CoordinateLess(
+						A.PathCoordinates[Index], B.PathCoordinates[Index]);
+				}
+			}
+			return A.PathCoordinates.Num() < B.PathCoordinates.Num();
+		}
+
+		bool ArePlanarNeighbors(const FIntVector A, const FIntVector B)
+		{
+			return A.Z == B.Z
+				&& FMath::Abs(A.X - B.X) + FMath::Abs(A.Y - B.Y) == 1;
+		}
+
 		bool HashCoordinateArray(
 			uint64& Hash,
 			const TArray<FIntVector>& Coordinates,
@@ -311,6 +342,7 @@ namespace ZeroEscape::LevelGeneration
 		HashUInt64(Hash, Plan.VerticalTransitionCountOnShortestRoute);
 
 		HashUInt64(Hash, Plan.OrdinaryCells.Num());
+		TSet<FIntVector> OrdinaryCoordinates;
 		FIntVector PreviousOrdinaryCoordinate = FIntVector::ZeroValue;
 		bool bHasPreviousOrdinaryCoordinate = false;
 		for (const FZeroEscapeGeneratedOrdinaryCell& Cell : Plan.OrdinaryCells)
@@ -326,6 +358,7 @@ namespace ZeroEscape::LevelGeneration
 			}
 			HashCoordinate(Hash, Cell.Coordinate);
 			HashUInt64(Hash, Cell.OpeningMask);
+			OrdinaryCoordinates.Add(Cell.Coordinate);
 			PreviousOrdinaryCoordinate = Cell.Coordinate;
 			bHasPreviousOrdinaryCoordinate = true;
 		}
@@ -442,6 +475,68 @@ namespace ZeroEscape::LevelGeneration
 			return 0;
 		}
 
+		HashUInt64(Hash, Plan.RewardBranches.Num());
+		TArray<int32> RewardBranchCountByFloor;
+		RewardBranchCountByFloor.Init(0, Plan.FloorCount);
+		TArray<int32> RewardBranchCellCountByFloor;
+		RewardBranchCellCountByFloor.Init(0, Plan.FloorCount);
+		FZeroEscapeGeneratedRewardBranch PreviousRewardBranch;
+		bool bHasPreviousRewardBranch = false;
+		TSet<FIntVector> RewardBranchEndpoints;
+		for (const FZeroEscapeGeneratedRewardBranch& Branch : Plan.RewardBranches)
+		{
+			if (!IsInsideBuilding(
+					Branch.GatewayCoordinate, Plan.GridSize, Plan.FloorCount)
+				|| !IsInsideBuilding(
+					Branch.EndpointCoordinate, Plan.GridSize, Plan.FloorCount)
+				|| Branch.PathCoordinates.Num() < 3
+				|| Branch.EndpointCoordinate != Branch.PathCoordinates.Last()
+				|| Branch.GatewayCoordinate.Z != Branch.EndpointCoordinate.Z
+				|| Branch.EndpointCoordinate == Plan.PlayerSpawnCoordinate
+				|| Branch.EndpointCoordinate == Plan.PursuerSpawnCoordinate
+				|| Branch.EndpointCoordinate == Plan.ExitCoordinate
+				|| RewardBranchEndpoints.Contains(Branch.EndpointCoordinate)
+				|| (bHasPreviousRewardBranch
+					&& !GenerationCorePrivate::RewardBranchLess(
+						PreviousRewardBranch, Branch)))
+			{
+				return 0;
+			}
+			TSet<FIntVector> SeenPathCoordinates;
+			FIntVector PreviousPathCoordinate = Branch.GatewayCoordinate;
+			for (const FIntVector Coordinate : Branch.PathCoordinates)
+			{
+				if (!IsInsideBuilding(Coordinate, Plan.GridSize, Plan.FloorCount)
+					|| Coordinate.Z != Branch.EndpointCoordinate.Z
+					|| !OrdinaryCoordinates.Contains(Coordinate)
+					|| Coordinate == Branch.GatewayCoordinate
+					|| SeenPathCoordinates.Contains(Coordinate)
+					|| !GenerationCorePrivate::ArePlanarNeighbors(
+						PreviousPathCoordinate, Coordinate)
+					|| Coordinate == Plan.PlayerSpawnCoordinate
+					|| Coordinate == Plan.PursuerSpawnCoordinate
+					|| Coordinate == Plan.ExitCoordinate)
+				{
+					return 0;
+				}
+				SeenPathCoordinates.Add(Coordinate);
+				PreviousPathCoordinate = Coordinate;
+			}
+			HashCoordinate(Hash, Branch.GatewayCoordinate);
+			HashCoordinate(Hash, Branch.EndpointCoordinate);
+			HashUInt64(Hash, Branch.PathCoordinates.Num());
+			for (const FIntVector Coordinate : Branch.PathCoordinates)
+			{
+				HashCoordinate(Hash, Coordinate);
+			}
+			RewardBranchEndpoints.Add(Branch.EndpointCoordinate);
+			++RewardBranchCountByFloor[Branch.EndpointCoordinate.Z];
+			RewardBranchCellCountByFloor[Branch.EndpointCoordinate.Z] +=
+				Branch.PathCoordinates.Num();
+			PreviousRewardBranch = Branch;
+			bHasPreviousRewardBranch = true;
+		}
+
 		HashUInt64(Hash, Plan.RequiredTwoFloorStairStableIdByLowerFloor.Num());
 		TSet<int32> RequiredStairIds;
 		for (int32 LowerFloor = 0;
@@ -484,12 +579,35 @@ namespace ZeroEscape::LevelGeneration
 				|| !FMath::IsFinite(Floor.RouteCoverageRatio)
 				|| Floor.RouteCoverageRatio < 0.0
 				|| Floor.RouteCoverageRatio > 1.0
+				|| Floor.RewardBranchCount < 0
+				|| Floor.RewardBranchCount
+					!= RewardBranchCountByFloor[FloorIndex]
+				|| Floor.OneCellTerminalSpurCount < 0
+				|| !FMath::IsFinite(Floor.RewardBranchCellRatio)
+				|| Floor.RewardBranchCellRatio < 0.0
+				|| Floor.RewardBranchCellRatio > 1.0
+				|| !FMath::IsFinite(Floor.AlternativeRouteCoverageRatio)
+				|| Floor.AlternativeRouteCoverageRatio < 0.0
+				|| Floor.AlternativeRouteCoverageRatio > 1.0
 				|| Floor.JunctionMetrics.DeadEndCount < 0
 				|| Floor.JunctionMetrics.StraightCount < 0
 				|| Floor.JunctionMetrics.CornerCount < 0
 				|| Floor.JunctionMetrics.TJunctionCount < 0
 				|| Floor.JunctionMetrics.CrossJunctionCount < 0
+				|| Floor.RewardBranchCount > Floor.JunctionMetrics.DeadEndCount
+				|| Floor.OneCellTerminalSpurCount
+					> Floor.JunctionMetrics.DeadEndCount
 				|| Floor.CycleRank < 0)
+			{
+				return 0;
+			}
+			const double ExpectedRewardBranchRatio =
+				static_cast<double>(RewardBranchCellCountByFloor[FloorIndex])
+					/ Floor.OrdinaryWalkableCellCount;
+			if (!FMath::IsNearlyEqual(
+					Floor.RewardBranchCellRatio,
+					ExpectedRewardBranchRatio,
+					UE_DOUBLE_SMALL_NUMBER))
 			{
 				return 0;
 			}
@@ -502,6 +620,10 @@ namespace ZeroEscape::LevelGeneration
 			HashUInt64(Hash, Floor.FarthestRouteLengthTiles);
 			HashDouble(Hash, Floor.SpatialSeparationRatio);
 			HashDouble(Hash, Floor.RouteCoverageRatio);
+			HashUInt64(Hash, Floor.RewardBranchCount);
+			HashUInt64(Hash, Floor.OneCellTerminalSpurCount);
+			HashDouble(Hash, Floor.RewardBranchCellRatio);
+			HashDouble(Hash, Floor.AlternativeRouteCoverageRatio);
 			HashUInt64(Hash, Floor.JunctionMetrics.DeadEndCount);
 			HashUInt64(Hash, Floor.JunctionMetrics.StraightCount);
 			HashUInt64(Hash, Floor.JunctionMetrics.CornerCount);

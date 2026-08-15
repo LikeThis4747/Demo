@@ -298,6 +298,25 @@ struct DEMO_API FZeroEscapeJunctionMetrics
 	int32 CrossJunctionCount = 0;
 };
 
+/** 项目内部识别的奖励支线；只保存纯值地址，不包含 Actor 或资源引用。 */
+USTRUCT(BlueprintType)
+struct DEMO_API FZeroEscapeGeneratedRewardBranch
+{
+	GENERATED_BODY()
+
+	/** 支线与本层稳定 Enter->Leave 主路线汇合的格。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector GatewayCoordinate = FIntVector::ZeroValue;
+
+	/** 支线最深处的普通死路格；后续能量光团以此为锚点。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	FIntVector EndpointCoordinate = FIntVector::ZeroValue;
+
+	/** 不含 Gateway、包含 Endpoint，顺序从 Gateway 外侧走向 Endpoint。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FIntVector> PathCoordinates;
+};
+
 /** 每层保证通关的进入点、离开点和验收结果。 */
 USTRUCT(BlueprintType)
 struct DEMO_API FZeroEscapeGeneratedFloorSummary
@@ -330,6 +349,22 @@ struct DEMO_API FZeroEscapeGeneratedFloorSummary
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	double RouteCoverageRatio = 0.0;
+
+	/** 玩家/追猎者/Exit 冲突过滤后，真正进入 Plan 的奖励支线数量。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 RewardBranchCount = 0;
+
+	/** 挂在真实岔路口旁、只有一条边的终止凸起数量。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	int32 OneCellTerminalSpurCount = 0;
+
+	/** 最终奖励支线 Path 格数占本层普通可走格的比例。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	double RewardBranchCellRatio = 0.0;
+
+	/** 稳定主路线中，移除该边后仍可绕行的边比例。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	double AlternativeRouteCoverageRatio = 0.0;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	FZeroEscapeJunctionMetrics JunctionMetrics;
@@ -372,6 +407,10 @@ struct DEMO_API FZeroEscapeGeneratedLevelPlan
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	TArray<FZeroEscapeGeneratedStructure> Structures;
+
+	/** 最终通过流程锚点冲突过滤的奖励支线，按 Endpoint Z/Y/X 稳定排序。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
+	TArray<FZeroEscapeGeneratedRewardBranch> RewardBranches;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Generated")
 	FIntVector PlayerSpawnCoordinate = FIntVector::ZeroValue;

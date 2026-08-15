@@ -8,8 +8,10 @@
 
 #include "PCG/ZeroEscapeGridLayoutSolver.h"
 
+#include "Algo/Reverse.h"
 #include "Containers/ArrayView.h"
 #include "Containers/Queue.h"
+#include "Containers/Set.h"
 #include "Containers/StaticArray.h"
 
 #include "PCG/ZeroEscapeGenerationCore.h"
@@ -73,6 +75,420 @@ namespace ZeroEscape::LevelGeneration
 			return static_cast<int32>(Mixed);
 		}
 
+		int32 MakeFloorFallbackSalt(
+			const int32 WholeLayoutAttemptIndex,
+			const int32 FloorIndex)
+		{
+			uint32 Mixed = 0xF411BA6Bu;
+			Mixed ^= static_cast<uint32>(WholeLayoutAttemptIndex) * 0x9E3779B9u;
+			Mixed ^= static_cast<uint32>(FloorIndex) * 0x85EBCA6Bu;
+			Mixed ^= Mixed >> 16;
+			Mixed *= 0x7FEB352Du;
+			return static_cast<int32>(Mixed ^ (Mixed >> 15));
+		}
+
+		uint32 MakePreferenceTie(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const int32 First,
+			const int32 Second)
+		{
+			uint32 Mixed = static_cast<uint32>(Input.Signature.Seed) ^ 0x51A7E23Du;
+			Mixed ^= static_cast<uint32>(Input.FloorIndex) * 0x9E3779B9u;
+			Mixed ^= static_cast<uint32>(First) * 0x85EBCA6Bu;
+			Mixed ^= static_cast<uint32>(Second) * 0xC2B2AE35u;
+			Mixed ^= Mixed >> 16;
+			Mixed *= 0x7FEB352Du;
+			return Mixed ^ (Mixed >> 15);
+		}
+
+		bool IsAllowedPreferenceEdge(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const int32 FromIndex,
+			const uint8 Direction,
+			int32& OutNeighborIndex)
+		{
+			const FGridCellConstraint& From = Input.Constraints[FromIndex];
+			const FIntPoint Neighbor = Grid::Step(From.Coordinate, Direction);
+			if (From.Domain == EGridCellDomain::Outside
+				|| !Grid::IsInside(Neighbor, Input.GridSize))
+			{
+				return false;
+			}
+			OutNeighborIndex = Grid::ToIndex(Neighbor, Input.GridSize);
+			const FGridCellConstraint& To = Input.Constraints[OutNeighborIndex];
+			return To.Domain != EGridCellDomain::Outside
+				&& (From.RequiredClosedMask & Grid::DirectionBit(Direction)) == 0
+				&& (To.RequiredClosedMask & Grid::DirectionBit(
+					Grid::OppositeDirectionIndex(Direction))) == 0;
+		}
+
+		int32 CalculatePreferredPathStepCost(
+			const int32 PreferredStraightTiles,
+			const int32 MaxTrackedStraightRun,
+			const uint8 IncomingDirection,
+			const uint8 StraightRunLength,
+			const uint8 NextDirection,
+			uint8& OutStraightRunLength)
+		{
+			int32 Cost = 100;
+			OutStraightRunLength = 1;
+			if (IncomingDirection >= Grid::DirectionCount)
+			{
+				return Cost;
+			}
+			if (IncomingDirection == NextDirection)
+			{
+				OutStraightRunLength = static_cast<uint8>(FMath::Min(
+					MaxTrackedStraightRun, static_cast<int32>(StraightRunLength) + 1));
+				const int32 Excess = FMath::Max(
+					0, static_cast<int32>(OutStraightRunLength) - PreferredStraightTiles);
+				return Cost + 80 * Excess * Excess;
+			}
+			if (StraightRunLength == 1)
+			{
+				Cost += 150;
+			}
+			else if (StraightRunLength >= 2 && StraightRunLength <= 4)
+			{
+				Cost -= 15;
+			}
+			return Cost;
+		}
+
+		struct FPreferredPathHeapEntry
+		{
+			int64 Cost = MAX_int64;
+			uint32 Tie = MAX_uint32;
+			int32 StateIndex = INDEX_NONE;
+		};
+
+		struct FPreferredPathHeapPredicate
+		{
+			bool operator()(
+				const FPreferredPathHeapEntry& A,
+				const FPreferredPathHeapEntry& B) const
+			{
+				return A.Cost != B.Cost ? A.Cost > B.Cost : A.Tie > B.Tie;
+			}
+		};
+
+		bool FindDirectionAwarePreferredPath(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			TArray<int32>& OutPath)
+		{
+			OutPath.Reset();
+			constexpr uint8 NoDirection = Grid::DirectionCount;
+			const int32 MaxRun = FMath::Clamp(
+				Input.PreferredMaxConsecutiveStraightTiles + 8,
+				1,
+				FMath::Max(Input.GridSize.X, Input.GridSize.Y));
+			const int32 RunStride = MaxRun + 1;
+			const int32 CellStride = 5 * RunStride;
+			const int32 StateCount = Input.Constraints.Num() * CellStride;
+			const auto Encode = [RunStride, CellStride](
+				const int32 Cell, const uint8 Direction, const uint8 Run)
+			{
+				return Cell * CellStride + Direction * RunStride + Run;
+			};
+			const int32 StartCell = Grid::ToIndex(
+				Input.RequiredEnterCoordinate, Input.GridSize);
+			const int32 GoalCell = Grid::ToIndex(
+				Input.RequiredLeaveCoordinate, Input.GridSize);
+			const int32 StartState = Encode(StartCell, NoDirection, 0);
+			TArray<int64> BestCost;
+			BestCost.Init(MAX_int64, StateCount);
+			TArray<uint32> BestTie;
+			BestTie.Init(MAX_uint32, StateCount);
+			TArray<int32> Parent;
+			Parent.Init(INDEX_NONE, StateCount);
+			TArray<FPreferredPathHeapEntry> Heap;
+			BestCost[StartState] = 0;
+			BestTie[StartState] = 0;
+			Heap.HeapPush({0, 0, StartState}, FPreferredPathHeapPredicate());
+			int32 GoalState = INDEX_NONE;
+			while (!Heap.IsEmpty())
+			{
+				FPreferredPathHeapEntry Current;
+				Heap.HeapPop(Current, FPreferredPathHeapPredicate(), EAllowShrinking::No);
+				if (Current.Cost != BestCost[Current.StateIndex]
+					|| Current.Tie != BestTie[Current.StateIndex])
+				{
+					continue;
+				}
+				const int32 Cell = Current.StateIndex / CellStride;
+				const int32 LocalState = Current.StateIndex % CellStride;
+				const uint8 Incoming = static_cast<uint8>(LocalState / RunStride);
+				const uint8 Run = static_cast<uint8>(LocalState % RunStride);
+				if (Cell == GoalCell)
+				{
+					GoalState = Current.StateIndex;
+					break;
+				}
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					int32 Neighbor = INDEX_NONE;
+					if (!IsAllowedPreferenceEdge(Input, Cell, Direction, Neighbor))
+					{
+						continue;
+					}
+					uint8 NextRun = 1;
+					const int64 NextCost = Current.Cost + CalculatePreferredPathStepCost(
+						FMath::Max(1, Input.PreferredMaxConsecutiveStraightTiles),
+						MaxRun, Incoming, Run, Direction, NextRun);
+					const int32 NextState = Encode(Neighbor, Direction, NextRun);
+					const uint32 Tie = MakePreferenceTie(Input, Current.StateIndex, NextState);
+					if (NextCost < BestCost[NextState]
+						|| (NextCost == BestCost[NextState] && Tie < BestTie[NextState]))
+					{
+						BestCost[NextState] = NextCost;
+						BestTie[NextState] = Tie;
+						Parent[NextState] = Current.StateIndex;
+						Heap.HeapPush({NextCost, Tie, NextState}, FPreferredPathHeapPredicate());
+					}
+				}
+			}
+			for (int32 State = GoalState; State != INDEX_NONE; State = Parent[State])
+			{
+				OutPath.Add(State / CellStride);
+			}
+			Algo::Reverse(OutPath);
+			TArray<int32> PositionByCell;
+			PositionByCell.Init(INDEX_NONE, Input.Constraints.Num());
+			TArray<int32> SimplePath;
+			for (const int32 Cell : OutPath)
+			{
+				const int32 ExistingPosition = PositionByCell[Cell];
+				if (ExistingPosition != INDEX_NONE)
+				{
+					for (int32 Index = SimplePath.Num() - 1;
+						Index > ExistingPosition;
+						--Index)
+					{
+						PositionByCell[SimplePath[Index]] = INDEX_NONE;
+					}
+					SimplePath.SetNum(ExistingPosition + 1, EAllowShrinking::No);
+					continue;
+				}
+				PositionByCell[Cell] = SimplePath.Add(Cell);
+			}
+			OutPath = MoveTemp(SimplePath);
+			return GoalState != INDEX_NONE && OutPath.Num() >= 2;
+		}
+
+		bool FindPreferredBranchPath(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const int32 GatewayIndex,
+			const TArray<uint8>& MainPathCells,
+			const TArray<uint8>& ReservedBranchCells,
+			TArray<int32>& OutPath)
+		{
+			struct FStepOption
+			{
+				int32 Cell = INDEX_NONE;
+				uint8 Direction = Grid::DirectionCount;
+				uint8 Run = 1;
+				int32 Weight = 1;
+			};
+			FRandomStream Random = FGenerationCore::MakeRandomStream(
+				Input.Signature.Seed,
+				ERandomDomain::WfcLayout,
+				static_cast<int32>(MakePreferenceTie(Input, GatewayIndex, 0xB12A7C1)));
+			const int32 LengthRange = Input.MaximumPreferredRewardBranchLengthTiles
+				- Input.MinimumRewardBranchLengthTiles + 1;
+			const int32 MaxRun = FMath::Clamp(
+				Input.PreferredMaxConsecutiveStraightTiles + 8,
+				1,
+				FMath::Max(Input.GridSize.X, Input.GridSize.Y));
+			for (int32 Attempt = 0; Attempt < 24; ++Attempt)
+			{
+				const int32 TargetLength = Input.MinimumRewardBranchLengthTiles
+					+ Random.RandHelper(LengthRange);
+				TArray<int32> Path = {GatewayIndex};
+				uint8 Incoming = Grid::DirectionCount;
+				uint8 Run = 0;
+				bool bHasTurn = false;
+				while (Path.Num() <= TargetLength)
+				{
+					TArray<FStepOption, TInlineAllocator<4>> Options;
+					int32 TotalWeight = 0;
+					for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+					{
+						int32 Neighbor = INDEX_NONE;
+						uint8 NextRun = 1;
+						if (!IsAllowedPreferenceEdge(Input, Path.Last(), Direction, Neighbor)
+							|| Input.Constraints[Neighbor].Domain != EGridCellDomain::Optional
+							|| MainPathCells[Neighbor] != 0
+							|| ReservedBranchCells[Neighbor] != 0
+							|| Path.Contains(Neighbor))
+						{
+							continue;
+						}
+						const int32 StepCost = CalculatePreferredPathStepCost(
+							FMath::Max(1, Input.PreferredMaxConsecutiveStraightTiles),
+							MaxRun, Incoming, Run, Direction, NextRun);
+						int32 Weight = FMath::Clamp(500 - StepCost, 1, 500);
+						if (!bHasTurn && Path.Num() == TargetLength
+							&& Incoming == Direction)
+						{
+							Weight = 1;
+						}
+						Options.Add({Neighbor, Direction, NextRun, Weight});
+						TotalWeight += Weight;
+					}
+					if (Options.IsEmpty())
+					{
+						break;
+					}
+					int32 Roll = Random.RandHelper(TotalWeight);
+					const FStepOption* Chosen = &Options.Last();
+					for (const FStepOption& Option : Options)
+					{
+						Roll -= Option.Weight;
+						if (Roll < 0)
+						{
+							Chosen = &Option;
+							break;
+						}
+					}
+					bHasTurn |= Incoming < Grid::DirectionCount
+						&& Incoming != Chosen->Direction;
+					Incoming = Chosen->Direction;
+					Run = Chosen->Run;
+					Path.Add(Chosen->Cell);
+				}
+				if (Path.Num() == TargetLength + 1 && bHasTurn)
+				{
+					OutPath = MoveTemp(Path);
+					return true;
+				}
+			}
+			OutPath.Reset();
+			return false;
+		}
+
+		void AppendPreferredPath(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const TConstArrayView<int32> Path,
+			const bool bPreferDeadEnd,
+			TArray<FWfcCellOpeningPreference>& InOutPreferences)
+		{
+			for (int32 PathIndex = 0; PathIndex + 1 < Path.Num(); ++PathIndex)
+			{
+				const int32 First = Path[PathIndex];
+				const int32 Second = Path[PathIndex + 1];
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					if (Grid::Step(Input.Constraints[First].Coordinate, Direction)
+						!= Input.Constraints[Second].Coordinate)
+					{
+						continue;
+					}
+					InOutPreferences[First].PreferredOpenMask |=
+						Grid::DirectionBit(Direction);
+					InOutPreferences[Second].PreferredOpenMask |= Grid::DirectionBit(
+						Grid::OppositeDirectionIndex(Direction));
+					break;
+				}
+			}
+			if (bPreferDeadEnd)
+			{
+				for (int32 PathIndex = 1; PathIndex < Path.Num(); ++PathIndex)
+				{
+					FWfcCellOpeningPreference& Preference = InOutPreferences[Path[PathIndex]];
+					Preference.PreferredClosedMask |= static_cast<uint8>(
+						Grid::AllOpenEdges & ~Preference.PreferredOpenMask);
+				}
+			}
+		}
+
+		bool BuildRouteOpeningPreferences(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			TArray<FWfcCellOpeningPreference>& OutPreferences)
+		{
+			OutPreferences.Reset();
+			if (Input.RouteOpeningPreferenceLog2Strength <= 0.0f)
+			{
+				return true;
+			}
+			TArray<int32> MainPath;
+			if (!FindDirectionAwarePreferredPath(Input, MainPath))
+			{
+				return false;
+			}
+			OutPreferences.Init(FWfcCellOpeningPreference(), Input.Constraints.Num());
+			AppendPreferredPath(Input, MainPath, false, OutPreferences);
+			TArray<uint8> MainPathCells;
+			MainPathCells.Init(0, Input.Constraints.Num());
+			for (const int32 Cell : MainPath)
+			{
+				MainPathCells[Cell] = 1;
+			}
+			TArray<uint8> ReservedBranchCells;
+			ReservedBranchCells.Init(0, Input.Constraints.Num());
+			TArray<int32> ChosenGatewayPositions;
+			const int32 DesiredBranches = FMath::Min(
+				Input.PreferredRewardBranchCount, FMath::Max(0, (MainPath.Num() - 2) / 2));
+			for (int32 BranchIndex = 0; BranchIndex < DesiredBranches; ++BranchIndex)
+			{
+				const int32 IdealPosition = FMath::Clamp(
+					(BranchIndex + 1) * (MainPath.Num() - 1) / (DesiredBranches + 1),
+					1, MainPath.Num() - 2);
+				TArray<int32> Positions;
+				for (int32 Position = 1; Position + 1 < MainPath.Num(); ++Position)
+				{
+					Positions.Add(Position);
+				}
+				Positions.Sort([&](const int32 A, const int32 B)
+				{
+					const int32 DeltaA = FMath::Abs(A - IdealPosition);
+					const int32 DeltaB = FMath::Abs(B - IdealPosition);
+					return DeltaA != DeltaB ? DeltaA < DeltaB
+						: MakePreferenceTie(Input, MainPath[A], BranchIndex)
+							< MakePreferenceTie(Input, MainPath[B], BranchIndex);
+				});
+				for (const int32 Position : Positions)
+				{
+					const bool bTooClose = ChosenGatewayPositions.ContainsByPredicate(
+						[Position](const int32 Existing)
+						{
+							return FMath::Abs(Existing - Position) < 2;
+						});
+					TArray<int32> BranchPath;
+					if (bTooClose || !FindPreferredBranchPath(
+							Input, MainPath[Position], MainPathCells,
+							ReservedBranchCells, BranchPath))
+					{
+						continue;
+					}
+					AppendPreferredPath(Input, BranchPath, true, OutPreferences);
+					ChosenGatewayPositions.Add(Position);
+					for (int32 PathIndex = 1; PathIndex < BranchPath.Num(); ++PathIndex)
+					{
+						ReservedBranchCells[BranchPath[PathIndex]] = 1;
+					}
+					break;
+				}
+			}
+
+			for (int32 CellIndex = 0; CellIndex < OutPreferences.Num(); ++CellIndex)
+			{
+				FWfcCellOpeningPreference& Preference = OutPreferences[CellIndex];
+				const FGridCellConstraint& Constraint = Input.Constraints[CellIndex];
+				if (Constraint.Domain == EGridCellDomain::Outside)
+				{
+					Preference = {};
+					continue;
+				}
+				Preference.PreferredOpenMask &=
+					static_cast<uint8>(~Constraint.RequiredClosedMask);
+				Preference.PreferredClosedMask &=
+					static_cast<uint8>(~Constraint.RequiredOpenMask);
+				Preference.PreferredClosedMask &=
+					static_cast<uint8>(~Preference.PreferredOpenMask);
+			}
+			return true;
+		}
+
 		bool ValidateInput(
 			const FZeroEscapeConstrainedFloorInput& Input,
 			const FZeroEscapeWfcShapeWeights& Weights,
@@ -108,6 +524,25 @@ namespace ZeroEscape::LevelGeneration
 				|| !FMath::IsFinite(Input.PreferredRouteCoverageRatio)
 				|| Input.PreferredRouteCoverageRatio < 0.0
 				|| Input.PreferredRouteCoverageRatio > 1.0
+				|| !FMath::IsFinite(Input.PreferredRewardBranchCellRatio)
+				|| Input.PreferredRewardBranchCellRatio < 0.0
+				|| Input.PreferredRewardBranchCellRatio > 0.5
+				|| !FMath::IsFinite(
+					Input.PreferredAlternativeRouteCoverageRatio)
+				|| Input.PreferredAlternativeRouteCoverageRatio < 0.0
+				|| Input.PreferredAlternativeRouteCoverageRatio > 1.0
+				|| !FMath::IsFinite(Input.RouteQualityEarlyAcceptThreshold)
+				|| Input.RouteQualityEarlyAcceptThreshold < 0.0f
+				|| Input.RouteQualityEarlyAcceptThreshold > 1.0f
+				|| !FMath::IsFinite(Input.RouteOpeningPreferenceLog2Strength)
+				|| Input.RouteOpeningPreferenceLog2Strength < 0.0f
+				|| Input.RouteOpeningPreferenceLog2Strength > 4.0f
+				|| Input.MinimumRewardBranchLengthTiles < 3
+				|| Input.MaximumPreferredRewardBranchLengthTiles
+					< Input.MinimumRewardBranchLengthTiles
+				|| Input.MaximumPreferredRewardBranchLengthTiles > 12
+				|| Input.PreferredRewardBranchCount < 0
+				|| Input.PreferredRewardBranchCount > 12
 				|| Budget.RemainingSolveAttempts < 0
 				|| Budget.RemainingCandidateAttempts < 0
 				|| Budget.RemainingBacktracks < 0
@@ -278,8 +713,11 @@ namespace ZeroEscape::LevelGeneration
 		struct FFloorSoftQualityScore
 		{
 			int32 OrdinaryDeficit = 0;
+			int32 QualityPenaltyMicros = 1000000;
 			int32 TotalDeviation = 0;
-			int32 RouteCoverageDeficitMicros = 0;
+			int32 RewardBranchDeviation = 0;
+			int32 AlternativeCoverageDeficitMicros = 0;
+			int32 OneCellTerminalSpurCount = 0;
 			int32 LongStraightExcessSquared = 0;
 
 			bool IsBetterThan(const FFloorSoftQualityScore& Other) const
@@ -288,14 +726,28 @@ namespace ZeroEscape::LevelGeneration
 				{
 					return OrdinaryDeficit < Other.OrdinaryDeficit;
 				}
+				if (QualityPenaltyMicros != Other.QualityPenaltyMicros)
+				{
+					return QualityPenaltyMicros < Other.QualityPenaltyMicros;
+				}
 				if (TotalDeviation != Other.TotalDeviation)
 				{
 					return TotalDeviation < Other.TotalDeviation;
 				}
-				if (RouteCoverageDeficitMicros != Other.RouteCoverageDeficitMicros)
+				if (RewardBranchDeviation != Other.RewardBranchDeviation)
 				{
-					return RouteCoverageDeficitMicros
-						< Other.RouteCoverageDeficitMicros;
+					return RewardBranchDeviation < Other.RewardBranchDeviation;
+				}
+				if (AlternativeCoverageDeficitMicros
+					!= Other.AlternativeCoverageDeficitMicros)
+				{
+					return AlternativeCoverageDeficitMicros
+						< Other.AlternativeCoverageDeficitMicros;
+				}
+				if (OneCellTerminalSpurCount != Other.OneCellTerminalSpurCount)
+				{
+					return OneCellTerminalSpurCount
+						< Other.OneCellTerminalSpurCount;
 				}
 				return LongStraightExcessSquared
 					< Other.LongStraightExcessSquared;
@@ -307,31 +759,373 @@ namespace ZeroEscape::LevelGeneration
 			const TConstArrayView<uint8> OpeningMasks)
 		{
 			int32 Longest = 0;
-			const uint8 HorizontalMask =
-				Grid::DirectionBit(1) | Grid::DirectionBit(3);
-			const uint8 VerticalMask =
-				Grid::DirectionBit(0) | Grid::DirectionBit(2);
 			for (int32 Y = 0; Y < GridSize.Y; ++Y)
 			{
 				int32 Run = 0;
-				for (int32 X = 0; X < GridSize.X; ++X)
+				for (int32 X = 0; X + 1 < GridSize.X; ++X)
 				{
-					const uint8 Mask = OpeningMasks[Grid::ToIndex(FIntPoint(X, Y), GridSize)];
-					Run = (Mask & HorizontalMask) == HorizontalMask ? Run + 1 : 0;
+					const uint8 Mask = OpeningMasks[
+						Grid::ToIndex(FIntPoint(X, Y), GridSize)];
+					Run = (Mask & Grid::DirectionBit(1)) != 0 ? Run + 1 : 0;
 					Longest = FMath::Max(Longest, Run);
 				}
 			}
 			for (int32 X = 0; X < GridSize.X; ++X)
 			{
 				int32 Run = 0;
-				for (int32 Y = 0; Y < GridSize.Y; ++Y)
+				for (int32 Y = 0; Y + 1 < GridSize.Y; ++Y)
 				{
-					const uint8 Mask = OpeningMasks[Grid::ToIndex(FIntPoint(X, Y), GridSize)];
-					Run = (Mask & VerticalMask) == VerticalMask ? Run + 1 : 0;
+					const uint8 Mask = OpeningMasks[
+						Grid::ToIndex(FIntPoint(X, Y), GridSize)];
+					Run = (Mask & Grid::DirectionBit(0)) != 0 ? Run + 1 : 0;
 					Longest = FMath::Max(Longest, Run);
 				}
 			}
 			return Longest;
+		}
+
+		bool CoordinateLess(const FIntVector A, const FIntVector B)
+		{
+			return A.Z != B.Z ? A.Z < B.Z
+				: A.Y != B.Y ? A.Y < B.Y
+				: A.X < B.X;
+		}
+
+		bool RewardBranchLess(
+			const FZeroEscapeGeneratedRewardBranch& A,
+			const FZeroEscapeGeneratedRewardBranch& B)
+		{
+			if (A.EndpointCoordinate != B.EndpointCoordinate)
+			{
+				return CoordinateLess(A.EndpointCoordinate, B.EndpointCoordinate);
+			}
+			if (A.GatewayCoordinate != B.GatewayCoordinate)
+			{
+				return CoordinateLess(A.GatewayCoordinate, B.GatewayCoordinate);
+			}
+			const int32 CommonCount = FMath::Min(
+				A.PathCoordinates.Num(), B.PathCoordinates.Num());
+			for (int32 Index = 0; Index < CommonCount; ++Index)
+			{
+				if (A.PathCoordinates[Index] != B.PathCoordinates[Index])
+				{
+					return CoordinateLess(
+						A.PathCoordinates[Index], B.PathCoordinates[Index]);
+				}
+			}
+			return A.PathCoordinates.Num() < B.PathCoordinates.Num();
+		}
+
+		bool BuildCollapsedNeighbors(
+			const FIntPoint GridSize,
+			const TConstArrayView<uint8> OpeningMasks,
+			TArray<TArray<int32>>& OutNeighbors)
+		{
+			if (OpeningMasks.Num() != GridSize.X * GridSize.Y)
+			{
+				return false;
+			}
+			OutNeighbors.SetNum(OpeningMasks.Num());
+			for (int32 Cell = 0; Cell < OpeningMasks.Num(); ++Cell)
+			{
+				const FIntPoint Coordinate(Cell % GridSize.X, Cell / GridSize.X);
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					if ((OpeningMasks[Cell] & Grid::DirectionBit(Direction)) == 0)
+					{
+						continue;
+					}
+					const FIntPoint NeighborCoordinate = Grid::Step(Coordinate, Direction);
+					if (!Grid::IsInside(NeighborCoordinate, GridSize))
+					{
+						return false;
+					}
+					const int32 Neighbor = Grid::ToIndex(NeighborCoordinate, GridSize);
+					if ((OpeningMasks[Neighbor] & Grid::DirectionBit(
+							Grid::OppositeDirectionIndex(Direction))) == 0)
+					{
+						return false;
+					}
+					OutNeighbors[Cell].Add(Neighbor);
+				}
+			}
+			return true;
+		}
+
+		bool BuildStableShortestPath(
+			const TArray<TArray<int32>>& Neighbors,
+			const int32 Start,
+			const int32 Goal,
+			TArray<int32>& OutPath)
+		{
+			OutPath.Reset();
+			if (!Neighbors.IsValidIndex(Start) || !Neighbors.IsValidIndex(Goal))
+			{
+				return false;
+			}
+			TArray<int32> Parent;
+			Parent.Init(INDEX_NONE, Neighbors.Num());
+			TQueue<int32> Queue;
+			Parent[Start] = Start;
+			Queue.Enqueue(Start);
+			int32 Current = INDEX_NONE;
+			while (Queue.Dequeue(Current) && Parent[Goal] == INDEX_NONE)
+			{
+				for (const int32 Neighbor : Neighbors[Current])
+				{
+					if (Parent[Neighbor] != INDEX_NONE)
+					{
+						continue;
+					}
+					Parent[Neighbor] = Current;
+					Queue.Enqueue(Neighbor);
+				}
+			}
+			if (Parent[Goal] == INDEX_NONE)
+			{
+				return false;
+			}
+			for (int32 Cell = Goal; Cell != Start; Cell = Parent[Cell])
+			{
+				OutPath.Add(Cell);
+			}
+			OutPath.Add(Start);
+			Algo::Reverse(OutPath);
+			return OutPath.Num() >= 2;
+		}
+
+		uint8 DirectionBetween(
+			const int32 First,
+			const int32 Second,
+			const FIntPoint GridSize)
+		{
+			const FIntPoint Coordinate(First % GridSize.X, First / GridSize.X);
+			const FIntPoint Neighbor(Second % GridSize.X, Second / GridSize.X);
+			for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+			{
+				if (Grid::Step(Coordinate, Direction) == Neighbor)
+				{
+					return Direction;
+				}
+			}
+			return Grid::DirectionCount;
+		}
+
+		bool CanReachWithoutEdge(
+			const TArray<TArray<int32>>& Neighbors,
+			const int32 Start,
+			const int32 Goal,
+			const int32 RemovedFirst,
+			const int32 RemovedSecond)
+		{
+			TArray<uint8> Visited;
+			Visited.Init(0, Neighbors.Num());
+			TQueue<int32> Queue;
+			Visited[Start] = 1;
+			Queue.Enqueue(Start);
+			int32 Current = INDEX_NONE;
+			while (Queue.Dequeue(Current))
+			{
+				if (Current == Goal)
+				{
+					return true;
+				}
+				for (const int32 Neighbor : Neighbors[Current])
+				{
+					const bool bRemoved =
+						(Current == RemovedFirst && Neighbor == RemovedSecond)
+						|| (Current == RemovedSecond && Neighbor == RemovedFirst);
+					if (!bRemoved && Visited[Neighbor] == 0)
+					{
+						Visited[Neighbor] = 1;
+						Queue.Enqueue(Neighbor);
+					}
+				}
+			}
+			return false;
+		}
+
+		bool AnalyzeCollapsedRouteStructure(
+			const FZeroEscapeConstrainedFloorInput& Input,
+			const TConstArrayView<uint8> OpeningMasks,
+			FZeroEscapeConstrainedFloorResult& InOutResult)
+		{
+			InOutResult.CandidateRewardBranches.Reset();
+			InOutResult.OneCellTerminalSpurCount = 0;
+			InOutResult.CandidateRewardBranchCellRatio = 0.0;
+			InOutResult.AlternativeRouteCoverageRatio = 0.0;
+			InOutResult.StableMainRouteEdgeCount = 0;
+			InOutResult.ReadableTurnCount = 0;
+			InOutResult.LongestStraightRunTiles = 0;
+			InOutResult.OneTileRunRatio = 1.0;
+			InOutResult.bSoftRouteAnalysisSucceeded = false;
+
+			TArray<TArray<int32>> Neighbors;
+			const int32 Enter = Grid::ToIndex(
+				Input.RequiredEnterCoordinate, Input.GridSize);
+			const int32 Leave = Grid::ToIndex(
+				Input.RequiredLeaveCoordinate, Input.GridSize);
+			TArray<int32> MainPath;
+			if (!BuildCollapsedNeighbors(Input.GridSize, OpeningMasks, Neighbors)
+				|| !BuildStableShortestPath(Neighbors, Enter, Leave, MainPath))
+			{
+				return false;
+			}
+
+			InOutResult.StableMainRouteEdgeCount = MainPath.Num() - 1;
+			InOutResult.LongestStraightRunTiles = MeasureLongestStraightRun(
+				Input.GridSize, OpeningMasks);
+			TArray<int32> RunLengths;
+			uint8 PreviousDirection = Grid::DirectionCount;
+			for (int32 PathIndex = 0; PathIndex + 1 < MainPath.Num(); ++PathIndex)
+			{
+				const uint8 Direction = DirectionBetween(
+					MainPath[PathIndex], MainPath[PathIndex + 1], Input.GridSize);
+				if (Direction >= Grid::DirectionCount)
+				{
+					return false;
+				}
+				if (Direction != PreviousDirection)
+				{
+					RunLengths.Add(1);
+					PreviousDirection = Direction;
+				}
+				else
+				{
+					++RunLengths.Last();
+				}
+			}
+			int32 OneTileRuns = 0;
+			for (int32 RunIndex = 0; RunIndex < RunLengths.Num(); ++RunIndex)
+			{
+				OneTileRuns += RunLengths[RunIndex] == 1 ? 1 : 0;
+				if (RunIndex > 0
+					&& RunLengths[RunIndex - 1] >= 2
+					&& RunLengths[RunIndex - 1] <= 4
+					&& RunLengths[RunIndex] >= 2)
+				{
+					++InOutResult.ReadableTurnCount;
+				}
+			}
+			InOutResult.OneTileRunRatio = RunLengths.IsEmpty()
+				? 1.0 : static_cast<double>(OneTileRuns) / RunLengths.Num();
+
+			TArray<uint8> MainPathCells;
+			MainPathCells.Init(0, OpeningMasks.Num());
+			for (const int32 Cell : MainPath)
+			{
+				MainPathCells[Cell] = 1;
+			}
+			int32 CandidateBranchCells = 0;
+			for (int32 Endpoint = 0; Endpoint < Neighbors.Num(); ++Endpoint)
+			{
+				if (Endpoint == Enter || Endpoint == Leave
+					|| Neighbors[Endpoint].Num() != 1)
+				{
+					continue;
+				}
+				TArray<int32> ReversePath = {Endpoint};
+				int32 Previous = Endpoint;
+				int32 Current = Neighbors[Endpoint][0];
+				int32 Gateway = INDEX_NONE;
+				for (int32 StepCount = 0; StepCount < Neighbors.Num(); ++StepCount)
+				{
+					if (Neighbors[Current].Num() >= 3)
+					{
+						Gateway = Current;
+						break;
+					}
+					if (Neighbors[Current].Num() != 2
+						|| Current == Enter || Current == Leave)
+					{
+						break;
+					}
+					ReversePath.Add(Current);
+					const int32 Next = Neighbors[Current][0] == Previous
+						? Neighbors[Current][1] : Neighbors[Current][0];
+					Previous = Current;
+					Current = Next;
+				}
+				if (Gateway == INDEX_NONE)
+				{
+					continue;
+				}
+				if (ReversePath.Num() == 1)
+				{
+					++InOutResult.OneCellTerminalSpurCount;
+				}
+				if (MainPathCells[Gateway] == 0
+					|| ReversePath.Num() < Input.MinimumRewardBranchLengthTiles)
+				{
+					continue;
+				}
+
+				bool bAllOrdinary = true;
+				for (const int32 Cell : ReversePath)
+				{
+					bAllOrdinary &= Input.StructureWalkableByCell.IsValidIndex(Cell)
+						&& Input.StructureWalkableByCell[Cell] == 0
+						&& Cell != Enter && Cell != Leave;
+				}
+				if (!bAllOrdinary)
+				{
+					continue;
+				}
+
+				TArray<int32> ForwardPath = ReversePath;
+				Algo::Reverse(ForwardPath);
+				bool bHasTurn = false;
+				uint8 IncomingDirection = DirectionBetween(
+					Gateway, ForwardPath[0], Input.GridSize);
+				for (int32 PathIndex = 0; PathIndex + 1 < ForwardPath.Num(); ++PathIndex)
+				{
+					const uint8 Direction = DirectionBetween(
+						ForwardPath[PathIndex], ForwardPath[PathIndex + 1], Input.GridSize);
+					bHasTurn |= Direction != IncomingDirection;
+					IncomingDirection = Direction;
+				}
+				if (!bHasTurn)
+				{
+					continue;
+				}
+
+				FZeroEscapeGeneratedRewardBranch& Branch =
+					InOutResult.CandidateRewardBranches.AddDefaulted_GetRef();
+				Branch.GatewayCoordinate = FIntVector(
+					Gateway % Input.GridSize.X,
+					Gateway / Input.GridSize.X,
+					Input.FloorIndex);
+				for (const int32 Cell : ForwardPath)
+				{
+					Branch.PathCoordinates.Add(FIntVector(
+						Cell % Input.GridSize.X,
+						Cell / Input.GridSize.X,
+						Input.FloorIndex));
+				}
+				Branch.EndpointCoordinate = Branch.PathCoordinates.Last();
+				CandidateBranchCells += Branch.PathCoordinates.Num();
+			}
+			InOutResult.CandidateRewardBranches.Sort(RewardBranchLess);
+			InOutResult.CandidateRewardBranchCellRatio =
+				InOutResult.OrdinaryWalkableCellCount > 0
+					? static_cast<double>(CandidateBranchCells)
+						/ InOutResult.OrdinaryWalkableCellCount
+					: 0.0;
+
+			int32 BypassableEdges = 0;
+			for (int32 PathIndex = 0; PathIndex + 1 < MainPath.Num(); ++PathIndex)
+			{
+				BypassableEdges += CanReachWithoutEdge(
+					Neighbors, Enter, Leave,
+					MainPath[PathIndex], MainPath[PathIndex + 1]) ? 1 : 0;
+			}
+			InOutResult.AlternativeRouteCoverageRatio =
+				InOutResult.StableMainRouteEdgeCount > 0
+					? static_cast<double>(BypassableEdges)
+						/ InOutResult.StableMainRouteEdgeCount
+					: 0.0;
+			InOutResult.bSoftRouteAnalysisSucceeded = true;
+			return true;
 		}
 
 		FFloorSoftQualityScore ScoreCandidate(
@@ -346,19 +1140,85 @@ namespace ZeroEscape::LevelGeneration
 			Score.TotalDeviation = FMath::Abs(
 				Candidate.TotalWalkableCellCount
 					- Input.PreferredTotalWalkableCellCount);
-			Score.RouteCoverageDeficitMicros = FMath::Max(
-				0,
-				FMath::RoundToInt(
-					(Input.PreferredRouteCoverageRatio
-						- Candidate.RouteCoverageRatio) * 1000000.0));
-			const int32 Longest = MeasureLongestStraightRun(
-				Input.GridSize,
-				Candidate.OpeningMaskByCell);
 			const int32 Excess = Input.PreferredMaxConsecutiveStraightTiles > 0
 				? FMath::Max(
-					0, Longest - Input.PreferredMaxConsecutiveStraightTiles)
+					0, Candidate.LongestStraightRunTiles
+						- Input.PreferredMaxConsecutiveStraightTiles)
 				: 0;
 			Score.LongStraightExcessSquared = Excess * Excess;
+			Score.OneCellTerminalSpurCount = Candidate.OneCellTerminalSpurCount;
+			const int32 MaxBranchesByCapacity = FMath::FloorToInt(
+				static_cast<double>(Input.PreferredOrdinaryWalkableCellCount)
+					* Input.PreferredRewardBranchCellRatio
+					/ FMath::Max(1, Input.MinimumRewardBranchLengthTiles));
+			const int32 EffectiveBranchTarget = FMath::Min(
+				Input.PreferredRewardBranchCount,
+				FMath::Max(0, MaxBranchesByCapacity));
+			Score.RewardBranchDeviation = FMath::Abs(
+				Candidate.CandidateRewardBranches.Num() - EffectiveBranchTarget);
+			Score.AlternativeCoverageDeficitMicros = FMath::Max(
+				0, FMath::RoundToInt(
+					(Input.PreferredAlternativeRouteCoverageRatio
+						- Candidate.AlternativeRouteCoverageRatio) * 1000000.0));
+
+			if (!Candidate.bSoftRouteAnalysisSucceeded)
+			{
+				return Score;
+			}
+			double WeightedQuality = 0.0;
+			double ActiveWeight = 0.0;
+			const auto AddChannel = [&WeightedQuality, &ActiveWeight](
+				const double Weight, const double Fit)
+			{
+				WeightedQuality += Weight * FMath::Clamp(Fit, 0.0, 1.0);
+				ActiveWeight += Weight;
+			};
+			const double DensityFit = 1.0 - FMath::Clamp(
+				static_cast<double>(Score.TotalDeviation)
+					/ FMath::Max(1, Input.PreferredTotalWalkableCellCount),
+				0.0, 1.0);
+			AddChannel(0.15, DensityFit);
+			const double CoverageFit = Input.PreferredRouteCoverageRatio > 0.0
+				? FMath::Clamp(
+					Candidate.RouteCoverageRatio / Input.PreferredRouteCoverageRatio,
+					0.0, 1.0)
+				: 1.0;
+			const int32 DesiredTurns = Candidate.StableMainRouteEdgeCount
+				> Input.PreferredMaxConsecutiveStraightTiles
+					? FMath::Max(1, Candidate.StableMainRouteEdgeCount
+						/ FMath::Max(2, Input.PreferredMaxConsecutiveStraightTiles + 1))
+					: 0;
+			const double TurnFit = DesiredTurns > 0
+				? FMath::Clamp(
+					static_cast<double>(Candidate.ReadableTurnCount) / DesiredTurns,
+					0.0, 1.0)
+				: 1.0;
+			const double MainRouteFit = 0.50 * CoverageFit
+				+ 0.30 * TurnFit
+				+ 0.20 * (1.0 - Candidate.OneTileRunRatio);
+			AddChannel(0.25, MainRouteFit);
+			if (EffectiveBranchTarget > 0)
+			{
+				const double RelativeDeviation =
+					static_cast<double>(Score.RewardBranchDeviation)
+						/ EffectiveBranchTarget;
+				AddChannel(0.25, 1.0 - FMath::Clamp(
+					RelativeDeviation * RelativeDeviation, 0.0, 1.0));
+			}
+			if (Input.PreferredAlternativeRouteCoverageRatio > 0.0)
+			{
+				AddChannel(0.20, Candidate.AlternativeRouteCoverageRatio
+					/ Input.PreferredAlternativeRouteCoverageRatio);
+			}
+			const double ArtifactFit = 1.0 / (
+				1.0 + 0.5 * Candidate.OneCellTerminalSpurCount
+				+ Score.LongStraightExcessSquared
+				+ Candidate.OneTileRunRatio * Candidate.OneTileRunRatio);
+			AddChannel(0.15, ArtifactFit);
+			const double Quality = ActiveWeight > 0.0
+				? FMath::Clamp(WeightedQuality / ActiveWeight, 0.0, 1.0) : 0.0;
+			Score.QualityPenaltyMicros = FMath::RoundToInt(
+				(1.0 - Quality) * 1000000.0);
 			return Score;
 		}
 
@@ -391,6 +1251,7 @@ namespace ZeroEscape::LevelGeneration
 
 		bool BuildDeterministicFallbackFloor(
 			const FZeroEscapeConstrainedFloorInput& Input,
+			const TConstArrayView<FWfcCellOpeningPreference> OpeningPreferences,
 			FRandomStream& Random,
 			FZeroEscapeConstrainedFloorResult& OutResult,
 			FString& OutError)
@@ -402,33 +1263,40 @@ namespace ZeroEscape::LevelGeneration
 			Parent.Init(INDEX_NONE, CellCount);
 			TArray<uint8> Reachable;
 			Reachable.Init(0, CellCount);
+			TArray<int32> ReachableDistance;
+			ReachableDistance.Init(INDEX_NONE, CellCount);
 
 			const auto IsAllowedEdge = [&Input](
 				const int32 FromIndex,
 				const uint8 Direction,
 				int32& OutNeighborIndex)
 			{
-				const FGridCellConstraint& From = Input.Constraints[FromIndex];
-				const FIntPoint NeighborCoordinate = Grid::Step(
-					From.Coordinate, Direction);
-				if (From.Domain == EGridCellDomain::Outside
-					|| !Grid::IsInside(NeighborCoordinate, Input.GridSize))
+				return IsAllowedPreferenceEdge(
+					Input, FromIndex, Direction, OutNeighborIndex);
+			};
+			const auto IsPreferredEdge = [&Input, OpeningPreferences](
+				const int32 FromIndex, const int32 ToIndex)
+			{
+				if (!OpeningPreferences.IsValidIndex(FromIndex)
+					|| !OpeningPreferences.IsValidIndex(ToIndex))
 				{
 					return false;
 				}
-				OutNeighborIndex = Grid::ToIndex(
-					NeighborCoordinate, Input.GridSize);
-				const FGridCellConstraint& To = Input.Constraints[OutNeighborIndex];
-				const uint8 FromBit = Grid::DirectionBit(Direction);
-				const uint8 ToBit = Grid::DirectionBit(
-					Grid::OppositeDirectionIndex(Direction));
-				return To.Domain != EGridCellDomain::Outside
-					&& (From.RequiredClosedMask & FromBit) == 0
-					&& (To.RequiredClosedMask & ToBit) == 0;
+				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				{
+					if (Grid::Step(Input.Constraints[FromIndex].Coordinate, Direction)
+						== Input.Constraints[ToIndex].Coordinate)
+					{
+						return (OpeningPreferences[FromIndex].PreferredOpenMask
+							& Grid::DirectionBit(Direction)) != 0;
+					}
+				}
+				return false;
 			};
 
 			TQueue<int32> Queue;
 			Reachable[StartIndex] = 1;
+			ReachableDistance[StartIndex] = 0;
 			Queue.Enqueue(StartIndex);
 			int32 CurrentIndex = INDEX_NONE;
 			while (Queue.Dequeue(CurrentIndex))
@@ -436,14 +1304,26 @@ namespace ZeroEscape::LevelGeneration
 				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
 				{
 					int32 NeighborIndex = INDEX_NONE;
-					if (!IsAllowedEdge(CurrentIndex, Direction, NeighborIndex)
-						|| Reachable[NeighborIndex] != 0)
+					if (!IsAllowedEdge(CurrentIndex, Direction, NeighborIndex))
 					{
 						continue;
 					}
-					Reachable[NeighborIndex] = 1;
-					Parent[NeighborIndex] = CurrentIndex;
-					Queue.Enqueue(NeighborIndex);
+					if (Reachable[NeighborIndex] == 0)
+					{
+						Reachable[NeighborIndex] = 1;
+						ReachableDistance[NeighborIndex] =
+							ReachableDistance[CurrentIndex] + 1;
+						Parent[NeighborIndex] = CurrentIndex;
+						Queue.Enqueue(NeighborIndex);
+					}
+					else if (NeighborIndex != StartIndex
+						&& ReachableDistance[NeighborIndex]
+							== ReachableDistance[CurrentIndex] + 1
+						&& IsPreferredEdge(CurrentIndex, NeighborIndex)
+						&& !IsPreferredEdge(Parent[NeighborIndex], NeighborIndex))
+					{
+						Parent[NeighborIndex] = CurrentIndex;
+					}
 				}
 			}
 
@@ -547,10 +1427,15 @@ namespace ZeroEscape::LevelGeneration
 			{
 				int32 FromIndex = INDEX_NONE;
 				int32 ToIndex = INDEX_NONE;
+				int32 Weight = 1;
 			};
+			const int32 PreferredEdgeWeight = FMath::Max(
+				1, FMath::RoundToInt(64.0 * FMath::Pow(
+					2.0, static_cast<double>(Input.RouteOpeningPreferenceLog2Strength))));
 			while (SelectedCount < TargetCount)
 			{
 				TArray<FFrontierEdge> Frontier;
+				int32 TotalWeight = 0;
 				for (int32 Index = 0; Index < CellCount; ++Index)
 				{
 					if (Selected[Index] == 0)
@@ -563,7 +1448,10 @@ namespace ZeroEscape::LevelGeneration
 						if (IsAllowedEdge(Index, Direction, NeighborIndex)
 							&& Selected[NeighborIndex] == 0)
 						{
-							Frontier.Add({ Index, NeighborIndex });
+							const int32 Weight = IsPreferredEdge(Index, NeighborIndex)
+								? PreferredEdgeWeight : 64;
+							Frontier.Add({Index, NeighborIndex, Weight});
+							TotalWeight += Weight;
 						}
 					}
 				}
@@ -571,10 +1459,20 @@ namespace ZeroEscape::LevelGeneration
 				{
 					break;
 				}
-				const FFrontierEdge& Chosen = Frontier[Random.RandHelper(Frontier.Num())];
-				Selected[Chosen.ToIndex] = 1;
+				int32 Roll = Random.RandHelper(TotalWeight);
+				const FFrontierEdge* Chosen = &Frontier.Last();
+				for (const FFrontierEdge& Edge : Frontier)
+				{
+					Roll -= Edge.Weight;
+					if (Roll < 0)
+					{
+						Chosen = &Edge;
+						break;
+					}
+				}
+				Selected[Chosen->ToIndex] = 1;
 				++SelectedCount;
-				if (!OpenEdge(Chosen.FromIndex, Chosen.ToIndex))
+				if (!OpenEdge(Chosen->FromIndex, Chosen->ToIndex))
 				{
 					OutError = TEXT("楼层兜底无法提交前沿公共边。");
 					return false;
@@ -623,6 +1521,11 @@ namespace ZeroEscape::LevelGeneration
 		{
 			Variants.Add(Variant);
 		}
+		TArray<FWfcCellOpeningPreference> OpeningPreferences;
+		if (!BuildRouteOpeningPreferences(Input, OpeningPreferences))
+		{
+			OpeningPreferences.Reset();
+		}
 
 		FZeroEscapeWfcSolveSettings Settings;
 		Settings.StartCoordinate = Input.RequiredEnterCoordinate;
@@ -635,6 +1538,10 @@ namespace ZeroEscape::LevelGeneration
 		Settings.MaxConsecutiveStraightTiles = Input.MaxConsecutiveStraightTiles;
 		Settings.PreferredMaxConsecutiveStraightTiles =
 			Input.PreferredMaxConsecutiveStraightTiles;
+		Settings.OpeningPreferencesByCell = OpeningPreferences;
+		Settings.OpeningPreferenceLog2Strength =
+			OpeningPreferences.IsEmpty()
+				? 0.0f : Input.RouteOpeningPreferenceLog2Strength;
 
 		FZeroEscapeGenerationMetrics AggregateMetrics;
 		TOptional<FZeroEscapeConstrainedFloorResult> BestCandidate;
@@ -729,6 +1636,8 @@ namespace ZeroEscape::LevelGeneration
 						EZeroEscapeGenerationFailure::SolverInvariantViolation,
 						TEXT("WFC 提交结果与已验收候选不一致。"));
 				}
+				AnalyzeCollapsedRouteStructure(
+					Input, AcceptedCandidate.OpeningMaskByCell, AcceptedCandidate);
 
 				const FFloorSoftQualityScore Score = ScoreCandidate(
 					Input, AcceptedCandidate);
@@ -739,8 +1648,9 @@ namespace ZeroEscape::LevelGeneration
 				}
 				if (Score.OrdinaryDeficit == 0
 					&& Score.TotalDeviation == 0
-					&& Score.RouteCoverageDeficitMicros == 0
-					&& Score.LongStraightExcessSquared == 0)
+					&& Score.QualityPenaltyMicros <= FMath::RoundToInt(
+						(1.0 - Input.RouteQualityEarlyAcceptThreshold)
+							* 1000000.0))
 				{
 					break;
 				}
@@ -766,18 +1676,19 @@ namespace ZeroEscape::LevelGeneration
 			return true;
 		}
 
-		const int32 FallbackSalt = MakeFloorWfcSalt(
+		const int32 FallbackSalt = MakeFloorFallbackSalt(
 			Input.WholeLayoutAttemptIndex,
-			Input.FloorIndex,
-			3);
+			Input.FloorIndex);
 		FRandomStream FallbackRandom = FGenerationCore::MakeRandomStream(
 			Input.Signature.Seed,
 			ERandomDomain::WfcLayout,
 			FallbackSalt);
 		FString FallbackError;
 		if (BuildDeterministicFallbackFloor(
-				Input, FallbackRandom, OutResult, FallbackError))
+				Input, OpeningPreferences, FallbackRandom, OutResult, FallbackError))
 		{
+			AnalyzeCollapsedRouteStructure(
+				Input, OutResult.OpeningMaskByCell, OutResult);
 			OutReport = {};
 			OutReport.Metrics = AggregateMetrics;
 			return true;
@@ -794,4 +1705,50 @@ namespace ZeroEscape::LevelGeneration
 			AggregateMetrics.WfcSolveAttemptCount,
 			Input.MaxSolveAttemptsForThisFloor);
 	}
+
+#if WITH_DEV_AUTOMATION_TESTS
+	int64 Testing::MeasurePreferredPathDirectionCost(
+		const TConstArrayView<uint8> Directions,
+		const int32 PreferredStraightTiles)
+	{
+		const int32 MaxRun = FMath::Max(1, PreferredStraightTiles + 8);
+		uint8 Incoming = Grid::DirectionCount;
+		uint8 Run = 0;
+		int64 Total = 0;
+		for (const uint8 Direction : Directions)
+		{
+			uint8 NextRun = 1;
+			Total += GridLayoutPrivate::CalculatePreferredPathStepCost(
+				FMath::Max(1, PreferredStraightTiles),
+				MaxRun,
+				Incoming,
+				Run,
+				Direction,
+				NextRun);
+			Incoming = Direction;
+			Run = NextRun;
+		}
+		return Total;
+	}
+
+	bool Testing::AnalyzeCollapsedRouteStructureForTesting(
+		const FZeroEscapeConstrainedFloorInput& Input,
+		const TConstArrayView<uint8> OpeningMasks,
+		FZeroEscapeConstrainedFloorResult& OutResult)
+	{
+		OutResult = {};
+		OutResult.OpeningMaskByCell.Append(
+			OpeningMasks.GetData(), OpeningMasks.Num());
+		for (int32 Cell = 0; Cell < OpeningMasks.Num(); ++Cell)
+		{
+			OutResult.TotalWalkableCellCount += OpeningMasks[Cell] != 0 ? 1 : 0;
+			OutResult.OrdinaryWalkableCellCount += OpeningMasks[Cell] != 0
+				&& Input.StructureWalkableByCell.IsValidIndex(Cell)
+				&& Input.StructureWalkableByCell[Cell] == 0 ? 1 : 0;
+		}
+		return GridLayoutPrivate::AnalyzeCollapsedRouteStructure(
+			Input, OpeningMasks, OutResult);
+	}
+
+#endif
 }

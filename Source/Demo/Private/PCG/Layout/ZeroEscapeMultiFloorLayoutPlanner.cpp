@@ -2130,6 +2130,20 @@ namespace ZeroEscape::LevelGeneration
 					GenerationLimits::MaxWfcSolveAttemptsPerFloor);
 			FloorInput.PreferredRouteCoverageRatio =
 				Input.Difficulty.MinRequiredRouteCoverageRatio;
+			FloorInput.PreferredRewardBranchCellRatio =
+				Input.Difficulty.PreferredRewardBranchCellRatio;
+			FloorInput.PreferredAlternativeRouteCoverageRatio =
+				Input.Difficulty.PreferredAlternativeRouteCoverageRatio;
+			FloorInput.RouteQualityEarlyAcceptThreshold =
+				Input.SharedRules.RouteQualityEarlyAcceptThreshold;
+			FloorInput.RouteOpeningPreferenceLog2Strength =
+				Input.SharedRules.RouteOpeningPreferenceLog2Strength;
+			FloorInput.MinimumRewardBranchLengthTiles =
+				Input.SharedRules.MinimumRewardBranchLengthTiles;
+			FloorInput.MaximumPreferredRewardBranchLengthTiles =
+				Input.SharedRules.MaximumPreferredRewardBranchLengthTiles;
+			FloorInput.PreferredRewardBranchCount =
+				Input.Difficulty.PreferredRewardBranchCount;
 
 			const int32 CellCount = State.GridSize.X * State.GridSize.Y;
 			FloorInput.Constraints.SetNum(CellCount);
@@ -2555,6 +2569,12 @@ namespace ZeroEscape::LevelGeneration
 						Summary.RequiredLeaveCoordinate)
 					/ DiagonalSquared);
 				Summary.RouteCoverageRatio = Record.Result.RouteCoverageRatio;
+				Summary.RewardBranchCount = 0;
+				Summary.OneCellTerminalSpurCount =
+					Record.Result.OneCellTerminalSpurCount;
+				Summary.RewardBranchCellRatio = 0.0;
+				Summary.AlternativeRouteCoverageRatio =
+					Record.Result.AlternativeRouteCoverageRatio;
 				Summary.JunctionMetrics = MeasureJunctions(
 					Record.Result.OpeningMaskByCell);
 				Summary.CycleRank = CountHorizontalEdges(
@@ -2927,66 +2947,89 @@ namespace ZeroEscape::LevelGeneration
 					TEXT("玩家出生点选择缺少一层结果或逻辑格边长无效。"));
 			}
 
-			int32 BestDenseIndex = INDEX_NONE;
-			int32 BestRouteDistance = MAX_int32;
-			uint32 BestTieBreak = MAX_uint32;
-			int32 FallbackDenseIndex = INDEX_NONE;
-			int32 FallbackRouteDistance = INDEX_NONE;
-			uint32 FallbackTieBreak = MAX_uint32;
 			const FFloorSolveRecord& GroundFloor = Records[0];
-			for (int32 DenseIndex = 0;
-				DenseIndex < GroundFloor.Result.OpeningMaskByCell.Num();
-				++DenseIndex)
+			TSet<int32> CandidateRewardBranchCells;
+			for (const FZeroEscapeGeneratedRewardBranch& Branch :
+				GroundFloor.Result.CandidateRewardBranches)
 			{
-				if (GroundFloor.Result.OpeningMaskByCell[DenseIndex] == 0
-					|| GroundFloor.Input.StructureWalkableByCell[DenseIndex] != 0
-					|| !Graph.DistanceFromPursuerByNode.IsValidIndex(DenseIndex)
-					|| Graph.DistanceFromPursuerByNode[DenseIndex] == INDEX_NONE)
+				for (const FIntVector Coordinate : Branch.PathCoordinates)
 				{
-					continue;
-				}
-				const FIntVector Address(
-					DenseIndex % State.GridSize.X,
-					DenseIndex / State.GridSize.X,
-					0);
-				if (Address == State.PursuerSpawn || Address == State.Exit)
-				{
-					continue;
-				}
-				const int32 RouteDistance =
-					Graph.DistanceFromPursuerByNode[DenseIndex];
-				FRandomStream TieRandom = FGenerationCore::MakeRandomStream(
-					Input.Signature.Seed,
-					ERandomDomain::PlayerPursuerSpawn,
-					DenseIndex);
-				const uint32 TieBreak = TieRandom.GetUnsignedInt();
-				if (RouteDistance > FallbackRouteDistance
-					|| (RouteDistance == FallbackRouteDistance
-						&& TieBreak < FallbackTieBreak))
-				{
-					FallbackDenseIndex = DenseIndex;
-					FallbackRouteDistance = RouteDistance;
-					FallbackTieBreak = TieBreak;
-				}
-				const double RouteDistanceCm =
-					RouteDistance * Input.SharedRules.LogicalTileSizeCm;
-				if (RouteDistanceCm + UE_DOUBLE_SMALL_NUMBER
-					< Input.Difficulty.MinPlayerPursuerRouteDistanceCm)
-				{
-					continue;
-				}
-				if (RouteDistance < BestRouteDistance
-					|| (RouteDistance == BestRouteDistance && TieBreak < BestTieBreak))
-				{
-					BestDenseIndex = DenseIndex;
-					BestRouteDistance = RouteDistance;
-					BestTieBreak = TieBreak;
+					if (Coordinate.Z == 0)
+					{
+						CandidateRewardBranchCells.Add(Grid::ToIndex(
+							FIntPoint(Coordinate.X, Coordinate.Y), State.GridSize));
+					}
 				}
 			}
 
-			if (BestDenseIndex == INDEX_NONE)
+			const auto FindBestSpawn = [&](const bool bProtectRewardBranches)
 			{
-				BestDenseIndex = FallbackDenseIndex;
+				int32 BestDenseIndex = INDEX_NONE;
+				int32 BestRouteDistance = MAX_int32;
+				uint32 BestTieBreak = MAX_uint32;
+				int32 FallbackDenseIndex = INDEX_NONE;
+				int32 FallbackRouteDistance = INDEX_NONE;
+				uint32 FallbackTieBreak = MAX_uint32;
+				for (int32 DenseIndex = 0;
+					DenseIndex < GroundFloor.Result.OpeningMaskByCell.Num();
+					++DenseIndex)
+				{
+					if (GroundFloor.Result.OpeningMaskByCell[DenseIndex] == 0
+						|| GroundFloor.Input.StructureWalkableByCell[DenseIndex] != 0
+						|| !Graph.DistanceFromPursuerByNode.IsValidIndex(DenseIndex)
+						|| Graph.DistanceFromPursuerByNode[DenseIndex] == INDEX_NONE
+						|| (bProtectRewardBranches
+							&& CandidateRewardBranchCells.Contains(DenseIndex)))
+					{
+						continue;
+					}
+					const FIntVector Address(
+						DenseIndex % State.GridSize.X,
+						DenseIndex / State.GridSize.X,
+						0);
+					if (Address == State.PursuerSpawn || Address == State.Exit)
+					{
+						continue;
+					}
+					const int32 RouteDistance =
+						Graph.DistanceFromPursuerByNode[DenseIndex];
+					FRandomStream TieRandom = FGenerationCore::MakeRandomStream(
+						Input.Signature.Seed,
+						ERandomDomain::PlayerPursuerSpawn,
+						DenseIndex);
+					const uint32 TieBreak = TieRandom.GetUnsignedInt();
+					if (RouteDistance > FallbackRouteDistance
+						|| (RouteDistance == FallbackRouteDistance
+							&& TieBreak < FallbackTieBreak))
+					{
+						FallbackDenseIndex = DenseIndex;
+						FallbackRouteDistance = RouteDistance;
+						FallbackTieBreak = TieBreak;
+					}
+					const double RouteDistanceCm =
+						RouteDistance * Input.SharedRules.LogicalTileSizeCm;
+					if (RouteDistanceCm + UE_DOUBLE_SMALL_NUMBER
+						< Input.Difficulty.MinPlayerPursuerRouteDistanceCm)
+					{
+						continue;
+					}
+					if (RouteDistance < BestRouteDistance
+						|| (RouteDistance == BestRouteDistance
+							&& TieBreak < BestTieBreak))
+					{
+						BestDenseIndex = DenseIndex;
+						BestRouteDistance = RouteDistance;
+						BestTieBreak = TieBreak;
+					}
+				}
+				return BestDenseIndex != INDEX_NONE
+					? BestDenseIndex : FallbackDenseIndex;
+			};
+
+			int32 BestDenseIndex = FindBestSpawn(true);
+			if (BestDenseIndex == INDEX_NONE && !CandidateRewardBranchCells.IsEmpty())
+			{
+				BestDenseIndex = FindBestSpawn(false);
 			}
 			if (BestDenseIndex == INDEX_NONE)
 			{
@@ -3001,6 +3044,118 @@ namespace ZeroEscape::LevelGeneration
 				BestDenseIndex % State.GridSize.X,
 				BestDenseIndex / State.GridSize.X,
 				0);
+			return true;
+		}
+
+		bool FinalizeRewardBranches(
+			const FPlacementState& State,
+			const TArray<FFloorSolveRecord>& Records,
+			FZeroEscapeGeneratedLevelPlan& InOutPlan,
+			FZeroEscapeGenerationReport& OutReport)
+		{
+			InOutPlan.RewardBranches.Reset();
+			for (FZeroEscapeGeneratedFloorSummary& Floor : InOutPlan.Floors)
+			{
+				Floor.RewardBranchCount = 0;
+				Floor.RewardBranchCellRatio = 0.0;
+			}
+			if (Records.Num() != State.FloorCount
+				|| InOutPlan.Floors.Num() != State.FloorCount)
+			{
+				return FailLayout(
+					OutReport,
+					EZeroEscapeGenerationStage::GlobalValidation,
+					EZeroEscapeGenerationFailure::SolverInvariantViolation,
+					TEXT("奖励支线定稿缺少逐层结果。"));
+			}
+
+			const auto CoordinateLess = [](const FIntVector A, const FIntVector B)
+			{
+				return A.Z != B.Z ? A.Z < B.Z
+					: A.Y != B.Y ? A.Y < B.Y
+					: A.X < B.X;
+			};
+			const auto BranchLess = [CoordinateLess](
+				const FZeroEscapeGeneratedRewardBranch& A,
+				const FZeroEscapeGeneratedRewardBranch& B)
+			{
+				if (A.EndpointCoordinate != B.EndpointCoordinate)
+				{
+					return CoordinateLess(A.EndpointCoordinate, B.EndpointCoordinate);
+				}
+				if (A.GatewayCoordinate != B.GatewayCoordinate)
+				{
+					return CoordinateLess(A.GatewayCoordinate, B.GatewayCoordinate);
+				}
+				const int32 CommonCount = FMath::Min(
+					A.PathCoordinates.Num(), B.PathCoordinates.Num());
+				for (int32 Index = 0; Index < CommonCount; ++Index)
+				{
+					if (A.PathCoordinates[Index] != B.PathCoordinates[Index])
+					{
+						return CoordinateLess(
+							A.PathCoordinates[Index], B.PathCoordinates[Index]);
+					}
+				}
+				return A.PathCoordinates.Num() < B.PathCoordinates.Num();
+			};
+
+			for (int32 FloorIndex = 0; FloorIndex < Records.Num(); ++FloorIndex)
+			{
+				for (const FZeroEscapeGeneratedRewardBranch& Branch :
+					Records[FloorIndex].Result.CandidateRewardBranches)
+				{
+					if (Branch.PathCoordinates.IsEmpty()
+						|| Branch.EndpointCoordinate != Branch.PathCoordinates.Last()
+						|| Branch.EndpointCoordinate.Z != FloorIndex
+						|| Branch.GatewayCoordinate.Z != FloorIndex)
+					{
+						return FailLayout(
+							OutReport,
+							EZeroEscapeGenerationStage::GlobalValidation,
+							EZeroEscapeGenerationFailure::SolverInvariantViolation,
+							TEXT("楼层路线分析输出了非法奖励支线。"));
+					}
+					const bool bConflictsWithFlowAnchor =
+						Branch.PathCoordinates.Contains(InOutPlan.PlayerSpawnCoordinate)
+						|| Branch.PathCoordinates.Contains(State.PursuerSpawn)
+						|| Branch.PathCoordinates.Contains(State.Exit);
+					if (!bConflictsWithFlowAnchor)
+					{
+						InOutPlan.RewardBranches.Add(Branch);
+					}
+				}
+			}
+			InOutPlan.RewardBranches.Sort(BranchLess);
+
+			TArray<int32> BranchCellCountByFloor;
+			BranchCellCountByFloor.Init(0, State.FloorCount);
+			TSet<FIntVector> SeenEndpoints;
+			for (const FZeroEscapeGeneratedRewardBranch& Branch :
+				InOutPlan.RewardBranches)
+			{
+				const int32 FloorIndex = Branch.EndpointCoordinate.Z;
+				if (!InOutPlan.Floors.IsValidIndex(FloorIndex)
+					|| SeenEndpoints.Contains(Branch.EndpointCoordinate))
+				{
+					return FailLayout(
+						OutReport,
+						EZeroEscapeGenerationStage::GlobalValidation,
+						EZeroEscapeGenerationFailure::SolverInvariantViolation,
+						TEXT("奖励支线端点重复或楼层越界。"));
+				}
+				SeenEndpoints.Add(Branch.EndpointCoordinate);
+				++InOutPlan.Floors[FloorIndex].RewardBranchCount;
+				BranchCellCountByFloor[FloorIndex] += Branch.PathCoordinates.Num();
+			}
+			for (int32 FloorIndex = 0; FloorIndex < State.FloorCount; ++FloorIndex)
+			{
+				FZeroEscapeGeneratedFloorSummary& Floor = InOutPlan.Floors[FloorIndex];
+				Floor.RewardBranchCellRatio = Floor.OrdinaryWalkableCellCount > 0
+					? static_cast<double>(BranchCellCountByFloor[FloorIndex])
+						/ Floor.OrdinaryWalkableCellCount
+					: 0.0;
+			}
 			return true;
 		}
 
@@ -3514,6 +3669,11 @@ namespace ZeroEscape::LevelGeneration
 					State,
 					Records,
 					Graph,
+					CandidatePlan,
+					AttemptReport)
+				|| !FinalizeRewardBranches(
+					State,
+					Records,
 					CandidatePlan,
 					AttemptReport)
 				|| !ValidatePlayerToExitRoute(

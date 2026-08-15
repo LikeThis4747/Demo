@@ -198,9 +198,19 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 	if (!FMath::IsFinite(Route.FloorHeightCm) || Route.FloorHeightCm <= 0.0
 		|| !FMath::IsFinite(Route.AnchorHeightCm) || Route.AnchorHeightCm < 0.0
 		|| Route.MaxConsecutiveStraightTiles <= 0
-		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y))
+		|| Route.MaxConsecutiveStraightTiles > FMath::Max(GridSize.X, GridSize.Y)
+		|| !FMath::IsFinite(Route.RouteOpeningPreferenceLog2Strength)
+		|| Route.RouteOpeningPreferenceLog2Strength < 0.0f
+		|| Route.RouteOpeningPreferenceLog2Strength > 4.0f
+		|| !FMath::IsFinite(Route.RouteQualityEarlyAcceptThreshold)
+		|| Route.RouteQualityEarlyAcceptThreshold < 0.0f
+		|| Route.RouteQualityEarlyAcceptThreshold > 1.0f
+		|| Route.MinimumRewardBranchLengthTiles < 3
+		|| Route.MaximumPreferredRewardBranchLengthTiles
+			< Route.MinimumRewardBranchLengthTiles
+		|| Route.MaximumPreferredRewardBranchLengthTiles > 12)
 	{
-		return Fail(TEXT("SharedRouteConstraints 包含非法层高、锚点高度或连续直线限制。"));
+		return Fail(TEXT("SharedRouteConstraints 包含非法层高、路线软参数或连续直线限制。"));
 	}
 
 	const FZeroEscapeSharedGenerationBudget& Budget = SharedBudget;
@@ -626,11 +636,17 @@ bool UZeroEscapeLevelGenerationProfile::IsConfigured(FString& OutError) const
 			|| Definition.ThreeFloorStairwellChancePercent > 100
 			|| !IsRatio(Definition.MinRequiredEndpointSpatialSeparationRatio)
 			|| !IsRatio(Definition.MinRequiredRouteCoverageRatio)
+			|| Definition.PreferredRewardBranchCount < 0
+			|| Definition.PreferredRewardBranchCount > 12
+			|| !FMath::IsFinite(Definition.PreferredRewardBranchCellRatio)
+			|| Definition.PreferredRewardBranchCellRatio < 0.0
+			|| Definition.PreferredRewardBranchCellRatio > 0.5
+			|| !IsRatio(Definition.PreferredAlternativeRouteCoverageRatio)
 			|| !IsRatio(Definition.MinAdditionalStairSeparationRatio)
 			|| !FMath::IsFinite(Definition.MinPlayerPursuerRouteDistanceCm)
 			|| Definition.MinPlayerPursuerRouteDistanceCm < 0.0)
 		{
-			return Fail(TEXT("难度的三层楼梯间概率、距离比例或出生路线距离非法。"));
+			return Fail(TEXT("难度的三层楼梯间概率、路线软目标、距离比例或出生路线距离非法。"));
 		}
 		bAnyThreeFloorStairwellRequested |=
 			Definition.ThreeFloorStairwellChancePercent > 0;

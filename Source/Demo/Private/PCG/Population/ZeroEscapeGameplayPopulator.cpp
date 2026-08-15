@@ -2,7 +2,7 @@
 
 /**
  * @file ZeroEscapeGameplayPopulator.cpp
- * 职责：读取 Ready 空间快照，原子规划、校验并依次生成机关层和磁力资源层。
+ * 职责：读取 Ready 空间快照，原子规划、校验并生成机关、磁力资源和奖励光团。
  * 边界：不生成空间、不实现候选算法、不改变机关行为；失败只回滚自己 Spawn 的对象。
  */
 
@@ -47,6 +47,7 @@ namespace
 		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return TEXT("GuidedLauncher");
 		case LevelGen::EPopulationPlacementKind::SpikeWheel: return TEXT("SpikeWheel");
 		case LevelGen::EPopulationPlacementKind::MagneticResource: return TEXT("MagneticResource");
+		case LevelGen::EPopulationPlacementKind::EnergyOrb: return TEXT("EnergyOrb");
 		default: return TEXT("Unknown");
 		}
 	}
@@ -77,6 +78,7 @@ namespace
 		case LevelGen::EPopulationPlacementKind::GuidedLauncher: return &Hazards.GuidedLauncherClass;
 		case LevelGen::EPopulationPlacementKind::SpikeWheel: return &Hazards.SpikeWheelClass;
 		case LevelGen::EPopulationPlacementKind::MagneticResource: return &Resources.MagneticResourceClass;
+		case LevelGen::EPopulationPlacementKind::EnergyOrb: return &Resources.EnergyOrbClass;
 		default: return nullptr;
 		}
 	}
@@ -138,6 +140,13 @@ namespace
 				return false;
 			}
 		}
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.EnergyOrbPlacements)
+		{
+			if (!LoadKind(Placement.Kind))
+			{
+				return false;
+			}
+		}
 		return true;
 	}
 
@@ -166,6 +175,11 @@ namespace
 			DirectSpawnRequestCount += Placement.LocalSpawnTransforms.Num();
 			WorldActorBudgetCount += Placement.LocalSpawnTransforms.Num();
 		}
+		for (const LevelGen::FPopulationPlannedPlacement& Placement : Plan.EnergyOrbPlacements)
+		{
+			DirectSpawnRequestCount += Placement.LocalSpawnTransforms.Num();
+			WorldActorBudgetCount += Placement.LocalSpawnTransforms.Num();
+		}
 		const int64 Maximum = static_cast<int64>(ZeroEscape::GenerationLimits::MaxGridCells)
 			* ZeroEscape::GenerationLimits::MaxFloorCount;
 		if (DirectSpawnRequestCount < 0 || DirectSpawnRequestCount > Maximum
@@ -190,11 +204,18 @@ namespace
 				}
 				const bool bIsSpikeWheel =
 					Placement.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel;
+				const bool bIsEnergyOrb =
+					Placement.Kind == LevelGen::EPopulationPlacementKind::EnergyOrb;
 				if (bIsSpikeWheel
 					&& (Placement.LocalSpawnTransforms.Num() != 1
 						|| !Placement.SpikeWheel.bIsConfigured))
 				{
 					OutError = TEXT("SpikeWheel placement requires one transform and a route configuration.");
+					return false;
+				}
+				if (bIsEnergyOrb && Placement.LocalSpawnTransforms.Num() != 1)
+				{
+					OutError = TEXT("EnergyOrb placement requires exactly one transform.");
 					return false;
 				}
 				if (!bIsSpikeWheel && Placement.SpikeWheel.bIsConfigured)
@@ -239,7 +260,8 @@ namespace
 			return true;
 		};
 		return AppendLayer(Plan.HazardPlacements)
-			&& AppendLayer(Plan.ResourcePlacements);
+			&& AppendLayer(Plan.ResourcePlacements)
+			&& AppendLayer(Plan.EnergyOrbPlacements);
 	}
 }
 
@@ -422,14 +444,15 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		SpawnedActors.Add(Spawned);
 	}
 
-	if (PlacementPlan.HazardStats.UnderfilledCount > 0
+	if (PlacementPlan.HazardStats.UnderfilledBudgetTenths > 0
 		|| PlacementPlan.ResourceStats.UnderfilledCount > 0)
 	{
 		UE_LOG(LogZeroEscapePopulator, Warning,
-			TEXT("ZE_POPULATION_UNDERFILL seed=%d hazards=%d/%d resources=%d/%d"),
+			TEXT("ZE_POPULATION_UNDERFILL seed=%d hazard_budget_tenths=%d/%d hazard_placements=%d resources=%d/%d"),
 			LevelPlan.Signature.Seed,
+			PlacementPlan.HazardStats.ActualBudgetTenths,
+			PlacementPlan.HazardStats.TargetBudgetTenths,
 			PlacementPlan.HazardStats.ActualCount,
-			PlacementPlan.HazardStats.TargetCount,
 			PlacementPlan.ResourceStats.ActualCount,
 			PlacementPlan.ResourceStats.TargetCount);
 	}
@@ -472,11 +495,12 @@ bool AZeroEscapeGameplayPopulator::Populate(
 			Group.SafeApproachAddresses.Num());
 	}
 	UE_LOG(LogZeroEscapePopulator, Display,
-		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_target=%d hazard_actual=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
+		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_budget_tenths=%d/%d hazard_placements=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d energy_orbs=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
 		LevelPlan.Signature.Seed,
 		static_cast<long long>(LevelPlan.CanonicalLayoutHash),
 		PlayerMaxWalkSpeedCmPerSecond,
-		PlacementPlan.HazardStats.TargetCount,
+		PlacementPlan.HazardStats.ActualBudgetTenths,
+		PlacementPlan.HazardStats.TargetBudgetTenths,
 		PlacementPlan.HazardStats.ActualCount,
 		PlacementPlan.KindCounts.Pendulums,
 		PlacementPlan.KindCounts.SpikeTrapGroups,
@@ -485,6 +509,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		PlacementPlan.KindCounts.SpikeWheels,
 		PlacementPlan.ResourceStats.TargetCount,
 		PlacementPlan.ResourceStats.ActualCount,
+		PlacementPlan.KindCounts.EnergyOrbs,
 		PlacementPlan.KindCounts.SpikeCandidateAnchors,
 		PlacementPlan.KindCounts.RamCandidateAnchors,
 		PlacementPlan.KindCounts.LauncherCandidateAnchors,
