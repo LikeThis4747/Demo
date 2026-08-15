@@ -1010,12 +1010,6 @@ namespace ZeroEscape::LevelGeneration
 			InOutResult.OneTileRunRatio = RunLengths.IsEmpty()
 				? 1.0 : static_cast<double>(OneTileRuns) / RunLengths.Num();
 
-			TArray<uint8> MainPathCells;
-			MainPathCells.Init(0, OpeningMasks.Num());
-			for (const int32 Cell : MainPath)
-			{
-				MainPathCells[Cell] = 1;
-			}
 			int32 CandidateBranchCells = 0;
 			for (int32 Endpoint = 0; Endpoint < Neighbors.Num(); ++Endpoint)
 			{
@@ -1054,8 +1048,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					++InOutResult.OneCellTerminalSpurCount;
 				}
-				if (MainPathCells[Gateway] == 0
-					|| ReversePath.Num() < Input.MinimumRewardBranchLengthTiles)
+				if (ReversePath.Num() < Input.MinimumRewardBranchLengthTiles)
 				{
 					continue;
 				}
