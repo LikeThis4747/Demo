@@ -51,3 +51,19 @@
 - 性能/质量：90 Seed P95 约 565~842 ms；奖励支线约 1.77/层，一格终止凸起约 2.11~3.04/层，替代路线覆盖约 0.004~0.008。
 - 遗留：用户实玩验收路线、机关节奏与光团可读性；不把 3/4/5 支线和多主路标成已达成。光团吸收及能量规则不在本轮。
 - Git：a9e0acc2f40059387a380b3c16b1d0f5c1be699d 已推送内部 main 并完成远端哈希核验；排除 Level0、StandingImpact、DOC README 与 PPT。
+
+<!-- written by shiqiqiwang at 2026-08-15 14:30 UTC -->
+
+- 摆锤重受击时序：确认运行态 BobBody 碰撞与 CCD 正常，问题是加宽外侧命中跨过 0.08s 预测窗口；DataAsset 的 MaximumPreparationLeadTime 调为 0.16s，LookAhead 维持 850cm，外观/碰撞尺寸不变。
+
+<!-- written by shiqiqiwang at 2026-08-15 14:44 UTC -->
+
+- 摆锤最终回退：用户要求停止改造。已删除 PawnStopper，恢复纯 Engine Cube、无材质覆盖、220x80x150 cm、PivotHeight 610 cm、MaximumPreparationLeadTime 0.08s；Level0 原位重建为单一实例并保存。此前 0.16s 修正已撤销。
+
+<!-- written by shiqiqiwang at 2026-08-15 15:22 UTC -->
+
+## 2026-08-15 — 摆锤 Prepare 旧基线 A/B
+
+- 先将纯 Cube 的 BP、DataAsset 与 Level0 状态提交为 b320f057 并推送核验。
+- 手工恢复 d819a1c2 的表面间距、相对闭合速度和帧自适应 Prepare 预测；未改接收端 Heavy、Pawn=Overlap、0.08 s 数据或 PCG 相位。
+- 关闭编辑器后 DemoEditor Win64 Development 完整构建成功；3e3ee568 已推送 origin/main 并核验远端一致。待用户原复现点验收。

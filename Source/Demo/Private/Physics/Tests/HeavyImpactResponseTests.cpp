@@ -408,7 +408,7 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->LandingControl.MaxTorqueMultiplier, 3.5f);
 		TestEqual(TEXT("Downed reimpact threshold must reject residual contacts by default"),
 			Fixture.Tuning->MinimumDownedReimpactImpulse, 1000.0f);
-		TestEqual(TEXT("Contactless Heavy fallback release delay must remain explicit"),
+		TestEqual(TEXT("Every committed Heavy must preserve the shared contact window"),
 			Fixture.Tuning->PhysicsBodyReleaseDelaySeconds, 0.15f);
 		TestEqual(TEXT("Player-class default same-source protection must remain explicit"),
 			Fixture.Tuning->SameSourceProtectionSeconds, 0.75f);

@@ -9,6 +9,7 @@
 | `DailyReport/` | 按日期保存的阶段或日报 |
 | `Bugs/` | 尚未解决、暂停调查或等待验收的 Bug 记录与索引 |
 | `Outputs/` | 可复用的工具与阶段产出说明；MCP 工具记录放在 `Outputs/MCP/`，PCG 阅读报告放在 `Outputs/PCG/`，动画重定向等制作工作流放在 `Outputs/Animation/`，受击系统接入合同放在 `Outputs/Physics/` |
+| `PPT/` | 中期与末期答辩材料；末期验收 PPT 的提示词放在 `PPT/FinalAcceptance/PPT_Prompts/`，讨论记录放在 `PPT/FinalAcceptance/Discussion_Records/` |
 
 新增文档必须放入用途匹配的子目录；没有合适分类时创建名称明确的新目录，并在此表增加一行。`DOC/` 根目录只保留本目录文件。
 

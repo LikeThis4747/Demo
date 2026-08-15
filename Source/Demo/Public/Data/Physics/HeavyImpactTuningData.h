@@ -101,8 +101,8 @@ public:
 	float MinimumDownedReimpactImpulse = 1000.0f;
 
 	/**
-	 * Fallback seconds before releasing PhysicsBody when Heavy was promoted without an exact committed contact.
-	 * Exact real contacts release PhysicsBody immediately after their first solver result; once released, the Mesh ignores PhysicsBody until recovery;
+	 * Seconds that every committed Heavy keeps blocking PhysicsBody before releasing dynamic impact sources.
+	 * Once released, the Mesh ignores PhysicsBody until recovery;
 	 * WorldStatic and WorldDynamic remain blocking, so walls and floors still participate.
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Heavy Impact|Recovery|Protection",

@@ -238,9 +238,6 @@ private:
 	/** 按请求比例缩放真实接触沿来源方向新增的共同平移速度；保留相对速度与角向响应。 */
 	void ApplyCommittedPhysicalResponseScale(const FHeavyImpactPreparationRequest& Request);
 
-	/** 首个真实接触提交后立即结束 Mesh 对 PhysicsBody 的后续阻挡，防止运动学来源重复顶推。 */
-	void ReleaseCommittedPhysicsBodyContact();
-
 	/** 从 Downed 的另一真实动态刚体接触恢复物理求解，不补冲量。 */
 	void ResumeFromDownedHit(
 		AActor* SourceActor,
@@ -253,7 +250,7 @@ private:
 	/** 在全身物理与 Flight 已有效时消费一次或多次累加的径向速度改变量。 */
 	void ApplyPendingRadialImpact();
 
-	/** 无真实 Commit 的超时/径向事务使用延迟兜底放开 PhysicsBody；真实 Commit 已在回调内立即放开。 */
+	/** 所有 Heavy 提交统一保留配置的短暂 PhysicsBody 阻挡窗口，随后只放开动态来源。 */
 	void ReleasePhysicsBodyCollisionIfDue();
 
 	/** Inactive 时拒绝并刷新上一次命中来源的保护期；其他来源不受影响。 */

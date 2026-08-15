@@ -44,3 +44,10 @@
 - UE 5.8 完整构建、Demo.PCG 43/43、Population 16/16、900 Seed 稳定性与正式 L_Game Seed 12345 运行通过；提交 a9e0acc 已推送并核验远端。
 - 质量未冒充完成：奖励支线当前约 1.77/层，替代路线覆盖接近 0；下一步是用户多 Seed 实玩，再决定调参或做有限结构改进。
 - 光团本轮不含吸收和能量玩法；Level0/StandingImpact/DOC README/PPT 改动不属于该提交。
+
+<!-- written by shiqiqiwang at 2026-08-15 15:22 UTC -->
+
+## 摆锤 Prepare 旧基线 A/B（2026-08-15）
+
+- 纯 Cube 资产基线 b320f057 已先推送；随后手工恢复旧发送端 Prepare 预测，完整 DemoEditor 构建成功，代码提交 3e3ee568 已推送并远端核验。
+- 当前保持 Pawn=Overlap、0.08 s 数据和接收端 Heavy 不变；等待用户验证是否还会穿过身体后再击飞，再决定是否做分层碰撞。

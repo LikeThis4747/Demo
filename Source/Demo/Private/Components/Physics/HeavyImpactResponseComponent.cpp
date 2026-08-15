@@ -950,7 +950,6 @@ void UHeavyImpactResponseComponent::CommitAcceptedImpact(
 	{
 		const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
 		ApplyCommittedPhysicalResponseScale(CommittedRequest);
-		ReleaseCommittedPhysicsBodyContact();
 		ActiveRequest = FHeavyImpactPreparationRequest();
 		UE_LOG(
 			LogHeavyImpact,
@@ -1014,7 +1013,6 @@ void UHeavyImpactResponseComponent::CommitLateAcceptedContact(
 		*NormalImpulse.ToCompactString());
 	const FHeavyImpactPreparationRequest CommittedRequest = ActiveRequest;
 	ApplyCommittedPhysicalResponseScale(CommittedRequest);
-	ReleaseCommittedPhysicsBodyContact();
 	ActiveRequest = FHeavyImpactPreparationRequest();
 	CommittedSourceActor = ExpectedSourceActor;
 	OnImpactCommitted.Broadcast(CommittedRequest);
@@ -1224,19 +1222,7 @@ void UHeavyImpactResponseComponent::ApplyCommittedPhysicalResponseScale(
 	PendingContactPelvisVelocity = FVector::ZeroVector;
 }
 
-/** 首次真实接触已经完成动量交换；后续帧只保留世界几何碰撞，避免运动学锤头持续推入对墙。 */
-void UHeavyImpactResponseComponent::ReleaseCommittedPhysicsBodyContact()
-{
-	if (!IsValid(Mesh))
-	{
-		return;
-	}
-
-	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Ignore);
-	bPhysicsBodyCollisionReleased = true;
-}
-
-/** 无精确 Hit 的超时/径向事务使用延迟兜底放开 PhysicsBody；静态/动态关卡几何不变。 */
+/** 所有 Heavy 提交统一保留短暂 PhysicsBody 阻挡，再放开动态来源；静态/动态关卡几何不变。 */
 void UHeavyImpactResponseComponent::ReleasePhysicsBodyCollisionIfDue()
 {
 	if (bPhysicsBodyCollisionReleased

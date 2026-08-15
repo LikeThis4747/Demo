@@ -56,3 +56,19 @@
 - [x] 每条最终奖励支线端点独立放置能量光团；正式 DataAsset/Blueprint/材质已迁移、编译和回读。
 - [x] UE 完整构建；Demo.PCG 43/43、Population 16/16、PublicSeedStability900、RouteQuality90 与正式 L_Game Seed 12345 运行通过。
 - [ ] 玩家多 Seed 验收；当前约 1.77 奖励支线/层且替代路线覆盖接近 0，3/4/5 支线中心值与多主路仍未稳定达到。
+
+<!-- written by shiqiqiwang at 2026-08-15 14:30 UTC -->
+
+- 摆锤加宽后的“先穿过再重受击”已做资产级时序修正：预测窗口 0.08s→0.16s；自动回读/PIE smoke 通过，待玩家实测验收。
+
+<!-- written by shiqiqiwang at 2026-08-15 14:44 UTC -->
+
+- 摆锤材质/加宽/抬高及后续防穿尝试已全部撤回；当前恢复改造前纯 Cube 状态。冲锤 Vent 改造保留。
+
+<!-- written by shiqiqiwang at 2026-08-15 15:22 UTC -->
+
+## 2026-08-15 — Pendulum Prepare baseline checkpoint
+
+- Pure Cube asset baseline: b320f057, pushed and verified.
+- Old sender-side Prepare prediction manually restored; full DemoEditor build passed.
+- Code checkpoint: 3e3ee568, pushed and verified; player-feel acceptance remains pending.
