@@ -8,7 +8,6 @@
 
 #include "Actors/Hazards/PendulumHazard.h"
 
-#include "CollisionShape.h"
 #include "Components/BoxComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -36,6 +35,44 @@ namespace PendulumHazard
 
 	/** 小于该速度缺口不施加冲量，避免浮点噪声导致无意义微调。 */
 	constexpr float MinimumUsefulSpeedDeficit = 1.0f;
+
+	/** Low-FPS safety window shared semantically with the receiver; normal 30/60 FPS keeps authored timing. */
+	constexpr float MaximumPreparationFrameMultiplier = 2.5f;
+	constexpr float AbsoluteMaximumPreparationSeconds = 0.5f;
+
+	/** 返回从盒体中心沿指定世界方向射线抵达当前朝向盒体表面的距离。 */
+	float CalculateBoxSurfaceDistance(
+		const UBoxComponent& Box,
+		const FVector& WorldDirection)
+	{
+		const FVector NormalizedDirection = WorldDirection.GetSafeNormal();
+		if (NormalizedDirection.IsNearlyZero())
+		{
+			return 0.0f;
+		}
+
+		const FVector LocalDirection =
+			Box.GetComponentQuat().UnrotateVector(NormalizedDirection).GetAbs();
+		const FVector ScaledExtent = Box.GetScaledBoxExtent();
+		float SurfaceDistance = BIG_NUMBER;
+
+		if (LocalDirection.X > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.X / LocalDirection.X);
+		}
+		if (LocalDirection.Y > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.Y / LocalDirection.Y);
+		}
+		if (LocalDirection.Z > KINDA_SMALL_NUMBER)
+		{
+			SurfaceDistance = FMath::Min(SurfaceDistance, ScaledExtent.Z / LocalDirection.Z);
+		}
+
+		return FMath::IsFinite(SurfaceDistance) && SurfaceDistance < BIG_NUMBER
+			? SurfaceDistance
+			: 0.0f;
+	}
 
 }
 
@@ -447,8 +484,10 @@ bool APendulumHazard::BuildPreparationRequest(
 
 	const FVector BobCenter = BobBody->GetComponentLocation();
 	const FVector BobVelocity = BobBody->GetPhysicsLinearVelocity();
+	const FVector ReceiverVelocity = Receiver.GetVelocity();
 	if (BobCenter.ContainsNaN()
-		|| BobVelocity.ContainsNaN())
+		|| BobVelocity.ContainsNaN()
+		|| ReceiverVelocity.ContainsNaN())
 	{
 		return false;
 	}
@@ -462,35 +501,97 @@ bool APendulumHazard::BuildPreparationRequest(
 		return false;
 	}
 
-	const float BobSpeed = BobVelocity.Size();
-	if (!FMath::IsFinite(BobSpeed)
-		|| BobSpeed < TuningData->MinimumHeavyImpactClosingSpeed)
+	FVector ClosestSurfacePoint = FVector::ZeroVector;
+	float ClosestSurfaceDistance = BIG_NUMBER;
+	float ClosestSurfaceDistanceSquared = BIG_NUMBER;
+	if (PredictionPrimitive->GetSquaredDistanceToCollision(
+			BobCenter,
+			ClosestSurfaceDistanceSquared,
+			ClosestSurfacePoint)
+		&& FMath::IsFinite(ClosestSurfaceDistanceSquared)
+		&& ClosestSurfaceDistanceSquared >= 0.0f
+		&& !ClosestSurfacePoint.ContainsNaN())
+	{
+		ClosestSurfaceDistance = FMath::Sqrt(ClosestSurfaceDistanceSquared);
+	}
+	else
+	{
+		ClosestSurfacePoint = FVector::ZeroVector;
+	}
+
+	// 复杂 Physics Asset 查询无法返回最近点时，只回退到同一个权威组件的包围盒，禁止改用外层 Capsule。
+	if (ClosestSurfaceDistance == BIG_NUMBER)
+	{
+		const FVector BoundsOrigin = PredictionPrimitive->Bounds.Origin;
+		const FVector BoundsExtent = PredictionPrimitive->Bounds.BoxExtent;
+
+		const FVector ToBoundsCenter = BoundsOrigin - BobCenter;
+		const float CenterDistance = ToBoundsCenter.Size();
+		const FVector BoundsDirection = ToBoundsCenter.GetSafeNormal();
+		if (!FMath::IsFinite(CenterDistance) || BoundsDirection.IsNearlyZero())
+		{
+			return false;
+		}
+
+		const FVector AbsoluteDirection = BoundsDirection.GetAbs();
+		const float ProjectedExtent = FVector::DotProduct(BoundsExtent, AbsoluteDirection);
+		ClosestSurfaceDistance = FMath::Max(0.0f, CenterDistance - ProjectedExtent);
+		ClosestSurfacePoint = BobCenter + BoundsDirection * ClosestSurfaceDistance;
+	}
+
+	FVector ApproachDirection = (ClosestSurfacePoint - BobCenter).GetSafeNormal();
+	if (ApproachDirection.IsNearlyZero())
+	{
+		ApproachDirection = (Receiver.GetActorLocation() - BobCenter).GetSafeNormal();
+	}
+	if (ApproachDirection.IsNearlyZero())
 	{
 		return false;
 	}
 
-	const float SweepSeconds = TuningData->MaximumPreparationLeadTime;
-	if (!FMath::IsFinite(SweepSeconds) || SweepSeconds <= 0.0f)
+	const FVector RelativeVelocity = BobVelocity - ReceiverVelocity;
+	const float ClosingSpeed = FVector::DotProduct(RelativeVelocity, ApproachDirection);
+	if (!FMath::IsFinite(ClosingSpeed)
+		|| ClosingSpeed < TuningData->MinimumHeavyImpactClosingSpeed)
 	{
 		return false;
 	}
 
-	FHitResult PredictedHit;
-	const bool bWillHitReceiver = PredictionPrimitive->SweepComponent(
-		PredictedHit,
-		BobCenter,
-		BobCenter + BobVelocity * SweepSeconds,
-		BobBody->GetComponentQuat(),
-		FCollisionShape::MakeBox(BobBody->GetScaledBoxExtent()),
-		false);
-	if (!bWillHitReceiver || PredictedHit.bStartPenetrating)
+	const float BobSurfaceDistance =
+		PendulumHazard::CalculateBoxSurfaceDistance(*BobBody, ApproachDirection);
+	if (BobSurfaceDistance <= 0.0f)
 	{
 		return false;
 	}
 
-	const float EstimatedTimeToContact = PredictedHit.Time * SweepSeconds;
+	const float SurfaceGap = FMath::Max(0.0f, ClosestSurfaceDistance - BobSurfaceDistance);
+	const float EstimatedTimeToContact = SurfaceGap / ClosingSpeed;
+	const UWorld* World = GetWorld();
+	const float DeltaSeconds = IsValid(World) ? World->GetDeltaSeconds() : 0.0f;
+	const float FrameAwareMaximumSeconds = FMath::Min(
+		PendulumHazard::AbsoluteMaximumPreparationSeconds,
+		DeltaSeconds * PendulumHazard::MaximumPreparationFrameMultiplier);
+	const float AllowedMaximumSeconds = FMath::Max(
+		TuningData->MaximumPreparationLeadTime,
+		FrameAwareMaximumSeconds);
 	if (!FMath::IsFinite(EstimatedTimeToContact)
-		|| EstimatedTimeToContact <= 0.0f)
+		|| EstimatedTimeToContact > AllowedMaximumSeconds)
+	{
+		return false;
+	}
+
+	const FVector PredictedBobCenter = BobCenter + BobVelocity * EstimatedTimeToContact;
+	const FVector PredictedReceiverSurface =
+		ClosestSurfacePoint + ReceiverVelocity * EstimatedTimeToContact;
+	FVector PredictedContactDirection =
+		(PredictedReceiverSurface - PredictedBobCenter).GetSafeNormal();
+	if (PredictedContactDirection.IsNearlyZero())
+	{
+		PredictedContactDirection = ApproachDirection;
+	}
+	const float PredictedBobSurfaceDistance =
+		PendulumHazard::CalculateBoxSurfaceDistance(*BobBody, PredictedContactDirection);
+	if (PredictedBobSurfaceDistance <= 0.0f)
 	{
 		return false;
 	}
@@ -499,7 +600,8 @@ bool APendulumHazard::BuildPreparationRequest(
 	OutRequest.ImpactId = CurrentSwingImpactId;
 	OutRequest.SourceActor = this;
 	OutRequest.SourceComponent = BobBody;
-	OutRequest.PredictedImpactPoint = PredictedHit.ImpactPoint;
+	OutRequest.PredictedImpactPoint =
+		PredictedBobCenter + PredictedContactDirection * PredictedBobSurfaceDistance;
 	OutRequest.SourceLinearVelocity = BobVelocity;
 	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN();
