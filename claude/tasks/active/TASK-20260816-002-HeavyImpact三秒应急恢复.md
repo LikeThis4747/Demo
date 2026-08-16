@@ -2,7 +2,7 @@
 
 - Owner：Codex `/root`
 - 任务类型：实现
-- 实现文件写入权：占用
+- 实现文件写入权：不占用（代码、构建与自动化已完成，待用户 PIE 验收）
 - Status：active
 - Stage：代码、构建与自动化完成，待用户现场 PIE 验收
 - Created：2026-08-16
@@ -27,6 +27,7 @@
 - 不修改 Heavy DataAsset、PCA、角色、AI、机关、动画、相机、关卡或 PCG。
 - 不加入逐帧“最近安全位置”查询。
 - 不修改、暂存或提交 `claude/_extract_ppt.py`。
+- `Content/Levels/Level0.umap` 是本任务 Owner `/root` 负责的未提交资产改动；其他任务不得修改、暂存或提交，由本任务后续单独验收和收口。
 
 ## 实施检查点
 
