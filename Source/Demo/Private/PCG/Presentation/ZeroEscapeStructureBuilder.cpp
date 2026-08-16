@@ -63,6 +63,8 @@ namespace ZeroEscape::LevelGeneration
 		{
 			Result.RelatedStableId = RelatedStableId;
 			Result.FixedLightLocalTransforms.Reset();
+			Result.StairTurnSpotLightLocalTransforms.Reset();
+			Result.StairEndpointPointLightLocalTransforms.Reset();
 			Result.Error = MoveTemp(Message);
 			return false;
 		}
@@ -466,9 +468,12 @@ namespace ZeroEscape::LevelGeneration
 
 				if (Profile.bSpawnCeilingLights)
 				{
-					for (const FTransform& RelativeLightTransform :
-						Recipe->FixedLightRelativeTransforms)
+					for (int32 LightIndex = 0;
+						LightIndex < Recipe->FixedLightRelativeTransforms.Num();
+						++LightIndex)
 					{
+						const FTransform& RelativeLightTransform =
+							Recipe->FixedLightRelativeTransforms[LightIndex];
 						const FTransform LocalLightTransform =
 							RelativeLightTransform * StructureTransform;
 						if (!FGenerationCore::IsFiniteUnitScaleTransform(LocalLightTransform))
@@ -479,7 +484,21 @@ namespace ZeroEscape::LevelGeneration
 								Structure.StableStructureId,
 								TEXT("完整结构生成了非法的固定灯位 Transform。"));
 						}
-						OutResult.FixedLightLocalTransforms.Add(LocalLightTransform);
+						const bool bIsStair =
+							Recipe->Kind == EZeroEscapeStructureKind::TwoFloorStair
+							|| Recipe->Kind == EZeroEscapeStructureKind::ThreeFloorStairwell;
+						if (!bIsStair)
+						{
+							OutResult.FixedLightLocalTransforms.Add(LocalLightTransform);
+						}
+						else if (LightIndex == Recipe->FixedLightRelativeTransforms.Num() - 1)
+						{
+							OutResult.StairEndpointPointLightLocalTransforms.Add(LocalLightTransform);
+						}
+						else
+						{
+							OutResult.StairTurnSpotLightLocalTransforms.Add(LocalLightTransform);
+						}
 					}
 				}
 

@@ -2,54 +2,33 @@
 
 > 按日期倒序；仅保留完成、验证、决定与遗留，过程细节见任务卡、DailyPlan、夜报和提交记录。
 
-## 2026-08-16 PCG 300cm 机关站与弹性期望量
+## 2026-08-17 夜间只读审计（覆盖 2026-08-16 白天工作）
 
-- WFC/通行图继续使用 600×600cm；Population 在普通格内按开放方向建立 300cm 站。直廊前后站可共存，转角/T 路口重叠半站硬互斥。
-- 双地刺一次放置生成两 Actor 横向覆盖约 600cm；冲锤使用站位侧墙；刺轮/地刺使用地面站；压力代表时长改为 300cm 除玩家名义速度。
-- 机关预算和普通资源数量改为期望量：达到后只为真实覆盖缺口追加；资源随机域不洗牌机关，Actor 安全上限保持硬约束。
-- solo 刺轮收敛为 -2 log2（0.25 倍、非零）；512 Seed 为强组合 802、中组合 288、无优选搭档 265、完全单独 257，483/512 Seed 有组合。
-- 验证：DemoEditor 构建成功；Population 17/17；两个 MCP 污染小项隔离 2/2；关闭测试进程 MCP 后 PublicSeedStability900 独立 Success、退出码 0。
-- 正式 L_Game Seed 12345：机关 91（期望量后覆盖补位 13）、资源 32/32（补位 0）、光团 11、Population Actor 147；生成与 Game setup 成功。
-- 遗留：用户多 Seed 实玩验收长廊覆盖、机关/资源密度、转角站位、高厅摆锤和整体节奏；参数问题优先调现有曲线，不扩框架。
+- 完成：奖励支线能量光团/出口比例闭环、300cm 机关站与弹性期望量、Heavy 三秒应急恢复、三种机关伤害与难度生命、追猎者镜头外恢复；楼梯蓝灯与磁力可拾取闪光完成未提交收尾。
+- 验证：白天记录包含 DemoEditor 完整构建、Population 17/17、PublicSeedStability900、Heavy/CharacterImpact 7/7、光团/出口正式 L_Game PIE；Windows Development 阶段包已生成且 IoStore/UnrealPak Success。本夜未复跑构建、测试或 PIE。
+- 资产审计：双 UE MCP 在线；Level0 打开、PIE 停止；关键关卡、Blueprint、DataAsset 与新增材质实例非 Dirty；父类和 Population/磁力关键引用回读正确。
+- 风险：正式完整一局、目标机启动与玩家手感尚未验收；保存日志仍有 /Engine/EngineMeshes/Humanoid 缺失依赖；BP_MagneticProp 旧破碎错误仍需在当前正式链路复验。
+- 明日：先用同一正式包/正式 PIE 跑通动态 Recast、真实追猎者跨层追逐、机关/光团/出口/死亡，再集中验收 Heavy、追猎者恢复、楼梯蓝灯和磁力闪光。
+- Git：内部工蜂快照结果见 claude/artifacts/nightly/2026-08-17.md。
 
-## 2026-08-16 支线能量光团与出口门槛
+## 2026-08-16 白天汇总
 
-- 完成 AZeroEscapeEnergyOrb、BP_ThrowEnergyOrb 暖黄白核心/橙黄轮廓/轻量火星/点光和约 0.3 秒吸取销毁；表现与玩法状态继续分层。
-- 爆裂投掷调整为正式 1/3 上限、每 30 秒恢复 1 次；光团补 1 次但不溢出，满次数拾取仍计入出口。
-- 出口目标由 GameState 按本局实际光团数向上取整；Easy/Normal/Hard 默认为 35%/50%/75%，比例不进入 Population 随机域。
-- 验证：DemoEditor 完整构建成功；相关 GameFlow + Population 自动化 19/19；资产编译、保存、回读非 Dirty。
-- 正式 L_Game Seed 12345：11 个光团、Normal 要求 6 个；首次拾取 1/3→2/3，1/11 时出口拒绝，6/11 后再次进入并变为 Won；满 3/3 拾取不溢出但继续计数。
-- 遗留：玩家仍需从正常游玩视角验收光团尺寸、亮度、火星密度和吸取手感；HUD 的 1/3 与 0~100 进度本轮明确不做。
+- PCG：600cm WFC 图保持不变，普通机关改用 300cm 站；期望量达到后只为覆盖缺口补位。DemoEditor 构建、Population 17/17、PublicSeedStability900 通过；L_Game Seed 12345 为机关 91、资源 32、光团 11。
+- 游戏闭环：光团补爆裂次数并计入 Easy/Normal/Hard 35%/50%/75% 出口门槛；相关 19/19 自动化与正式 L_Game PIE 通过。
+- 物理/AI：Heavy 三秒应急恢复构建与 7/7 自动化通过；机关伤害/难度生命完成必要编译；追猎者镜头外恢复完整构建通过，均待玩家验收。
+- 表现：楼梯蓝灯与磁力可拾取闪光完成 DemoEditor Development 编译和资产回读，按用户要求未跑自动化/PIE。
+- 交付：Windows Development 阶段包与 IoStore/UnrealPak Success；目标机运行仍未完成。
 
-## 2026-08-16 夜间只读审计（覆盖 2026-08-15 白天工作）
+## 2026-08-15 摘要
 
-- PCG：完成奖励支线/端点能量光团、上下文机关评分、资源硬间距移除和高厅主路覆盖 0.15 软奖励；保持公开 Seed、合法性、Population 预算和光团合同。
-- PCG 白天证据：UE5.8 完整构建；Demo.PCG 43/43，含 PublicSeedStability900；90 Seed P95 约 519/765/775 ms。玩家多 Seed 路线/节奏/光团可读性仍待验收。
-- 物理与表现：摆锤恢复纯 Cube 和旧 Prepare；Heavy 统一保留 0.15 秒 PhysicsBody 阻挡；爆裂投掷红光/火星/火焰烟雾与普通投掷 1.5 秒 Stop 已形成技术证据，均待玩家画面复测。
-- 资产只读审计已执行：官方与本地 UE MCP 在线，Level0 打开、PIE 停止；关键关卡、Blueprint 和 DataAsset 非 Dirty；摆锤/冲锤父类正确，Population 仍引用 BP_ThrowEnergyOrb。
-- 风险：2026-08-15 保存日志记录 21 个 BP_MagneticProp 破碎配置错误；当前未运行 PIE，不能确认是否仍存在，次日应在正式一局复验并采集 Actor/组件证据。
-- 新玩法优先建议：把现有光团转为“磁吸电芯”，送入出口插槽后解锁 Exit；先做一个目标链，不新增任务框架。
-- Git：夜间快照与推送结果见 `claude/artifacts/nightly/2026-08-16.md`。
-
-## 2026-08-15 白天汇总
-
-- PCG 路线/机关/奖励支线、高厅摆锤主路软奖励、爆裂投掷表现、普通投掷 Stop 与 Heavy 接触窗口均形成阶段提交。
-- 技术回归通过，但动态 Recast/真实追猎者多层追逐、玩家路线观感、Heavy/爆裂/Stop 画面与 Development 打包尚未闭环。
+- PCG 路线/机关/奖励支线、高厅摆锤主路软奖励、爆裂投掷表现、普通投掷 Stop 与 Heavy 接触窗口形成阶段提交。
+- 技术回归通过；动态 Recast/真实追猎者多层追逐、玩家观感与 Development 运行回归尚未闭环。
 
 ## 2026-08-01 至 2026-08-14 摘要
 
 - 主菜单 Seed/难度 → PCG/Population → 玩家/追猎者 → Exit/死亡/暂停/结算/重开闭环已形成。
-- 多层 PCG、Population、摆锤/冲锤/刺轮、磁力/投掷、HeavyImpact 与追猎者形成阶段证据；正式一局动态导航、玩家手感和打包仍是交付门槛。
+- 多层 PCG、Population、摆锤/冲锤/刺轮、磁力/投掷、HeavyImpact 与追猎者形成阶段证据；正式一局动态导航和玩家手感仍是交付门槛。
 
 ## 2026-07 月度摘要
 
 - 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
-
-<!-- written by shiqiqiwang at 2026-08-16 13:41 UTC -->
-
-## 2026-08-16 机关伤害与难度生命
-
-- 完成三种机关玩家伤害：摆锤 30、冲锤 30、制导推进 15；追猎者排除。
-- 完成 GameMode 难度生命配置：800/600/400，调试覆盖当前统一 1000。
-- 所有数值暴露为 DataAsset 或 GameMode 蓝图默认值；未新增伤害框架。
-- UHT 与 C++ 编译通过；最终 DLL 链接被打开的 UE 编辑器占用。用户明确取消自动化与 PIE。

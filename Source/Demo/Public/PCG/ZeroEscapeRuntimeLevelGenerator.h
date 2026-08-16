@@ -132,6 +132,8 @@ private:
 	bool SpawnConfiguredLights(
 		const FZeroEscapeGeneratedLevelPlan& Plan,
 		TConstArrayView<FTransform> FixedLightLocalTransforms,
+		TConstArrayView<FTransform> StairTurnSpotLightLocalTransforms,
+		TConstArrayView<FTransform> StairEndpointPointLightLocalTransforms,
 		FZeroEscapeGenerationReport& InOutReport);
 
 	/** 在实例化前解析本次追猎者对应的 Dynamic RecastNavMesh 并先绑定完成事件。 */

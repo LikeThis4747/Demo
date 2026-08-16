@@ -19,6 +19,8 @@
 class UCameraComponent;
 class UMagneticGrabTuningData;
 class UMagneticObjectComponent;
+class UMaterialInterface;
+class UMeshComponent;
 class UPhysicsHandleComponent;
 class UPrimitiveComponent;
 
@@ -106,6 +108,18 @@ private:
 
 	/** 在有界 PhysicsBody 重叠结果中，按屏幕轮廓距离、世界距离与道具优先级选出最佳候选。 */
 	UPrimitiveComponent* FindBestCandidate(UMagneticObjectComponent*& OutMagneticObject) const;
+
+	/** 低频复用正式候选选取并切换蓝色 Overlay；持有期间不查询候选。 */
+	void RefreshPickupHighlight();
+
+	/** 恢复提示前 Overlay 并清空候选弱引用。 */
+	void ClearPickupHighlight();
+
+	/** 配置成功后启动单个低频提示 Timer。 */
+	void StartPickupHighlightRefresh();
+
+	/** 停止提示 Timer，不影响爆裂次数恢复。 */
+	void StopPickupHighlightRefresh();
 
 	/** 在质心开始抓取，快照所有临时覆盖值，并启用持有期间 Tick。 */
 	void GrabCandidate(UPrimitiveComponent* CandidateComponent, UMagneticObjectComponent* MagneticObject);
@@ -220,6 +234,20 @@ private:
 
 	/** 投掷或自动释放后保持 true，直到收到右键松开，防止长按立即重新抓取。 */
 	bool bAwaitingGrabRelease = false;
+
+	/** 当前被蓝色可拾取提示覆盖的精确 Mesh。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UMeshComponent> PickupHighlightedMesh;
+
+	/** 蓝色提示启用前的 Overlay；候选切换、抓取和销毁时原样恢复。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UMaterialInterface> PreviousPickupOverlayMaterial = nullptr;
+
+	/** 自由状态下低频刷新候选并驱动闪烁，不启用额外 Component Tick。 */
+	FTimerHandle PickupHighlightRefreshTimer;
+
+	/** 当前 Timer 相位是否显示蓝色 Overlay。 */
+	bool bPickupHighlightVisible = false;
 
 	/** 当前可正式武装的爆裂投掷次数；Configure 时从现有磁力 DA 初始化。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "磁力|爆裂投掷", meta = (AllowPrivateAccess = "true"))

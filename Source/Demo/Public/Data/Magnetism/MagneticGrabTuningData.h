@@ -55,6 +55,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|选取", meta = (ClampMin = "1", ClampMax = "128", UIMin = "1", UIMax = "128"))
 	int32 MaximumCandidateChecks = 32;
 
+	/** 自由状态下当前可拾取候选闪烁使用的蓝色覆盖材质；为空时只停用提示，不改变拾取。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|选取|表现")
+	TObjectPtr<UMaterialInterface> PickupRangeOverlayMaterial = nullptr;
+
 	/**
 	 * 对应 C++ 属性 HoldDistance，由 CalculateDesiredHoldLocation 计算物体前向目标点，单位 cm。
 	 * 初始值：220；编辑范围：80~600。调高让物体离玩家更远，调低更贴近身体且更易发生角色周边碰撞。

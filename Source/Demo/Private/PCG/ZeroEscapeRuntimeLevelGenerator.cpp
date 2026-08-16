@@ -10,8 +10,12 @@
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/LightComponent.h"
+#include "Components/PointLightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SpotLightComponent.h"
+#include "Engine/PointLight.h"
+#include "Engine/SpotLight.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
 #include "HAL/PlatformTime.h"
@@ -33,6 +37,14 @@ DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePCG, Log, All);
 
 namespace
 {
+	const FLinearColor StairGuidanceBlue(0.05f, 0.28f, 1.0f);
+	constexpr float StairTurnSpotLightIntensity = 12000.0f;
+	constexpr float StairTurnSpotLightRadiusCm = 1800.0f;
+	constexpr float StairTurnSpotLightInnerConeDegrees = 18.0f;
+	constexpr float StairTurnSpotLightOuterConeDegrees = 34.0f;
+	constexpr float StairEndpointPointLightIntensity = 9000.0f;
+	constexpr float StairEndpointPointLightRadiusCm = 1200.0f;
+
 	template <typename TEnum>
 	FString GetStableEnumName(const TEnum Value)
 	{
@@ -340,12 +352,18 @@ bool AZeroEscapeRuntimeLevelGenerator::InstantiateValidatedPlan(
 			MoveTemp(BuildResult.Error));
 	}
 	return SpawnConfiguredLights(
-		Plan, BuildResult.FixedLightLocalTransforms, InOutReport);
+		Plan,
+		BuildResult.FixedLightLocalTransforms,
+		BuildResult.StairTurnSpotLightLocalTransforms,
+		BuildResult.StairEndpointPointLightLocalTransforms,
+		InOutReport);
 }
 
 bool AZeroEscapeRuntimeLevelGenerator::SpawnConfiguredLights(
 	const FZeroEscapeGeneratedLevelPlan& Plan,
 	const TConstArrayView<FTransform> FixedLightLocalTransforms,
+	const TConstArrayView<FTransform> StairTurnSpotLightLocalTransforms,
+	const TConstArrayView<FTransform> StairEndpointPointLightLocalTransforms,
 	FZeroEscapeGenerationReport& InOutReport)
 {
 	if (!PresentationProfile->bSpawnCeilingLights)
@@ -477,6 +495,84 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnConfiguredLights(
 		{
 			return false;
 		}
+	}
+
+	auto ResolveLightWorldTransform = [this, &InOutReport](
+		const FTransform& LocalTransform,
+		FTransform& OutWorldTransform) -> bool
+	{
+		if (ConvertLocalToWorld(*GeneratedRoot, LocalTransform, OutWorldTransform))
+		{
+			return true;
+		}
+		return FailReport(
+			InOutReport,
+			EZeroEscapeGenerationStage::Instantiation,
+			EZeroEscapeGenerationFailure::InstantiationFailed,
+			INDEX_NONE,
+			TEXT("楼梯引导灯局部 Transform 无法转换到世界空间。"));
+	};
+
+	for (const FTransform& LocalTransform : StairTurnSpotLightLocalTransforms)
+	{
+		FTransform WorldTransform;
+		if (!ResolveLightWorldTransform(LocalTransform, WorldTransform))
+		{
+			return false;
+		}
+
+		ASpotLight* SpotLight = World->SpawnActor<ASpotLight>(
+			ASpotLight::StaticClass(), WorldTransform, SpawnParameters);
+		USpotLightComponent* SpotComponent = IsValid(SpotLight)
+			? SpotLight->FindComponentByClass<USpotLightComponent>()
+			: nullptr;
+		if (!IsValid(SpotLight) || !IsValid(SpotComponent))
+		{
+			return FailReport(
+				InOutReport,
+				EZeroEscapeGenerationStage::Instantiation,
+				EZeroEscapeGenerationFailure::InstantiationFailed,
+				INDEX_NONE,
+				TEXT("生成楼梯转角聚光灯失败。"));
+		}
+
+		SpotComponent->SetMobility(EComponentMobility::Movable);
+		SpotComponent->SetLightColor(StairGuidanceBlue);
+		SpotComponent->SetIntensity(StairTurnSpotLightIntensity);
+		SpotComponent->SetAttenuationRadius(StairTurnSpotLightRadiusCm);
+		SpotComponent->SetInnerConeAngle(StairTurnSpotLightInnerConeDegrees);
+		SpotComponent->SetOuterConeAngle(StairTurnSpotLightOuterConeDegrees);
+		GeneratedLightActors.Add(SpotLight);
+	}
+
+	for (const FTransform& LocalTransform : StairEndpointPointLightLocalTransforms)
+	{
+		FTransform WorldTransform;
+		if (!ResolveLightWorldTransform(LocalTransform, WorldTransform))
+		{
+			return false;
+		}
+
+		APointLight* PointLight = World->SpawnActor<APointLight>(
+			APointLight::StaticClass(), WorldTransform, SpawnParameters);
+		UPointLightComponent* PointComponent = IsValid(PointLight)
+			? PointLight->FindComponentByClass<UPointLightComponent>()
+			: nullptr;
+		if (!IsValid(PointLight) || !IsValid(PointComponent))
+		{
+			return FailReport(
+				InOutReport,
+				EZeroEscapeGenerationStage::Instantiation,
+				EZeroEscapeGenerationFailure::InstantiationFailed,
+				INDEX_NONE,
+				TEXT("生成楼梯终点点光源失败。"));
+		}
+
+		PointComponent->SetMobility(EComponentMobility::Movable);
+		PointComponent->SetLightColor(StairGuidanceBlue);
+		PointComponent->SetIntensity(StairEndpointPointLightIntensity);
+		PointComponent->SetAttenuationRadius(StairEndpointPointLightRadiusCm);
+		GeneratedLightActors.Add(PointLight);
 	}
 	return true;
 }

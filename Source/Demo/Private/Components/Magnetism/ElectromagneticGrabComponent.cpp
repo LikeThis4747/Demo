@@ -13,6 +13,7 @@
 #include "Camera/CameraComponent.h"
 #include "Components/Magnetism/MagneticObjectComponent.h"
 #include "Components/Magnetism/MagneticThrowBreakComponent.h"
+#include "Components/MeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Data/Magnetism/MagneticGrabTuningData.h"
 #include "Engine/OverlapResult.h"
@@ -22,6 +23,7 @@
 #include "GameFramework/PlayerController.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "Physics/DemoCollisionChannels.h"
+#include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeMagneticGrab, Log, All);
 
@@ -35,6 +37,9 @@ namespace UE::ZeroEscape::Magnetism
 
 	/** 每个道具优先级点降低的固定分数，用于处理屏幕轮廓重叠时的歧义。 */
 	constexpr float PriorityScoreWeight = 0.05f;
+
+	/** 单个自由状态 Timer 同时刷新候选和切换闪烁相位。 */
+	constexpr float PickupHighlightRefreshSeconds = 0.25f;
 }
 
 /** 创建可按需 Tick 的组件；默认关闭 Tick，只有成功持有刚体后才开启。 */
@@ -48,6 +53,8 @@ UElectromagneticGrabComponent::UElectromagneticGrabComponent()
 /** 保存角色装配引用，校验唯一 Tuning 资产，声明 PrePhysics 顺序并应用 Physics Handle 参数。 */
 void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysicsHandle, UCameraComponent* InViewCamera)
 {
+	StopPickupHighlightRefresh();
+	ClearPickupHighlight();
 	StopExplosionRecharge();
 	AvailableExplosionCharges = 0;
 	if (GrabPhase != EGrabPhase::None || HeldComponent.IsValid() || bHandleTargetInterpolationOverridden)
@@ -107,6 +114,7 @@ void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysics
 	AvailableExplosionCharges = TuningData->InitialExplosionCharges;
 	SetExplosionModeActive(false);
 	bConfigurationReady = true;
+	StartPickupHighlightRefresh();
 	StartExplosionRechargeIfNeeded();
 }
 
@@ -398,6 +406,8 @@ void UElectromagneticGrabComponent::TickComponent(
 /** World 或 Owner 销毁前恢复全部临时物理覆盖，随后再交还基类生命周期。 */
 void UElectromagneticGrabComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	StopPickupHighlightRefresh();
+	ClearPickupHighlight();
 	StopExplosionRecharge();
 	ReleaseHeldObject(false);
 	if (IsValid(PhysicsHandle))
@@ -526,6 +536,77 @@ UPrimitiveComponent* UElectromagneticGrabComponent::FindBestCandidate(UMagneticO
 	return BestComponent;
 }
 
+void UElectromagneticGrabComponent::StartPickupHighlightRefresh()
+{
+	UWorld* World = GetWorld();
+	if (!IsConfigurationReady()
+		|| !IsValid(World)
+		|| !IsValid(TuningData->PickupRangeOverlayMaterial))
+	{
+		return;
+	}
+
+	World->GetTimerManager().SetTimer(
+		PickupHighlightRefreshTimer,
+		this,
+		&UElectromagneticGrabComponent::RefreshPickupHighlight,
+		UE::ZeroEscape::Magnetism::PickupHighlightRefreshSeconds,
+		true,
+		0.0f);
+}
+
+void UElectromagneticGrabComponent::StopPickupHighlightRefresh()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(PickupHighlightRefreshTimer);
+	}
+}
+
+void UElectromagneticGrabComponent::RefreshPickupHighlight()
+{
+	if (!IsConfigurationReady()
+		|| IsHoldingObject()
+		|| !IsValid(TuningData->PickupRangeOverlayMaterial))
+	{
+		ClearPickupHighlight();
+		return;
+	}
+
+	UMagneticObjectComponent* IgnoredMagneticObject = nullptr;
+	UMeshComponent* CandidateMesh = Cast<UMeshComponent>(
+		FindBestCandidate(IgnoredMagneticObject));
+	if (!IsValid(CandidateMesh))
+	{
+		ClearPickupHighlight();
+		return;
+	}
+
+	if (PickupHighlightedMesh.Get() != CandidateMesh)
+	{
+		ClearPickupHighlight();
+		PickupHighlightedMesh = CandidateMesh;
+		PreviousPickupOverlayMaterial = CandidateMesh->GetOverlayMaterial();
+	}
+
+	bPickupHighlightVisible = !bPickupHighlightVisible;
+	CandidateMesh->SetOverlayMaterial(
+		bPickupHighlightVisible
+			? TuningData->PickupRangeOverlayMaterial.Get()
+			: PreviousPickupOverlayMaterial.Get());
+}
+
+void UElectromagneticGrabComponent::ClearPickupHighlight()
+{
+	if (UMeshComponent* HighlightedMesh = PickupHighlightedMesh.Get())
+	{
+		HighlightedMesh->SetOverlayMaterial(PreviousPickupOverlayMaterial.Get());
+	}
+	PickupHighlightedMesh.Reset();
+	PreviousPickupOverlayMaterial = nullptr;
+	bPickupHighlightVisible = false;
+}
+
 /** 快照可逆物理状态、在质心建立 Handle，并用全局角阻尼允许碰撞后自然旋转逐渐停止。 */
 void UElectromagneticGrabComponent::GrabCandidate(
 	UPrimitiveComponent* CandidateComponent,
@@ -547,6 +628,8 @@ void UElectromagneticGrabComponent::GrabCandidate(
 			*GetNameSafe(CandidateComponent->GetOwner()));
 		return;
 	}
+
+	ClearPickupHighlight();
 
 	// 先通过破碎守卫并结束共享投掷事务，再快照抓取基线；否则会把攻击通道/CCD/通知误当成原始值。
 	MagneticObject->DisarmThrownImpact();
