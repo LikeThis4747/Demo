@@ -420,6 +420,10 @@ namespace ZeroEscape::Physics::Tests
 			Fixture.Tuning->RecoveryRetrySeconds, 0.20f);
 		TestEqual(TEXT("安全站位阻塞必须有 1.5 秒截止"),
 			Fixture.Tuning->MaximumRecoveryBlockedSeconds, 1.5f);
+		TestEqual(TEXT("HeavyImpact default bounded emergency deadline must total 3 seconds"),
+			Fixture.Tuning->MaximumSimulationSeconds
+				+ Fixture.Tuning->MaximumRecoveryBlockedSeconds,
+			3.0f);
 		TestEqual(TEXT("Snapshot 到起身动画的默认淡入必须稳定"),
 			Fixture.Tuning->RecoverySnapshotBlendSeconds, 0.30f);
 		if (!TestTrue(TEXT("瞬态调参夹具的完整基线必须有效"),

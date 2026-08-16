@@ -300,17 +300,25 @@ private:
 	void QueueRecoveryAttempt(uint32 ExpectedTransactionSerial);
 	void TryBeginRecovery(uint32 ExpectedTransactionSerial);
 	bool BuildRecoveryPlan(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
+	bool BuildRecoveryPlanFromAnchor(
+		const FVector& SearchAnchor,
+		float FloorProbeDistance,
+		FHeavyImpactRecoveryPlan& OutPlan,
+		FString& OutReason);
 	bool PopulateRecoveryAnimation(FHeavyImpactRecoveryPlan& OutPlan, FString& OutReason);
 	bool DetermineRecoveryOrientation(bool& bOutFaceUp, FRotator& OutRotation, FString& OutReason);
 	bool TryFindRecoveryCapsuleLocation(
 		const FRotator& UprightRotation,
+		const FVector& SearchAnchor,
+		float FloorProbeDistance,
 		FVector& OutLocation,
 		FString& OutReason) const;
 	bool TryResolveRecoveryCandidate(
-		const FVector& PelvisAnchor,
+		const FVector& SearchAnchor,
 		const FVector2D& HorizontalOffset,
 		const FRotator& UprightRotation,
 		float MaximumAdjustment,
+		float FloorProbeDistance,
 		FVector& OutLocation) const;
 	/** Rejects floor-valid candidates that lie across WorldStatic from the pre-impact gameplay side. */
 	bool IsRecoveryLocationOnPreImpactSide(const FVector& Location) const;
@@ -319,12 +327,14 @@ private:
 		const FVector& Location,
 		const FRotator& Rotation,
 		FString& OutReason) const;
-	/** Sweeps from a clear start, or directly commits a validated destination when the QueryOnly start already penetrates geometry. */
+	/** Normally sweeps from a clear start; a bounded emergency may directly commit an already revalidated destination. */
 	bool TryCommitRecoveryCapsulePlacement(
 		const FHeavyImpactRecoveryPlan& Plan,
+		bool bAllowValidatedDirectPlacement,
 		FString& OutReason);
 	bool BeginPhysicalToAnimationHandoff(
 		const FHeavyImpactRecoveryPlan& Plan,
+		bool bAllowValidatedDirectPlacement,
 		FString& OutReason);
 	/** 在物理交接提交前同步创建动态 Montage；失败时调用方仍可保持当前物理状态。 */
 	bool StartRecoveryMontageNow(
