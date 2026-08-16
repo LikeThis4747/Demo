@@ -312,6 +312,17 @@ private:
 		const FRotator& UprightRotation,
 		float MaximumAdjustment,
 		FVector& OutLocation) const;
+	/** Rejects floor-valid candidates that lie across WorldStatic from the pre-impact gameplay side. */
+	bool IsRecoveryLocationOnPreImpactSide(const FVector& Location) const;
+	/** Revalidates a standing Capsule destination against the saved gameplay responses and floor. */
+	bool ValidateRecoveryCapsulePlacement(
+		const FVector& Location,
+		const FRotator& Rotation,
+		FString& OutReason) const;
+	/** Sweeps from a clear start, or directly commits a validated destination when the QueryOnly start already penetrates geometry. */
+	bool TryCommitRecoveryCapsulePlacement(
+		const FHeavyImpactRecoveryPlan& Plan,
+		FString& OutReason);
 	bool BeginPhysicalToAnimationHandoff(
 		const FHeavyImpactRecoveryPlan& Plan,
 		FString& OutReason);

@@ -789,6 +789,16 @@ bool UHeavyImpactResponseComponent::EnterPreparedPhysicalState(FString& OutReaso
 	Mesh->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	Mesh->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
 	Mesh->SetAllBodiesNotifyRigidBodyCollision(true);
+	// The QueryOnly Capsule intentionally does not constrain ragdoll flight. CCD therefore belongs
+	// to the temporarily authoritative Physics Asset bodies, and the captured baseline restores it.
+	Mesh->BodyInstance.SetUseCCD(true);
+	for (const FHeavyImpactBodySnapshot& BodySnapshot : RecoveryBaseline.Bodies)
+	{
+		if (FBodyInstance* Body = Mesh->GetBodyInstance(BodySnapshot.BoneName))
+		{
+			Body->SetUseCCD(true);
+		}
+	}
 
 	bPureRagdollComparisonActive =
 		HeavyImpactRuntime::CVarPureRagdollComparison.GetValueOnGameThread() == 1;
@@ -1652,15 +1662,8 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 	{
 		if (bPlanBuilt)
 		{
-			FHitResult EmergencyPlacementHit;
-			const bool bPlaced = Character->SetActorLocationAndRotation(
-				Plan.CapsuleLocation,
-				Plan.CapsuleRotation,
-				true,
-				&EmergencyPlacementHit,
-				ETeleportType::TeleportPhysics);
-			if (bPlaced
-				&& Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f))
+			FString EmergencyPlacementReason;
+			if (TryCommitRecoveryCapsulePlacement(Plan, EmergencyPlacementReason))
 			{
 				UE_LOG(
 					LogHeavyImpact,
@@ -1673,18 +1676,17 @@ void UHeavyImpactResponseComponent::TryBeginRecovery(const uint32 ExpectedTransa
 				CompleteRecovery(TEXT("Infrastructure fallback restored gameplay at a validated local location."), true);
 				return;
 			}
+			FailureReason = MoveTemp(EmergencyPlacementReason);
 		}
 
 		UE_LOG(
 			LogHeavyImpact,
 			Error,
-			TEXT("HeavyImpact could not resolve a safe local get-up capsule on %s after %.2f seconds: %s. Restoring gameplay at the current HeavyImpact location without a get-up animation."),
+			TEXT("HeavyImpact could not commit a safe local get-up capsule on %s after %.2f seconds: %s. Keeping the collision-disabled Downed state instead of restoring gameplay at an unsafe location."),
 			*GetNameSafe(GetOwner()),
 			BlockedSeconds,
 			*FailureReason);
-		SetState(EHeavyImpactState::Recovering);
-		RecoveryPhase = EHeavyImpactRecoveryPhase::None;
-		CompleteRecovery(TEXT("Recovery deadline restored gameplay at the current HeavyImpact location."), true);
+		ScheduleRecoveryAttempt(Tuning->RecoveryRetrySeconds);
 		return;
 	}
 
@@ -1825,11 +1827,11 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(HeavyImpactRecoveryPath), false, Character);
 	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
 
-	// A full ragdoll owns its flight. Only if the final pelvis ended just across a structural wall
-	// do we use the pre-impact side to bias the bounded get-up placement back through that thin wall.
+	// A full ragdoll owns its flight. If it crossed WorldStatic, the pre-impact position identifies
+	// only the playable side of that wall; it is never used as the recovery destination.
 	FHitResult CrossedWallHit;
 	FVector InwardWallDirection = FVector::ZeroVector;
-	bool bCrossedNearbyStructuralWall = false;
+	bool bCrossedStructuralWall = false;
 	if (RecoveryBaseline.bValid)
 	{
 		const FVector PreImpactLocation =
@@ -1854,18 +1856,14 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 			InwardWallDirection = FVector::VectorPlaneProject(
 				CrossedWallHit.ImpactNormal,
 				FVector::UpVector).GetSafeNormal();
-			const float WallToPelvisDistance = FVector::Dist2D(
-				CrossedWallHit.ImpactPoint,
-				PelvisAnchor);
-			bCrossedNearbyStructuralWall = !InwardWallDirection.IsNearlyZero()
-				&& WallToPelvisDistance <= MaximumAdjustment + Radius;
+			bCrossedStructuralWall = !InwardWallDirection.IsNearlyZero();
 		}
 	}
 
-	// If the pelvis only just crossed a nearby structural wall, first try the exact
-	// standing-capsule clearance point on the pre-impact side. The pre-impact transform
-	// only identifies that side; it is never used as the recovery destination.
-	if (bCrossedNearbyStructuralWall)
+	// When CCD still leaves a body across a thin wall, use the nearest standing-capsule
+	// clearance point on the original side. This may exceed the normal 60 cm presentation
+	// adjustment, but it never returns to the old pre-impact position.
+	if (bCrossedStructuralWall)
 	{
 		constexpr float RecoveryWallClearanceCm = 2.0f;
 		const FVector DesiredInsideLocation = CrossedWallHit.ImpactPoint
@@ -1873,14 +1871,17 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 		const FVector2D InwardOffset(
 			DesiredInsideLocation.X - PelvisAnchor.X,
 			DesiredInsideLocation.Y - PelvisAnchor.Y);
+		const float ContainmentAdjustment = FMath::Max(
+			MaximumAdjustment,
+			InwardOffset.Size() + RecoveryWallClearanceCm);
 		FVector InsideCandidate;
-		if (InwardOffset.Size() <= MaximumAdjustment + UE_KINDA_SMALL_NUMBER
-			&& TryResolveRecoveryCandidate(
+		if (TryResolveRecoveryCandidate(
 				PelvisAnchor,
 				InwardOffset,
 				UprightRotation,
-				MaximumAdjustment,
+				ContainmentAdjustment,
 				InsideCandidate)
+			&& IsRecoveryLocationOnPreImpactSide(InsideCandidate)
 			&& FVector::DotProduct(
 				InsideCandidate - CrossedWallHit.ImpactPoint,
 				InwardWallDirection) >= Radius)
@@ -1962,7 +1963,12 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 				continue;
 			}
 
-			if (bCrossedNearbyStructuralWall)
+			if (!IsRecoveryLocationOnPreImpactSide(Candidate))
+			{
+				continue;
+			}
+
+			if (bCrossedStructuralWall)
 			{
 				const float CandidateClearance = FVector::DotProduct(
 					Candidate - CrossedWallHit.ImpactPoint,
@@ -1976,7 +1982,7 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 			const FVector HorizontalDelta = FVector::VectorPlaneProject(
 				Candidate - PelvisAnchor,
 				FVector::UpVector);
-			if (!bCrossedNearbyStructuralWall && !HorizontalDelta.IsNearlyZero(0.1f))
+			if (!bCrossedStructuralWall && !HorizontalDelta.IsNearlyZero(0.1f))
 			{
 				FHitResult PathHit;
 				bool bPathBlocked = false;
@@ -2035,7 +2041,7 @@ bool UHeavyImpactResponseComponent::TryFindRecoveryCapsuleLocation(
 	}
 
 	OutReason = FString::Printf(
-		TEXT("No walkable, non-overlapping capsule location was reachable within %.0f cm without crossing blocking geometry."),
+		TEXT("No walkable, non-overlapping capsule location was reachable on the pre-impact side within %.0f cm."),
 		MaximumAdjustment);
 	return false;
 }
@@ -2130,6 +2136,166 @@ bool UHeavyImpactResponseComponent::TryResolveRecoveryCandidate(
 	return true;
 }
 
+/** A floor outside the corridor is not a safe recovery point merely because it is walkable. */
+bool UHeavyImpactResponseComponent::IsRecoveryLocationOnPreImpactSide(
+	const FVector& Location) const
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World) || !IsValid(Character) || !RecoveryBaseline.bValid)
+	{
+		return false;
+	}
+
+	const FVector Start = RecoveryBaseline.PreImpactCharacterTransform.GetLocation();
+	if (Start.Equals(Location, 1.0f))
+	{
+		return true;
+	}
+
+	FCollisionObjectQueryParams WallObjects;
+	WallObjects.AddObjectTypesToQuery(ECC_WorldStatic);
+	const FCollisionQueryParams WallQuery(
+		SCENE_QUERY_STAT(HeavyImpactRecoveryPlayableSide),
+		false,
+		Character);
+	return !World->LineTraceTestByObjectType(Start, Location, WallObjects, WallQuery);
+}
+
+/** Revalidates a recovery destination immediately before collision and movement authority return to gameplay. */
+bool UHeavyImpactResponseComponent::ValidateRecoveryCapsulePlacement(
+	const FVector& Location,
+	const FRotator& Rotation,
+	FString& OutReason) const
+{
+	UWorld* World = GetWorld();
+	if (!IsValid(World)
+		|| !IsValid(Character)
+		|| !IsValid(Movement)
+		|| !IsValid(Capsule)
+		|| !RecoveryBaseline.bValid
+		|| !FMath::IsFinite(Location.X)
+		|| !FMath::IsFinite(Location.Y)
+		|| !FMath::IsFinite(Location.Z)
+		|| Rotation.ContainsNaN())
+	{
+		OutReason = TEXT("Recovery placement dependencies or transform are invalid.");
+		return false;
+	}
+
+	const float Radius = Capsule->GetScaledCapsuleRadius();
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FCollisionShape StandingCapsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	const FCollisionQueryParams QueryParams(
+		SCENE_QUERY_STAT(HeavyImpactRecoveryCommit),
+		false,
+		Character);
+	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
+	if (World->OverlapBlockingTestByChannel(
+			Location,
+			Rotation.Quaternion(),
+			Capsule->GetCollisionObjectType(),
+			StandingCapsule,
+			QueryParams,
+			ResponseParams))
+	{
+		OutReason = TEXT("Standing Capsule destination became blocked before recovery commit.");
+		return false;
+	}
+
+	FFindFloorResult FloorResult;
+	Movement->ComputeFloorDist(
+		Location,
+		Tuning->GroundProbeDistance,
+		Tuning->GroundProbeDistance,
+		FloorResult,
+		Radius);
+	if (!FloorResult.IsWalkableFloor())
+	{
+		OutReason = TEXT("Standing Capsule destination no longer has walkable floor support.");
+		return false;
+	}
+	if (!IsRecoveryLocationOnPreImpactSide(Location))
+	{
+		OutReason = TEXT("Standing Capsule destination lies across WorldStatic from the pre-impact gameplay side.");
+		return false;
+	}
+
+	OutReason.Reset();
+	return true;
+}
+
+/** Commits one already-resolved recovery destination without requiring a penetrating QueryOnly Capsule to sweep out of geometry. */
+bool UHeavyImpactResponseComponent::TryCommitRecoveryCapsulePlacement(
+	const FHeavyImpactRecoveryPlan& Plan,
+	FString& OutReason)
+{
+	if (!ValidateRecoveryCapsulePlacement(
+			Plan.CapsuleLocation,
+			Plan.CapsuleRotation,
+			OutReason))
+	{
+		return false;
+	}
+
+	UWorld* World = GetWorld();
+	const FTransform OriginalTransform = Character->GetActorTransform();
+	const float Radius = Capsule->GetScaledCapsuleRadius();
+	const float HalfHeight = Capsule->GetScaledCapsuleHalfHeight();
+	const FCollisionShape StandingCapsule = FCollisionShape::MakeCapsule(Radius, HalfHeight);
+	const FCollisionQueryParams QueryParams(
+		SCENE_QUERY_STAT(HeavyImpactRecoveryStart),
+		false,
+		Character);
+	const FCollisionResponseParams ResponseParams(RecoveryBaseline.CapsuleResponses);
+	const bool bStartOverlapping = World->OverlapBlockingTestByChannel(
+		Character->GetActorLocation(),
+		Character->GetActorQuat(),
+		Capsule->GetCollisionObjectType(),
+		StandingCapsule,
+		QueryParams,
+		ResponseParams);
+
+	FHitResult PlacementHit;
+	const bool bPlaced = Character->SetActorLocationAndRotation(
+		Plan.CapsuleLocation,
+		Plan.CapsuleRotation,
+		!bStartOverlapping,
+		bStartOverlapping ? nullptr : &PlacementHit,
+		ETeleportType::TeleportPhysics);
+	if (!bPlaced
+		|| !Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f)
+		|| !ValidateRecoveryCapsulePlacement(
+			Character->GetActorLocation(),
+			Plan.CapsuleRotation,
+			OutReason))
+	{
+		Character->SetActorTransform(
+			OriginalTransform,
+			false,
+			nullptr,
+			ETeleportType::TeleportPhysics);
+		if (OutReason.IsEmpty())
+		{
+			OutReason = bStartOverlapping
+				? TEXT("Direct recovery placement from a penetrating start failed.")
+				: TEXT("Swept recovery placement from a clear start failed.");
+		}
+		return false;
+	}
+
+	if (bStartOverlapping)
+	{
+		UE_LOG(
+			LogHeavyImpact,
+			Warning,
+			TEXT("HeavyImpact recovery on %s directly committed a validated local Capsule destination because the QueryOnly start was already penetrating blocking geometry."),
+			*GetNameSafe(GetOwner()));
+	}
+
+	OutReason.Reset();
+	return true;
+}
+
 bool UHeavyImpactResponseComponent::CaptureRelocatedRecoveryPose(
 	const FHeavyImpactRecoveryPlan& Plan,
 	FPoseSnapshot& OutPose,
@@ -2193,22 +2359,8 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 		return false;
 	}
 	const FTransform DownedActorTransform = Character->GetActorTransform();
-	FHitResult PlacementHit;
-	const bool bPlaced = Character->SetActorLocationAndRotation(
-		Plan.CapsuleLocation,
-		Plan.CapsuleRotation,
-		true,
-		&PlacementHit,
-		ETeleportType::TeleportPhysics);
-	if (!bPlaced
-		|| !Character->GetActorLocation().Equals(Plan.CapsuleLocation, 1.0f))
+	if (!TryCommitRecoveryCapsulePlacement(Plan, OutReason))
 	{
-		Character->SetActorTransform(
-			DownedActorTransform,
-			false,
-			nullptr,
-			ETeleportType::TeleportPhysics);
-		OutReason = TEXT("Validated standing Capsule placement failed during the handoff transaction.");
 		return false;
 	}
 
@@ -2260,7 +2412,14 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 
 	Mesh->SetAllBodiesSimulatePhysics(false);
 	RestoreBodyBaseline(RecoveryBaseline);
-	if (!RestoreCharacterShell(RecoveryBaseline))
+	const bool bShellRestored = RestoreCharacterShell(RecoveryBaseline);
+	FString FinalPlacementReason;
+	const bool bFinalPlacementValid = bShellRestored
+		&& ValidateRecoveryCapsulePlacement(
+			Character->GetActorLocation(),
+			Plan.CapsuleRotation,
+			FinalPlacementReason);
+	if (!bFinalPlacementValid)
 	{
 		ClearRecoveryAnimationState(true);
 		Mesh->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
@@ -2284,7 +2443,9 @@ bool UHeavyImpactResponseComponent::BeginPhysicalToAnimationHandoff(
 		Mesh->SetAllBodiesPhysicsBlendWeight(1.0f, false);
 		Mesh->PutAllRigidBodiesToSleep();
 		PhysicsControl->SetComponentTickEnabled(false);
-		OutReason = TEXT("Mesh reattachment failed; physical Downed state was restored.");
+		OutReason = bShellRestored
+			? MoveTemp(FinalPlacementReason)
+			: TEXT("Mesh reattachment failed; physical Downed state was restored.");
 		EnterDowned(*OutReason);
 		return false;
 	}

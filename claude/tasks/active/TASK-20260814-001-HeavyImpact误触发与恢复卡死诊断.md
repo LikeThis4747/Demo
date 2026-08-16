@@ -103,3 +103,15 @@
 - 没有增加角色类型、机关类型判断、状态、组件或资产；调节入口归冲锤 DataAsset，接收组件只消费通用请求字段。
 - `DemoEditor` 冷构建通过；`BP_BatteringRamHazard`、`BP_ZeroEscapeCharacter`、`BP_Pursuer` 均以 warning-as-error 编译通过；官方回读冲锤 `PhysicalResponseScale=0.60`，其余时序/几何参数未改；Heavy 5 项 + CharacterImpact 2 项自动化 `7/7 Success`。
 - 待用户 PIE 验收：冲锤侧撞时位移是否明显收敛、局部翻滚是否仍可见、是否不再被同一锤头连续顶推；摆锤原效果不得变化。
+
+## 2026-08-16 安全恢复终点提交修复
+
+- 用户已授权继续实现；Codex `/root` 重新认领共享 Heavy 实现写入权。
+- 当前根因证据：恢复候选终点已经通过完整站立 Capsule 与可行走地面校验，但真实 Capsule 可能已由 Heavy 的 QueryOnly 跟随进入墙体或地板；交接继续从该非法真实起点执行 Sweep，失败后截止分支又在当前非法位置恢复 Gameplay，最终造成 `CharacterMovement stuck`。
+- 本轮只修共享 `UHeavyImpactResponseComponent` 的放置事务：起点可用时保留 Sweep；起点已阻挡重叠时，在 QueryOnly 阶段直接提交已验证终点，并在恢复碰撞前后再次校验完整 Capsule。
+- 删除“安全终点提交失败后在当前 Heavy 位置恢复 Gameplay”的危险路径；失败不得伪装成成功恢复。
+- 不新增安全锚点、状态、接口或配置，不修改摆锤、冲锤、角色类、Physics Asset、DataAsset、AnimBP、关卡和碰撞通道。
+- 实现基线：`48c7b7422bc98e6d4096723712d323419327561f`，HEAD / `origin/main` / 远端 main 一致，写入前工作区干净。
+- 已完成共享 Heavy 的最小放置事务修正：安全终点会在提交前、提交后以及恢复 Gameplay 碰撞前使用原始完整 Capsule 响应重新验证；仅当真实 QueryOnly Capsule 起点已处于阻挡重叠时，才跳过从非法起点离开的 Sweep，直接提交已验证的局部终点。
+- 已删除截止分支“在当前非法 Heavy 位置恢复 Gameplay”的路径；放置失败继续保持 Downed，绝不把 CharacterMovement 交还给仍重叠的 Capsule。
+- `Demo` 模块冷构建通过；官方自动化 HeavyImpact 5 项 + CharacterImpact 2 项 `7/7 Success`；玩家/追猎者 Blueprint warning-as-error 编译通过。真实墙边/地板/柱角 PIE 仍待用户验收，任务保持 active。
