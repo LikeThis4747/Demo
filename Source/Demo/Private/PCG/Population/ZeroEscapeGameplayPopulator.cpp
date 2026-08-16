@@ -36,6 +36,8 @@ namespace
 		FTransform WorldTransform = FTransform::Identity;
 		LevelGen::FPopulationSpikeWheelSpawnConfig SpikeWheel;
 		LevelGen::FPopulationPeriodicPhaseConfig PeriodicPhase;
+		/** 同一地刺放置的两个 Actor 共享；不参与地图随机流或摆位。 */
+		FGuid SpikeTrapImpactGroupId;
 	};
 
 	const TCHAR* PlacementKindName(const LevelGen::EPopulationPlacementKind Kind)
@@ -211,6 +213,8 @@ namespace
 				}
 				const bool bIsSpikeWheel =
 					Placement.Kind == LevelGen::EPopulationPlacementKind::SpikeWheel;
+				const bool bIsSpikeTrap =
+					Placement.Kind == LevelGen::EPopulationPlacementKind::SpikeTrap;
 				const bool bIsEnergyOrb =
 					Placement.Kind == LevelGen::EPopulationPlacementKind::EnergyOrb;
 				if (bIsSpikeWheel
@@ -225,6 +229,11 @@ namespace
 					OutError = TEXT("EnergyOrb placement requires exactly one transform.");
 					return false;
 				}
+				if (bIsSpikeTrap && Placement.LocalSpawnTransforms.Num() != 2)
+				{
+					OutError = TEXT("SpikeTrap placement requires exactly two transforms.");
+					return false;
+				}
 				if (!bIsSpikeWheel && Placement.SpikeWheel.bIsConfigured)
 				{
 					OutError = FString::Printf(
@@ -232,6 +241,9 @@ namespace
 						PlacementKindName(Placement.Kind));
 					return false;
 				}
+				const FGuid SpikeTrapImpactGroupId = bIsSpikeTrap
+					? FGuid::NewGuid()
+					: FGuid();
 				for (const FTransform& LocalTransform : Placement.LocalSpawnTransforms)
 				{
 					if (!LevelGen::FGenerationCore::IsFiniteUnitScaleTransform(LocalTransform))
@@ -244,6 +256,7 @@ namespace
 					Request.ActorClass = *ActorClass;
 					Request.WorldTransform = LocalTransform * GeneratedRootWorldTransform;
 					Request.SpikeWheel = Placement.SpikeWheel;
+					Request.SpikeTrapImpactGroupId = SpikeTrapImpactGroupId;
 					if (LevelGen::IsPeriodicHazardKind(Placement.Kind))
 					{
 						Request.PeriodicPhase.bIsConfigured = true;
@@ -408,7 +421,8 @@ bool AZeroEscapeGameplayPopulator::Populate(
 				if (ASpikeTrapHazard* Spike = Cast<ASpikeTrapHazard>(DeferredActor))
 				{
 					bPhaseConfigured = Spike->ConfigurePopulationPhase(
-						Request.PeriodicPhase.NormalizedPhase01);
+						Request.PeriodicPhase.NormalizedPhase01,
+						Request.SpikeTrapImpactGroupId);
 				}
 				break;
 			case LevelGen::EPopulationPlacementKind::BatteringRam:

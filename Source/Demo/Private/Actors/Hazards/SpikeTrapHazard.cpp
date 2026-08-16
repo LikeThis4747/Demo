@@ -19,6 +19,22 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogSpikeTrap, Log, All);
 
+namespace
+{
+	/** 把一次 Population 双地刺的共享组标识与危险轮次组合成接收端去重 ID。 */
+	FGuid MakePopulationDangerImpactId(
+		const FGuid& GroupId,
+		const uint32 DangerPhaseSequence)
+	{
+		const uint32 SequenceSalt = DangerPhaseSequence * 0x9E3779B9u;
+		return FGuid(
+			GroupId.A ^ SequenceSalt,
+			GroupId.B + DangerPhaseSequence,
+			GroupId.C ^ ((SequenceSalt << 16) | (SequenceSalt >> 16)),
+			GroupId.D + SequenceSalt + 1u);
+	}
+}
+
 /** 以固定场景根挂载固定格栅、升降刺、只响应 Pawn 的伤害区与升降 Timeline；关闭常驻 Tick。 */
 ASpikeTrapHazard::ASpikeTrapHazard()
 {
@@ -43,8 +59,8 @@ ASpikeTrapHazard::ASpikeTrapHazard()
 	HurtZone->SetMobility(EComponentMobility::Movable);
 	HurtZone->SetCanEverAffectNavigation(false);
 	HurtZone->SetupAttachment(SceneRoot);
-	// 按格栅 224x224 的占位默认；放置后按实际微调，使地面走过必触发、跳跃可越过。
-	HurtZone->SetBoxExtent(FVector(112.0f, 112.0f, 40.0f));
+	// 正式蓝图约 300x300；伤害区横向内缩到 260x260，减少擦边误伤，同时双地刺之间仍无可穿行安全缝。
+	HurtZone->SetBoxExtent(FVector(130.0f, 130.0f, 40.0f));
 	HurtZone->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	HurtZone->SetCollisionResponseToAllChannels(ECR_Ignore);
 	HurtZone->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
@@ -55,17 +71,21 @@ ASpikeTrapHazard::ASpikeTrapHazard()
 
 /** PCG 延迟生成只写第一轮相位；运行后不允许重排伤害窗口。 */
 bool ASpikeTrapHazard::ConfigurePopulationPhase(
-	const float InNormalizedPhase01)
+	const float InNormalizedPhase01,
+	const FGuid& InPopulationImpactGroupId)
 {
 	if (HasActorBegunPlay()
 		|| !FMath::IsFinite(InNormalizedPhase01)
 		|| InNormalizedPhase01 < 0.0f
-		|| InNormalizedPhase01 >= 1.0f)
+		|| InNormalizedPhase01 >= 1.0f
+		|| !InPopulationImpactGroupId.IsValid())
 	{
 		return false;
 	}
 	bHasPopulationPhase = true;
 	PopulationNormalizedPhase01 = InNormalizedPhase01;
+	PopulationImpactGroupId = InPopulationImpactGroupId;
+	PopulationDangerPhaseSequence = 0;
 	return true;
 }
 
@@ -138,7 +158,21 @@ void ASpikeTrapHazard::StartRising()
 void ASpikeTrapHazard::EnterExtended()
 {
 	bIsDangerous = true;
-	ActiveDangerImpactId = FGuid::NewGuid();
+	if (PopulationImpactGroupId.IsValid())
+	{
+		++PopulationDangerPhaseSequence;
+		if (PopulationDangerPhaseSequence == 0)
+		{
+			++PopulationDangerPhaseSequence;
+		}
+		ActiveDangerImpactId = MakePopulationDangerImpactId(
+			PopulationImpactGroupId,
+			PopulationDangerPhaseSequence);
+	}
+	else
+	{
+		ActiveDangerImpactId = FGuid::NewGuid();
+	}
 	ProcessedDangerTargets.Reset();
 	for (const TObjectPtr<AActor>& Pawn : OverlappingPawns)
 	{
@@ -226,6 +260,7 @@ void ASpikeTrapHazard::ProcessDangerousContact(AActor* Target)
 	}
 	ProcessedDangerTargets.Add(Target);
 
+	EStandingImpactSubmitResult SubmitResult = EStandingImpactSubmitResult::Invalid;
 	if (!IsValid(StandingImpactSourceProfile))
 	{
 		UE_LOG(LogSpikeTrap, Warning,
@@ -258,8 +293,7 @@ void ASpikeTrapHazard::ProcessDangerousContact(AActor* Target)
 			Request.ImpactPoint = Target->GetActorLocation();
 			Request.NormalizedStrength = FMath::Clamp(StandingImpactStrength, 0.0f, 1.0f);
 
-			const EStandingImpactSubmitResult SubmitResult =
-				ICharacterImpactReceiver::Execute_SubmitStandingImpact(Target, Request);
+			SubmitResult = ICharacterImpactReceiver::Execute_SubmitStandingImpact(Target, Request);
 			if (SubmitResult == EStandingImpactSubmitResult::Invalid)
 			{
 				UE_LOG(LogSpikeTrap, Warning,
@@ -267,6 +301,16 @@ void ASpikeTrapHazard::ProcessDangerousContact(AActor* Target)
 					*GetName(), *Target->GetName());
 			}
 		}
+	}
+
+	// Population 的两个相邻地刺在同一危险轮次提交相同 ImpactId；接收端第二次返回 Duplicate。
+	// 直接在这里结束，既避免重复 Stop/Slow，也避免玩家生命被同一组扣除两次。
+	if (SubmitResult == EStandingImpactSubmitResult::Duplicate)
+	{
+		UE_LOG(LogSpikeTrap, Verbose,
+			TEXT("%s skipped duplicate paired-spike impact on %s (ImpactId=%s)."),
+			*GetName(), *Target->GetName(), *ActiveDangerImpactId.ToString());
+		return;
 	}
 
 	if (!Target->IsA<AZeroEscapeCharacter>())

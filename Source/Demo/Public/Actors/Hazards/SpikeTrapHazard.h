@@ -33,8 +33,10 @@ public:
 	/** 创建场景根、固定格栅、升降刺网格、只响应 Pawn 的伤害区与升降 Timeline。 */
 	ASpikeTrapHazard();
 
-	/** 延迟生成专用：在 BeginPlay 前注入 [0,1) 初始相位；失败时保持原同步启动行为。 */
-	bool ConfigurePopulationPhase(float InNormalizedPhase01);
+	/** 延迟生成专用：注入 [0,1) 初始相位与同一双地刺共享的命中组；失败时保持原同步启动行为。 */
+	bool ConfigurePopulationPhase(
+		float InNormalizedPhase01,
+		const FGuid& InPopulationImpactGroupId);
 
 protected:
 	/** 生成升降曲线、绑定 Timeline 与 Overlap，记录刺基准位并从收起相位启动循环。 */
@@ -147,6 +149,12 @@ private:
 
 	/** PCG 确定性归一化相位；只映射到第一轮安全启动延迟。 */
 	float PopulationNormalizedPhase01 = 0.0f;
+
+	/** 同一 Population 双地刺共享的运行时组标识；只用于让接收端合并同轮命中。 */
+	FGuid PopulationImpactGroupId;
+
+	/** 当前 Population 双地刺已经进入过的危险轮次；同组两个 Actor 以相同序号派生命中 ID。 */
+	uint32 PopulationDangerPhaseSequence = 0;
 
 	/** Stable for one extended phase so a receiver can reject repeat overlap callbacks. */
 	FGuid ActiveDangerImpactId;
