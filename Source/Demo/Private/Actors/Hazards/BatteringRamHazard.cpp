@@ -12,6 +12,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/StaticMeshComponent.h"
 #include "Data/Hazards/BatteringRamHazardTuningData.h"
 #include "Engine/World.h"
 #include "Interfaces/HeavyImpactReceiver.h"
@@ -25,6 +26,11 @@ namespace BatteringRamHazard
 	/** 拒绝无法形成稳定相对接近速度的数值噪声。 */
 	constexpr float MinimumClosingSpeedCmPerSecond = 1.0f;
 
+	/** 梁略小于锤头横截面，让锤头遮住接缝，同时不留下可供角色钻入的侧缝。 */
+	constexpr float ShaftCrossSectionRatio = 0.90f;
+
+	/** 小于该长度时关闭梁，避免零尺寸盒体和缩回状态下的视觉闪烁。 */
+	constexpr float MinimumVisibleShaftLengthCm = 1.0f;
 }
 
 /** 装配固定外壳挂点、运动学锤头、预测体积和预警挂点。 */
@@ -51,7 +57,8 @@ ABatteringRamHazard::ABatteringRamHazard()
 	RamBody->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
 	RamBody->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	RamBody->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
-	RamBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Overlap);
+	// PreparationVolume 负责提前请求 Heavy；锤头本体保持实心，避免普通胶囊钻入空心美术网格。
+	RamBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
 	RamBody->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	RamBody->SetGenerateOverlapEvents(true);
 	RamBody->SetSimulatePhysics(false);
@@ -60,6 +67,27 @@ ABatteringRamHazard::ABatteringRamHazard()
 
 	RamVisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("RamVisualRoot"));
 	RamVisualRoot->SetupAttachment(RamBody);
+
+	ShaftVisualMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("ShaftVisualMesh"));
+	ShaftVisualMesh->SetupAttachment(SceneRoot);
+	ShaftVisualMesh->SetMobility(EComponentMobility::Movable);
+	ShaftVisualMesh->SetCanEverAffectNavigation(false);
+	ShaftVisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ShaftVisualMesh->SetGenerateOverlapEvents(false);
+	ShaftVisualMesh->SetVisibility(false, true);
+
+	ShaftBlocker = CreateDefaultSubobject<UBoxComponent>(TEXT("ShaftBlocker"));
+	ShaftBlocker->SetupAttachment(SceneRoot);
+	ShaftBlocker->SetMobility(EComponentMobility::Movable);
+	ShaftBlocker->SetCanEverAffectNavigation(false);
+	ShaftBlocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ShaftBlocker->SetCollisionObjectType(ECC_WorldDynamic);
+	ShaftBlocker->SetCollisionResponseToAllChannels(ECR_Ignore);
+	ShaftBlocker->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	ShaftBlocker->SetCollisionResponseToChannel(ECC_PhysicsBody, ECR_Block);
+	ShaftBlocker->SetGenerateOverlapEvents(false);
+	ShaftBlocker->SetSimulatePhysics(false);
+	ShaftBlocker->SetEnableGravity(false);
 
 	PreparationVolume = CreateDefaultSubobject<UBoxComponent>(TEXT("PreparationVolume"));
 	PreparationVolume->SetupAttachment(RamBody);
@@ -184,6 +212,12 @@ void ABatteringRamHazard::EndPlay(const EEndPlayReason::Type EndPlayReason)
 /** Actor 原点作为完全缩回中心，预测盒从锤头前表面沿局部 +X 延伸。 */
 void ABatteringRamHazard::ApplyGeometry(const UBatteringRamHazardTuningData& Tuning)
 {
+	ShaftVisualMesh->SetStaticMesh(ShaftVisualAsset);
+	if (IsValid(ShaftVisualMaterial))
+	{
+		ShaftVisualMesh->SetMaterial(0, ShaftVisualMaterial);
+	}
+
 	RamBody->SetBoxExtent(Tuning.RamBodyHalfExtent, true);
 	RamBody->SetRelativeLocationAndRotation(
 		FVector::ZeroVector,
@@ -204,7 +238,56 @@ void ABatteringRamHazard::ApplyGeometry(const UBatteringRamHazardTuningData& Tun
 		nullptr,
 		ETeleportType::None);
 
+	UpdateShaftGeometry(0.0f, Tuning);
+
 	WarningVisualRoot->SetVisibility(false, true);
+}
+
+/** 以墙前 Actor 原点为固定起点，只向局部 +X 延伸；视觉和阻挡使用同一盒形范围。 */
+void ABatteringRamHazard::UpdateShaftGeometry(
+	const float ExtensionDistance,
+	const UBatteringRamHazardTuningData& Tuning)
+{
+	const float ShaftLength = FMath::Clamp(ExtensionDistance, 0.0f, Tuning.StrokeDistance);
+	if (ShaftLength <= BatteringRamHazard::MinimumVisibleShaftLengthCm)
+	{
+		ShaftBlocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		ShaftVisualMesh->SetVisibility(false, true);
+		return;
+	}
+
+	const FVector ShaftHalfExtent(
+		ShaftLength * 0.5f,
+		Tuning.RamBodyHalfExtent.Y * BatteringRamHazard::ShaftCrossSectionRatio,
+		Tuning.RamBodyHalfExtent.Z * BatteringRamHazard::ShaftCrossSectionRatio);
+	const FVector ShaftCenter(ShaftHalfExtent.X, 0.0f, 0.0f);
+
+	ShaftBlocker->SetBoxExtent(ShaftHalfExtent, true);
+	ShaftBlocker->SetRelativeLocationAndRotation(
+		ShaftCenter,
+		FRotator::ZeroRotator,
+		false,
+		nullptr,
+		ETeleportType::None);
+	ShaftBlocker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+
+	if (const UStaticMesh* ShaftMesh = ShaftVisualMesh->GetStaticMesh())
+	{
+		const FVector MeshHalfExtent = ShaftMesh->GetBounds().BoxExtent;
+		if (MeshHalfExtent.X > KINDA_SMALL_NUMBER
+			&& MeshHalfExtent.Y > KINDA_SMALL_NUMBER
+			&& MeshHalfExtent.Z > KINDA_SMALL_NUMBER)
+		{
+			ShaftVisualMesh->SetRelativeLocationAndRotation(
+				ShaftCenter,
+				FRotator::ZeroRotator,
+				false,
+				nullptr,
+				ETeleportType::None);
+			ShaftVisualMesh->SetRelativeScale3D(ShaftHalfExtent / MeshHalfExtent);
+			ShaftVisualMesh->SetVisibility(true, true);
+		}
+	}
 }
 
 /** 关闭运动 Tick，回到原点并在安全期结束后进入预警。 */
@@ -215,6 +298,7 @@ void ABatteringRamHazard::EnterWaiting(const float InitialDelayOverrideSeconds)
 	CurrentImpactId = FGuid();
 	NotifiedReceiversThisStroke.Reset();
 	RamBody->SetRelativeLocation(FVector::ZeroVector, false, nullptr, ETeleportType::None);
+	UpdateShaftGeometry(0.0f, *TuningData);
 	WarningVisualRoot->SetVisibility(false, true);
 	SetActorTickEnabled(false);
 
@@ -292,6 +376,7 @@ bool ABatteringRamHazard::AdvanceLinearPhase(
 		false,
 		nullptr,
 		ETeleportType::None);
+	UpdateShaftGeometry(Distance, *TuningData);
 	return Alpha >= 1.0f;
 }
 
@@ -429,6 +514,14 @@ void ABatteringRamHazard::DisableHazard(const FString& Reason)
 	if (IsValid(PreparationVolume))
 	{
 		PreparationVolume->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (IsValid(ShaftBlocker))
+	{
+		ShaftBlocker->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	}
+	if (IsValid(ShaftVisualMesh))
+	{
+		ShaftVisualMesh->SetVisibility(false, true);
 	}
 
 	UE_LOG(

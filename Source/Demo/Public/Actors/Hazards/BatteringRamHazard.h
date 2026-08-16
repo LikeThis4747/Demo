@@ -17,8 +17,11 @@
 
 class UBatteringRamHazardTuningData;
 class UBoxComponent;
+class UMaterialInterface;
 class UPrimitiveComponent;
 class USceneComponent;
+class UStaticMesh;
+class UStaticMeshComponent;
 struct FHeavyImpactPreparationRequest;
 
 /** 项目内部的冲锤运行阶段，不是 UE 官方状态机类型。 */
@@ -60,6 +63,9 @@ protected:
 private:
 	/** 应用锤头盒体和前置预测盒体几何；Actor 原点就是锤头完全缩回中心。 */
 	void ApplyGeometry(const UBatteringRamHazardTuningData& Tuning);
+
+	/** 让可见伸缩梁与简单盒碰撞共同覆盖墙面到锤头背后的已伸出距离。 */
+	void UpdateShaftGeometry(float ExtensionDistance, const UBatteringRamHazardTuningData& Tuning);
 
 	/** 进入完全缩回安全期；非负 Override 只用于 PCG 第一轮启动偏移。 */
 	void EnterWaiting(float InitialDelayOverrideSeconds = -1.0f);
@@ -106,10 +112,30 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UBoxComponent> RamBody;
 
-	/** 随 RamBody 运动的纯美术挂点；Blueprint 在其下装配冲杆和锤面。 */
+	/** 随 RamBody 运动的纯美术挂点；Blueprint 只在其下装配锤面，不再挂固定长度冲杆。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|冲锤",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USceneComponent> RamVisualRoot;
+
+	/** 固定在墙面一侧、由 C++ 动态拉伸的可见长方形金属梁；自身不拥有碰撞。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|冲锤",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> ShaftVisualMesh;
+
+	/** 与可见梁同步的简单实心盒；只填充锤头后方，阻止角色或物理身体钻入机构。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|冲锤",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UBoxComponent> ShaftBlocker;
+
+	/** Blueprint 只配置资源；运行时由 C++ 装到动态伸缩梁组件，避免继承组件覆盖丢失。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "机关|冲锤|视觉",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMesh> ShaftVisualAsset;
+
+	/** 可选的伸缩梁材质覆盖；为空时沿用网格默认材质。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "机关|冲锤|视觉",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UMaterialInterface> ShaftVisualMaterial;
 
 	/** 锤头前方 Query-only Pawn 预测盒；不阻挡、不施力且不影响导航。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "机关|冲锤|重冲击",
