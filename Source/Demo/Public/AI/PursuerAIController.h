@@ -4,7 +4,7 @@
  * @file PursuerAIController.h
  * 职责：以纯 C++ 定时状态机驱动追猎者持续追击，并选择近战/跑跳攻击，不使用行为树。
  * 边界：只做目标、距离和移动决策；攻击阶段、冷却、命中、恢复与中断交给 UPursuerAttackComponent。
- * 状态 Owner：本控制器只拥有思考 Timer；不拥有感知丢失或攻击冷却状态。
+ * 状态 Owner：本控制器只拥有思考 Timer 与追逐异常累计时间；不拥有感知丢失或攻击冷却状态。
  */
 
 #pragma once
@@ -41,6 +41,9 @@ private:
 	/** 单次思考：玩家有效时始终追击，并按距离选择移动或攻击；由 Timer 周期调用。 */
 	void Think();
 
+	/** 尝试把追猎者重放置到玩家镜头后方约三个逻辑格的有效导航位置。 */
+	bool TryRelocateBehindPlayer(APawn* PlayerPawn);
+
 	/** 被占有的追猎者，OnPossess 时缓存；失效时思考直接返回。 */
 	TWeakObjectPtr<APursuerCharacter> Pursuer;
 
@@ -49,4 +52,7 @@ private:
 
 	/** 思考 Timer 句柄。 */
 	FTimerHandle ThinkTimerHandle;
+
+	/** 水平距离或高度差持续异常的累计时间，正常后立即清零。 */
+	float RecoveryConditionSeconds = 0.0f;
 };

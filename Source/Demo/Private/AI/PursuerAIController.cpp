@@ -12,7 +12,9 @@
 #include "Components/Combat/PursuerAttackComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "NavigationSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPursuerAI, Log, All);
 
@@ -47,6 +49,7 @@ void APursuerAIController::NotifyImpactMovementBlocked()
 void APursuerAIController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
+	RecoveryConditionSeconds = 0.0f;
 
 	Pursuer = Cast<APursuerCharacter>(InPawn);
 	if (!Pursuer.IsValid())
@@ -71,8 +74,70 @@ void APursuerAIController::OnPossess(APawn* InPawn)
 void APursuerAIController::OnUnPossess()
 {
 	GetWorldTimerManager().ClearTimer(ThinkTimerHandle);
+	RecoveryConditionSeconds = 0.0f;
 
 	Super::OnUnPossess();
+}
+
+/** 尝试三个固定的镜头后方候选点；只要求落在同层附近的 NavMesh，不重复验证迷宫连通性。 */
+bool APursuerAIController::TryRelocateBehindPlayer(
+	APawn* PlayerPawn)
+{
+	UNavigationSystemV1* NavigationSystem =
+		FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld());
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (!Pursuer.IsValid()
+		|| !IsValid(PlayerPawn)
+		|| !IsValid(PlayerController)
+		|| !IsValid(NavigationSystem))
+	{
+		return false;
+	}
+
+	FVector ViewLocation;
+	FRotator ViewRotation;
+	PlayerController->GetPlayerViewPoint(ViewLocation, ViewRotation);
+	constexpr float RelocationDistance = 1800.0f;
+	const FVector ProjectionExtent(300.0f, 300.0f, 200.0f);
+	constexpr float RearYawOffsets[] = {180.0f, 135.0f, 225.0f};
+	const FVector PlayerNavLocation = PlayerPawn->GetNavAgentLocation();
+	const float NavAgentOffsetZ = Pursuer->GetActorLocation().Z - Pursuer->GetNavAgentLocation().Z;
+
+	for (const float YawOffset : RearYawOffsets)
+	{
+		const FVector CandidateDirection =
+			FRotator(0.0f, ViewRotation.Yaw + YawOffset, 0.0f).Vector();
+		const FVector CandidatePoint = PlayerNavLocation + CandidateDirection * RelocationDistance;
+		FNavLocation ProjectedLocation;
+		if (!NavigationSystem->ProjectPointToNavigation(
+				CandidatePoint,
+				ProjectedLocation,
+				ProjectionExtent,
+				&GetNavAgentPropertiesRef()))
+		{
+			continue;
+		}
+
+		FVector TeleportLocation = ProjectedLocation.Location;
+		TeleportLocation.Z += NavAgentOffsetZ;
+		FRotator FacingRotation = (PlayerPawn->GetActorLocation() - TeleportLocation).Rotation();
+		FacingRotation.Pitch = 0.0f;
+		FacingRotation.Roll = 0.0f;
+		if (!Pursuer->TeleportTo(TeleportLocation, FacingRotation, /*bIsATest=*/false, /*bNoCheck=*/false))
+		{
+			continue;
+		}
+
+		StopMovement();
+		if (UCharacterMovementComponent* Movement = Pursuer->GetCharacterMovement())
+		{
+			Movement->StopMovementImmediately();
+		}
+		UE_LOG(LogPursuerAI, Log, TEXT("%s 追逐异常持续超时，已隐藏重放置到玩家后方。"), *GetName());
+		return true;
+	}
+
+	return false;
 }
 
 /** 状态机核心：只要玩家有效就持续追击，并按距离选择移动或攻击。 */
@@ -111,6 +176,23 @@ void APursuerAIController::Think()
 	const FVector PlayerLocation = PlayerPawn->GetActorLocation();
 	const float Distance = FVector::Dist(PursuerLocation, PlayerLocation);
 	const float VerticalDistance = FMath::Abs(PlayerLocation.Z - PursuerLocation.Z);
+	constexpr float RecoveryHorizontalDistance = 3600.0f;
+	constexpr float RecoveryVerticalDifference = 225.0f;
+	const bool bRecoveryCondition = FVector::Dist2D(PursuerLocation, PlayerLocation) > RecoveryHorizontalDistance
+		|| VerticalDistance > RecoveryVerticalDifference;
+	RecoveryConditionSeconds = bRecoveryCondition
+		? FMath::Min(RecoveryConditionSeconds + Config->ThinkInterval, Config->RecoveryDelaySeconds)
+		: 0.0f;
+
+	if (RecoveryConditionSeconds >= Config->RecoveryDelaySeconds)
+	{
+		RecoveryConditionSeconds = 0.0f;
+		if (TryRelocateBehindPlayer(PlayerPawn))
+		{
+			return;
+		}
+	}
+
 	constexpr float FlatFloorNormalZ = 0.99f;
 	constexpr float CloseAttackMaxVerticalDifference = 70.0f;
 	const UCharacterMovementComponent* Movement = Pursuer->GetCharacterMovement();

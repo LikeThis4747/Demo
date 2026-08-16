@@ -208,6 +208,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|受击")
 	TSoftObjectPtr<UAnimMontage> HitReactFromRight;
 
+	/** 追逐异常持续多久后允许隐藏重放置，单位 s；初始值 18。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|AI", meta = (ClampMin = "1.0", ClampMax = "60.0", Units = "s"))
+	float RecoveryDelaySeconds = 18.0f;
+
 	/**
 	 * AI 状态机 Timer 的思考周期，单位 s；替代常驻 Tick。调小反应更灵敏但更耗，调大更省但迟钝。
 	 * 初始值：0.2；范围：0.05~1.0。

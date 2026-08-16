@@ -44,6 +44,7 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 		PostHitRecoveryGraceSeconds,
 		PostHitMaximumHoldSeconds,
 		AttackApproachRadius,
+		RecoveryDelaySeconds,
 		ThinkInterval
 	};
 	for (const float Value : FiniteValues)
@@ -94,10 +95,11 @@ bool UPursuerConfig::IsConfigured(FString& OutError) const
 		|| JumpAttackRecoverySeconds <= 0.0f
 		|| HeavyImpactLeadSeconds <= 0.0f
 		|| PostHitMaximumHoldSeconds <= 0.0f
+		|| RecoveryDelaySeconds <= 0.0f
 		|| AttackCooldown <= 0.0f;
 	if (bInvalidTiming)
 	{
-		OutError = TEXT("攻击播放倍率、起手、飞行、恢复与冷却参数必须为正数。");
+		OutError = TEXT("攻击播放倍率、起手、飞行、恢复、冷却与追逐兜底等待参数必须为正数。");
 		return false;
 	}
 
