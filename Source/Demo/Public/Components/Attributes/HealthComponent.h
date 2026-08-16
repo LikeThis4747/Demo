@@ -34,6 +34,15 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "属性|生命")
 	FOnHealthDepleted OnHealthDepleted;
 
+	/** 开局时同时设置最大生命和当前生命；拒绝非有限或非正数。 */
+	bool InitializeForRound(float InMaxHealth);
+
+	UFUNCTION(BlueprintPure, Category = "属性|生命")
+	float GetMaxHealth() const { return MaxHealth; }
+
+	UFUNCTION(BlueprintPure, Category = "属性|生命")
+	float GetCurrentHealth() const { return CurrentHealth; }
+
 protected:
 	/** 初始化当前生命并绑定 Owner 的 OnTakeAnyDamage。 */
 	virtual void BeginPlay() override;

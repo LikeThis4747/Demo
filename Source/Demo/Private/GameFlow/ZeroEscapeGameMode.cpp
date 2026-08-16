@@ -30,6 +30,42 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeGameMode, Log, All);
 
+bool FZeroEscapePlayerHealthTuning::IsConfigured(FString& OutError) const
+{
+	const bool bValid = FMath::IsFinite(EasyMaxHealth) && EasyMaxHealth > 0.0f
+		&& FMath::IsFinite(NormalMaxHealth) && NormalMaxHealth > 0.0f
+		&& FMath::IsFinite(HardMaxHealth) && HardMaxHealth > 0.0f
+		&& FMath::IsFinite(DebugMaxHealth) && DebugMaxHealth > 0.0f;
+	if (!bValid)
+	{
+		OutError = TEXT("All player health values must be finite and positive.");
+		return false;
+	}
+
+	OutError.Reset();
+	return true;
+}
+
+float FZeroEscapePlayerHealthTuning::Resolve(
+	const EZeroEscapeDifficulty Difficulty) const
+{
+	if (bUseDebugOverride)
+	{
+		return DebugMaxHealth;
+	}
+
+	switch (Difficulty)
+	{
+	case EZeroEscapeDifficulty::Easy:
+		return EasyMaxHealth;
+	case EZeroEscapeDifficulty::Hard:
+		return HardMaxHealth;
+	case EZeroEscapeDifficulty::Normal:
+	default:
+		return NormalMaxHealth;
+	}
+}
+
 AZeroEscapeGameMode::AZeroEscapeGameMode()
 {
 	DefaultPawnClass = AZeroEscapeCharacter::StaticClass();
@@ -41,6 +77,16 @@ void AZeroEscapeGameMode::BeginPlay()
 {
 	Super::BeginPlay();
 	SetGameplayInputLocked(true);
+
+	FString PlayerHealthError;
+	if (!PlayerHealthTuning.IsConfigured(PlayerHealthError))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Error,
+			TEXT("ZE_GAME_SETUP result=Failure reason=PlayerHealthInvalid detail=%s"),
+			*PlayerHealthError);
+		AbortSetupAndReturnToMainMenu(TEXT("PlayerHealthInvalid"));
+		return;
+	}
 
 	ActiveGenerator = FindLevelGenerator();
 	ActivePopulator = FindGameplayPopulator();
@@ -102,6 +148,9 @@ void AZeroEscapeGameMode::BeginPlay()
 		this, &AZeroEscapeGameMode::HandleGenerationFinished);
 	const UZeroEscapeGameInstance* GameInstancePtr =
 		GetGameInstance<UZeroEscapeGameInstance>();
+	ActiveDifficulty = GameInstancePtr != nullptr
+		? GameInstancePtr->GetPendingRequest().Difficulty
+		: EZeroEscapeDifficulty::Normal;
 	const bool bAccepted = GameInstancePtr != nullptr
 		? ActiveGenerator->GenerateFromRequest(GameInstancePtr->GetPendingRequest())
 		: ActiveGenerator->Generate();
@@ -180,6 +229,11 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 	if (!PlacePlayerAndPursuer(*ActiveGenerator))
 	{
 		AbortSetupAndReturnToMainMenu(TEXT("PlayerOrPursuerPlacementFailed"));
+		return;
+	}
+	if (!InitializePlayerHealth())
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("PlayerHealthInitializationFailed"));
 		return;
 	}
 	if (!PlaceExit(*ActiveGenerator))
@@ -317,6 +371,26 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
 	SpawnedExit->OnExitReached.AddUniqueDynamic(
 		this, &AZeroEscapeGameMode::HandleExitReached);
 	SpawnedExit->Activate(ExitTransform);
+	return true;
+}
+
+bool AZeroEscapeGameMode::InitializePlayerHealth()
+{
+	APawn* Player = UGameplayStatics::GetPlayerPawn(this, 0);
+	UHealthComponent* Health = IsValid(Player)
+		? Player->FindComponentByClass<UHealthComponent>()
+		: nullptr;
+	const float ResolvedMaxHealth = PlayerHealthTuning.Resolve(ActiveDifficulty);
+	if (!IsValid(Health) || !Health->InitializeForRound(ResolvedMaxHealth))
+	{
+		return false;
+	}
+
+	UE_LOG(LogZeroEscapeGameMode, Display,
+		TEXT("ZE_PLAYER_HEALTH difficulty=%d max=%.1f debug_override=%s"),
+		static_cast<int32>(ActiveDifficulty),
+		ResolvedMaxHealth,
+		PlayerHealthTuning.bUseDebugOverride ? TEXT("true") : TEXT("false"));
 	return true;
 }
 

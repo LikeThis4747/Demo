@@ -603,6 +603,7 @@ bool APendulumHazard::BuildPreparationRequest(
 	OutRequest.PredictedImpactPoint =
 		PredictedBobCenter + PredictedContactDirection * PredictedBobSurfaceDistance;
 	OutRequest.SourceLinearVelocity = BobVelocity;
+	OutRequest.Damage = TuningData->Damage;
 	OutRequest.EstimatedTimeToContactSeconds = EstimatedTimeToContact;
 	return !OutRequest.PredictedImpactPoint.ContainsNaN();
 }

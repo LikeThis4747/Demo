@@ -42,7 +42,8 @@ bool UPendulumHazardTuningData::IsConfigured(FString& OutError) const
 		return true;
 	};
 
-	if (!ValidateFloat(TEXT("PivotHeight"), PivotHeight, 100.0f, 2000.0f)
+	if (!ValidateFloat(TEXT("Damage"), Damage, 0.0f, 1000.0f)
+		|| !ValidateFloat(TEXT("PivotHeight"), PivotHeight, 100.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("PendulumLength"), PendulumLength, 100.0f, 1500.0f)
 		|| !ValidateFloat(TEXT("BobHalfExtents.X"), BobHalfExtents.X, 10.0f, 250.0f)
 		|| !ValidateFloat(TEXT("BobHalfExtents.Y"), BobHalfExtents.Y, 10.0f, 250.0f)

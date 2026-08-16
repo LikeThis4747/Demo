@@ -21,7 +21,8 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 		return false;
 	};
 
-	if (!FMath::IsFinite(TriggerHalfExtent.X)
+	if (!FMath::IsFinite(Damage)
+		|| !FMath::IsFinite(TriggerHalfExtent.X)
 		|| !FMath::IsFinite(TriggerHalfExtent.Y)
 		|| !FMath::IsFinite(TriggerHalfExtent.Z)
 		|| !FMath::IsFinite(WarningSeconds)
@@ -45,6 +46,11 @@ bool UThrustGuidedHazardTuningData::IsConfigured(FString& OutError) const
 		|| !FMath::IsFinite(MinimumStandingImpactStrength))
 	{
 		return Reject(TEXT("预判抛射机关配置包含非有限基础数值。"));
+	}
+
+	if (Damage < 0.0f || Damage > 1000.0f)
+	{
+		return Reject(TEXT("Damage must be within 0..1000."));
 	}
 
 	if (TriggerHalfExtent.X < 10.0f || TriggerHalfExtent.X > 2000.0f

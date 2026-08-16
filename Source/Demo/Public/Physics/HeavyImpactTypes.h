@@ -74,6 +74,11 @@ struct DEMO_API FHeavyImpactPreparationRequest
 		meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	float PhysicalResponseScale = 1.0f;
 
+	/** 真实接触提交后由玩家结算的伤害；0 表示本次 Heavy 只保留物理响应。 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact",
+		meta = (ClampMin = "0.0"))
+	float Damage = 0.0f;
+
 	/** 从请求时刻到预计接触的秒数。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Heavy Impact", meta = (ClampMin = "0.0"))
 	float EstimatedTimeToContactSeconds = 0.0f;

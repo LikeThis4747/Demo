@@ -21,10 +21,12 @@
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "GameFramework/DamageType.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
+#include "Kismet/GameplayStatics.h"
 #include "PhysicsControlComponent.h"
 #include "Physics/DemoCollisionChannels.h"
 #include "PhysicsEngine/PhysicalAnimationComponent.h"
@@ -339,8 +341,21 @@ void AZeroEscapeCharacter::ToggleMagneticExplosionMode()
 
 /** 只在真实接触提交后中断磁力；组件内部保证空手调用不锁住下一次抓取。 */
 void AZeroEscapeCharacter::HandleHeavyImpactCommitted(
-	const FHeavyImpactPreparationRequest& /*Request*/)
+	const FHeavyImpactPreparationRequest& Request)
 {
+	if (Request.Damage > 0.0f)
+	{
+		AController* InstigatorController = IsValid(Request.SourceActor)
+			? Request.SourceActor->GetInstigatorController()
+			: nullptr;
+		UGameplayStatics::ApplyDamage(
+			this,
+			Request.Damage,
+			InstigatorController,
+			Request.SourceActor,
+			UDamageType::StaticClass());
+	}
+
 	if (IsValid(ElectromagneticGrab))
 	{
 		ElectromagneticGrab->InterruptAndRelease();

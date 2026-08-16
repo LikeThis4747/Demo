@@ -8,6 +8,7 @@
 
 #include "Actors/Hazards/ThrustGuidedHazardProjectile.h"
 
+#include "Characters/ZeroEscapeCharacter.h"
 #include "Components/CapsuleComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -15,8 +16,10 @@
 #include "Data/Hazards/ThrustGuidedHazardTuningData.h"
 #include "Data/Physics/CharacterImpactSourceProfile.h"
 #include "Engine/World.h"
+#include "GameFramework/DamageType.h"
 #include "Interfaces/CharacterImpactReceiver.h"
 #include "Interfaces/HeavyImpactReceiver.h"
+#include "Kismet/GameplayStatics.h"
 #include "Physics/CharacterImpactTypes.h"
 #include "Physics/HeavyImpactTypes.h"
 #include "PhysicsEngine/BodyInstance.h"
@@ -905,6 +908,17 @@ void AThrustGuidedHazardProjectile::HandleProjectileHit(
 		Hit);
 	if (bStandingImpactReceiverHit)
 	{
+		if (ContactOwner->IsA<AZeroEscapeCharacter>()
+			&& RuntimeTuningData->Damage > 0.0f)
+		{
+			UGameplayStatics::ApplyDamage(
+				ContactOwner,
+				RuntimeTuningData->Damage,
+				GetInstigatorController(),
+				this,
+				UDamageType::StaticClass());
+		}
+
 		// 首次 Light 已结算；弹体继续碰撞环境，但不得在后续帧持续顶住角色 Capsule。
 		ProjectileBody->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
 	}

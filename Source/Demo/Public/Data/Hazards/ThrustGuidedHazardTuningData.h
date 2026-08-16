@@ -25,6 +25,11 @@ public:
 	/** 校验全部启用参数及其关系；失败时返回具体原因，运行时不会偷偷钳制非法资产。 */
 	bool IsConfigured(FString& OutError) const;
 
+	/** 首次真实阻挡玩家时结算的伤害；环境和追猎者不扣血。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|伤害",
+		meta = (ClampMin = "0.0", ClampMax = "1000.0", UIMin = "0.0", UIMax = "100.0"))
+	float Damage = 15.0f;
+
 	/** TriggerVolume 半尺寸，单位 cm；TriggerAnchor 单独决定空间位置和旋转。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|预判抛射|触发",
 		meta = (ClampMin = "10.0", ClampMax = "2000.0", Units = "cm"))

@@ -18,6 +18,18 @@ UHealthComponent::UHealthComponent()
 	PrimaryComponentTick.bCanEverTick = false;
 }
 
+bool UHealthComponent::InitializeForRound(const float InMaxHealth)
+{
+	if (!FMath::IsFinite(InMaxHealth) || InMaxHealth <= 0.0f)
+	{
+		return false;
+	}
+
+	MaxHealth = InMaxHealth;
+	CurrentHealth = MaxHealth;
+	return true;
+}
+
 /** 以最大生命初始化当前生命，并绑定 Owner 的任意伤害事件。 */
 void UHealthComponent::BeginPlay()
 {

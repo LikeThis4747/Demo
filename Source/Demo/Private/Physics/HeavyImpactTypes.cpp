@@ -67,6 +67,12 @@ bool FHeavyImpactPreparationRequest::IsStructurallyValid(
 		return false;
 	}
 
+	if (!FMath::IsFinite(Damage) || Damage < 0.0f)
+	{
+		OutReason = TEXT("Damage must be finite and non-negative.");
+		return false;
+	}
+
 	OutReason.Reset();
 	return true;
 }

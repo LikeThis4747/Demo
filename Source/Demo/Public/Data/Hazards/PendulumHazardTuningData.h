@@ -24,6 +24,11 @@ public:
 	/** 校验公开范围和跨属性几何约束；失败时返回具体属性名与原因，不偷偷钳制资产。 */
 	bool IsConfigured(FString& OutError) const;
 
+	/** 真实撞击玩家一次结算的伤害；预警和准备阶段不扣血。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|摆锤|伤害",
+		meta = (ClampMin = "0.0", ClampMax = "1000.0", UIMin = "0.0", UIMax = "100.0"))
+	float Damage = 30.0f;
+
 	/**
 	 * APendulumHazard::ApplyGeometry 读取的地面根到支点高度，单位 cm；初始 650，编辑范围 100~2000。
 	 * 调高会整体抬高支点和锤头，调低会压缩离地净空；必须继续满足 PivotHeight > PendulumLength + BobHalfExtents.Z。

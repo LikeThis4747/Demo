@@ -19,7 +19,8 @@ bool UBatteringRamHazardTuningData::IsConfigured(FString& OutError) const
 		return false;
 	};
 
-	if (RamBodyHalfExtent.ContainsNaN()
+	if (!FMath::IsFinite(Damage)
+		|| RamBodyHalfExtent.ContainsNaN()
 		|| !FMath::IsFinite(StrokeDistance)
 		|| !FMath::IsFinite(RetractedWaitSeconds)
 		|| !FMath::IsFinite(WarningSeconds)
@@ -30,6 +31,11 @@ bool UBatteringRamHazardTuningData::IsConfigured(FString& OutError) const
 		|| !FMath::IsFinite(PhysicalResponseScale))
 	{
 		return Reject(TEXT("冲锤配置包含非有限数值。"));
+	}
+
+	if (Damage < 0.0f || Damage > 1000.0f)
+	{
+		return Reject(TEXT("Damage must be within 0..1000."));
 	}
 
 	if (RamBodyHalfExtent.X < 1.0f || RamBodyHalfExtent.X > 500.0f

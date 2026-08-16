@@ -23,6 +23,11 @@ public:
 	/** 校验公开参数；失败时返回具体属性和原因，不偷偷钳制运行时数值。 */
 	bool IsConfigured(FString& OutError) const;
 
+	/** 真实撞击玩家一次结算的伤害；预警和准备阶段不扣血。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "机关|冲锤|伤害",
+		meta = (ClampMin = "0.0", ClampMax = "1000.0", UIMin = "0.0", UIMax = "100.0"))
+	float Damage = 30.0f;
+
 	/**
 	 * ABatteringRamHazard::ApplyGeometry 读取的锤头碰撞盒半尺寸，单位 cm；默认 50/110/100，范围 1~500。
 	 * X 决定运动方向厚度，Y/Z 决定走廊覆盖面；增大时命中更稳定，但需要同步增加墙体和地面净空。
