@@ -529,13 +529,14 @@ bool AZeroEscapeGameplayPopulator::Populate(
 	LastRequiredEnergyOrbCollectionRatio =
 		ActiveDifficulty->RequiredEnergyOrbCollectionRatio;
 	UE_LOG(LogZeroEscapePopulator, Display,
-		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_budget_tenths=%d/%d hazard_placements=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d energy_orbs=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
+		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_budget_tenths=%d/%d hazard_placements=%d hazard_coverage_supplements=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d resource_coverage_supplements=%d energy_orbs=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
 		LevelPlan.Signature.Seed,
 		static_cast<long long>(LevelPlan.CanonicalLayoutHash),
 		PlayerMaxWalkSpeedCmPerSecond,
 		PlacementPlan.HazardStats.ActualBudgetTenths,
 		PlacementPlan.HazardStats.TargetBudgetTenths,
 		PlacementPlan.HazardStats.ActualCount,
+		PlacementPlan.HazardStats.CoverageSupplementCount,
 		PlacementPlan.KindCounts.Pendulums,
 		PlacementPlan.KindCounts.SpikeTrapGroups,
 		PlacementPlan.KindCounts.BatteringRams,
@@ -543,6 +544,7 @@ bool AZeroEscapeGameplayPopulator::Populate(
 		PlacementPlan.KindCounts.SpikeWheels,
 		PlacementPlan.ResourceStats.TargetCount,
 		PlacementPlan.ResourceStats.ActualCount,
+		PlacementPlan.ResourceStats.CoverageSupplementCount,
 		PlacementPlan.KindCounts.EnergyOrbs,
 		PlacementPlan.KindCounts.SpikeCandidateAnchors,
 		PlacementPlan.KindCounts.RamCandidateAnchors,

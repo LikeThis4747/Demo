@@ -609,6 +609,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Hazards.PlacementScoring.AnchorTargetVariation = 0.0f;
 		Hazards.PlacementScoring.ProgressLog2Strength = 0.0f;
 		Hazards.PlacementScoring.MaximumRecentKindPenalty = 0.0f;
+		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
 			MakeDifficulties(1.25f, 0.0f);
@@ -663,7 +664,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		auto ExpectedPressure = [&](const float SpeedCmPerSecond)
 		{
 			return Risk.TraversalPressurePerSecond
-				* static_cast<float>(Plan.LogicalTileSizeCm)
+				* static_cast<float>(Plan.LogicalTileSizeCm * 0.5)
 				/ SpeedCmPerSecond
 				+ Risk.HitConsequencePressure;
 		};
@@ -978,6 +979,63 @@ namespace ZeroEscape::LevelGeneration::Tests
 	}
 
 	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+		FZeroEscapePopulationExpectedCoverageSupplementTest,
+		"Demo.PCG.Population.ExpectedCountCoverageSupplement",
+		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
+
+	bool FZeroEscapePopulationExpectedCoverageSupplementTest::RunTest(
+		const FString& Parameters)
+	{
+		(void)Parameters;
+		const FZeroEscapeGeneratedLevelPlan Plan =
+			MakeCombinationCorridorPlan(832900);
+		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
+		FString Error;
+
+		TArray<FZeroEscapePopulationDifficultySettings> HazardDifficulties =
+			MakeDifficulties(1.25f, 0.0f);
+		for (FZeroEscapePopulationDifficultySettings& Difficulty : HazardDifficulties)
+		{
+			Difficulty.Hazards.SpikeTrapWeight = 1;
+			Difficulty.Hazards.BatteringRamWeight = 0;
+			Difficulty.Hazards.GuidedLauncherWeight = 0;
+			Difficulty.Hazards.SpikeWheelWeight = 0;
+		}
+		FPopulationPlacementPlan HazardPlan;
+		TestTrue(TEXT("低期望量长廊机关规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, HazardDifficulties, HazardPlan, Error)
+				== EPopulationPlacementResult::Success);
+		TestTrue(TEXT("机关期望量不再是覆盖补位的硬停止线"),
+			HazardPlan.HazardStats.ActualBudgetTenths
+				> HazardPlan.HazardStats.TargetBudgetTenths
+				&& HazardPlan.HazardStats.CoverageSupplementCount > 0);
+
+		TArray<FZeroEscapePopulationDifficultySettings> ResourceDifficulties =
+			MakeDifficulties(0.0f, 2.5f);
+		for (FZeroEscapePopulationDifficultySettings& Difficulty :
+			ResourceDifficulties)
+		{
+			Difficulty.Resources.CoverageReferenceDistanceTiles = 3;
+		}
+		FPopulationPlacementPlan ResourcePlan;
+		TestTrue(TEXT("低期望量长廊资源规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, ResourceDifficulties, ResourcePlan, Error)
+				== EPopulationPlacementResult::Success);
+		TestEqual(TEXT("资源夹具期望量为一个"),
+			ResourcePlan.ResourceStats.TargetCount, 1);
+		TestTrue(TEXT("资源期望量不再是空白覆盖的硬停止线"),
+			ResourcePlan.ResourceStats.ActualCount
+				> ResourcePlan.ResourceStats.TargetCount
+				&& ResourcePlan.ResourceStats.CoverageSupplementCount > 0);
+		return true;
+	}
+
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 		FZeroEscapePopulationRouteCoverageBiasTest,
 		"Demo.PCG.Population.RouteCoverageBias",
 		EAutomationTestFlags_ApplicationContextMask | EAutomationTestFlags::ProductFilter)
@@ -1138,6 +1196,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		Plan.ExitCoordinate = FIntVector(3, 0, 1);
 		FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
 		Hazards.PlacementScoring.TypeContextStrength = 0.0f;
+		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
 			MakeDifficulties(4.375f, 0.0f);
@@ -1166,7 +1225,8 @@ namespace ZeroEscape::LevelGeneration::Tests
 			TestEqual(TEXT("每个 Seed 只选一处普通机关"), Result.HazardPlacements.Num(), 1);
 			if (SeedIndex == 0)
 			{
-				TestEqual(TEXT("地刺候选明显更多"), Result.KindCounts.SpikeCandidateAnchors, 13);
+				TestEqual(TEXT("地刺半格站候选明显更多"),
+					Result.KindCounts.SpikeCandidateAnchors, 24);
 				TestEqual(TEXT("发射器候选保持稀缺"), Result.KindCounts.LauncherCandidateAnchors, 2);
 			}
 			if (!Result.HazardPlacements.IsEmpty()
@@ -1288,10 +1348,10 @@ namespace ZeroEscape::LevelGeneration::Tests
 					const int32 Distance = FMath::Abs(
 						PathIndex(Placement.AnchorAddress)
 							- PathIndex(Previous.AnchorAddress));
-					if (Distance >= 1
-						&& Distance <= Hazards.PlacementScoring.GroupRadiusTiles)
+					if (Distance <= Hazards.PlacementScoring.GroupRadiusTiles)
 					{
-						const float DistanceBonus = Distance == 1
+						// 同逻辑格的两个独立半格站相距 300cm，沿用一格组合奖励。
+						const float DistanceBonus = Distance <= 1
 							? Hazards.PlacementScoring
 								.LauncherCombinationDistanceOneLog2Bonus
 							: Distance == 2
@@ -1304,7 +1364,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 							DistanceBonus);
 					}
 				}
-				TestTrue(TEXT("发射器组合分只按 2-3 格软距离曲线计算"),
+				TestTrue(TEXT("发射器组合分只按半格相邻及 2-3 格软距离曲线计算"),
 					FMath::IsNearlyEqual(
 						Placement.Score.Combination,
 						ExpectedCombination));
@@ -1349,7 +1409,8 @@ namespace ZeroEscape::LevelGeneration::Tests
 	{
 		(void)Parameters;
 		const FZeroEscapeGeneratedLevelPlan Plan = MakeCombinationCorridorPlan(830700);
-		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
 			MakeDifficulties(1.25f, 0.0f);
@@ -1378,8 +1439,8 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestEqual(TEXT("刺轮种类计数精确"), First.KindCounts.SpikeWheels, 1);
 		TestEqual(TEXT("单独刺轮保持非零可能"), First.KindCounts.UnpairedWheels, 1);
 		TestEqual(TEXT("单独刺轮没有紧邻机关"), First.KindCounts.LiteralSoloWheels, 1);
-		TestEqual(TEXT("普通格各自产生一个刺轮锚点"),
-			First.KindCounts.WheelCandidateAnchors, 37);
+		TestEqual(TEXT("每个可用直廊格产生前后两个刺轮站位"),
+			First.KindCounts.WheelCandidateAnchors, 74);
 		if (First.HazardPlacements.Num() == 1)
 		{
 			const FPopulationPlannedPlacement& Wheel = First.HazardPlacements[0];
@@ -1589,8 +1650,12 @@ namespace ZeroEscape::LevelGeneration::Tests
 		if (!Result.HazardPlacements.IsEmpty())
 		{
 			const FTransform& Transform = Result.HazardPlacements[0].LocalSpawnTransforms[0];
-			TestTrue(TEXT("冲锤安装在西侧闭墙内侧"),
-				Transform.GetLocation().Equals(FVector(350.0, 600.0, 100.0), 0.01));
+			const FVector Location = Transform.GetLocation();
+			TestTrue(TEXT("冲锤安装在西侧闭墙内侧的半格站"),
+				FMath::IsNearlyEqual(Location.X, 350.0, 0.01)
+					&& FMath::IsNearlyEqual(Location.Z, 100.0, 0.01)
+					&& (FMath::IsNearlyEqual(Location.Y, 450.0, 0.01)
+						|| FMath::IsNearlyEqual(Location.Y, 750.0, 0.01)));
 			TestTrue(TEXT("冲锤局部 +X 从闭墙朝向格心"),
 				Transform.GetRotation().GetForwardVector().Equals(FVector::ForwardVector, 0.001));
 		}
@@ -1622,59 +1687,132 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const FString& Parameters)
 	{
 		(void)Parameters;
-		FZeroEscapeGeneratedLevelPlan Plan = MakeLinearPlan(0, false);
-		Plan.PlayerSpawnCoordinate = FIntVector(3, 0, 0);
-		Plan.PursuerSpawnCoordinate = FIntVector(4, 0, 0);
-		Plan.ExitCoordinate = FIntVector(3, 0, 1);
-		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		const FZeroEscapeGeneratedLevelPlan Plan =
+			MakeCombinationCorridorPlan(820000);
+		FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
+		Hazards.PlacementScoring.RouteCoverageLog2Bonus = 0.0f;
 		const FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
 		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
-			MakeDifficulties(100.0f, 0.0f);
+			MakeDifficulties(200.0f, 0.0f);
 		for (FZeroEscapePopulationDifficultySettings& Difficulty : Difficulties)
 		{
-			Difficulty.Hazards.SpikeTrapWeight = 0;
-			Difficulty.Hazards.BatteringRamWeight = 1;
-			Difficulty.Hazards.GuidedLauncherWeight = 100;
+			Difficulty.Hazards.SpikeTrapWeight = 1;
+			Difficulty.Hazards.BatteringRamWeight = 0;
+			Difficulty.Hazards.GuidedLauncherWeight = 0;
 			Difficulty.Hazards.SpikeWheelWeight = 0;
 		}
 
-		int32 TotalLauncherCount = 0;
-		for (int32 SeedIndex = 0; SeedIndex < 64; ++SeedIndex)
+		FPopulationPlacementPlan Result;
+		FString Error;
+		TestTrue(TEXT("300cm 机关站夹具规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, Result, Error)
+				== EPopulationPlacementResult::Success);
+		TestEqual(TEXT("37 个可用直廊格各有两个地刺站候选"),
+			Result.KindCounts.SpikeCandidateAnchors, 74);
+		TestEqual(TEXT("高期望量填满全部 300cm 地刺站"),
+			Result.KindCounts.SpikeTrapGroups, 74);
+
+		TSet<FIntVector> StationCenters;
+		TMap<FIntVector, int32> PlacementsPerLogicalCell;
+		for (const FPopulationPlannedPlacement& Placement :
+			Result.HazardPlacements)
 		{
-			Plan.Signature.Seed = 820000 + SeedIndex;
-			FPopulationPlacementPlan Result;
-			FString Error;
-			if (!TestTrue(TEXT("机关操作格多 Seed 规划成功"),
-				FPopulationPlacementPolicy::BuildPlan(
-					Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
-					Hazards, Resources, Difficulties, Result, Error)
-					== EPopulationPlacementResult::Success))
+			TestTrue(TEXT("夹具只生成双地刺"),
+				Placement.Kind == EPopulationPlacementKind::SpikeTrap);
+			TestEqual(TEXT("每站固定生成两块地刺"),
+				Placement.LocalSpawnTransforms.Num(), 2);
+			if (Placement.LocalSpawnTransforms.Num() != 2)
 			{
 				continue;
 			}
+			const FVector First = Placement.LocalSpawnTransforms[0].GetLocation();
+			const FVector Second = Placement.LocalSpawnTransforms[1].GetLocation();
+			const FVector StationCenter = (First + Second) * 0.5;
+			const FVector LogicalCellCenter(
+				Placement.AnchorAddress.X * Plan.LogicalTileSizeCm,
+				Placement.AnchorAddress.Y * Plan.LogicalTileSizeCm,
+				Placement.AnchorAddress.Z * Plan.FloorHeightCm);
+			const FVector StationOffset = StationCenter - LogicalCellCenter;
+			TestTrue(TEXT("地刺站位于逻辑格中心前后 150cm"),
+				FMath::IsNearlyEqual(
+					FMath::Abs(StationOffset.X) + FMath::Abs(StationOffset.Y),
+					Plan.LogicalTileSizeCm * 0.25,
+					0.01)
+					&& FMath::IsNearlyZero(StationOffset.Z, 0.01));
+			TestTrue(TEXT("双地刺横向中心距保持 300cm"),
+				FMath::IsNearlyEqual(
+					FVector::Distance(First, Second),
+					Hazards.SpikeTrapLateralSpacingCm,
+					0.01));
+			const FIntVector QuantizedStationCenter(
+				FMath::RoundToInt(StationCenter.X),
+				FMath::RoundToInt(StationCenter.Y),
+				FMath::RoundToInt(StationCenter.Z));
+			TestFalse(TEXT("同一个 300cm 站不会被重复占用"),
+				StationCenters.Contains(QuantizedStationCenter));
+			StationCenters.Add(QuantizedStationCenter);
+			++PlacementsPerLogicalCell.FindOrAdd(Placement.AnchorAddress);
+		}
 
-			TotalLauncherCount += Result.KindCounts.GuidedLaunchers;
-			TSet<FIntVector> AcceptedOperationAddresses;
-			for (int32 PlacementIndex = 0;
-				PlacementIndex < Result.HazardPlacements.Num();
-				++PlacementIndex)
+		bool bFoundTwoStationsInOneLogicalCell = false;
+		for (const TPair<FIntVector, int32>& Pair : PlacementsPerLogicalCell)
+		{
+			TestTrue(TEXT("一个逻辑格最多使用两个直廊半格站"),
+				Pair.Value <= 2);
+			if (Pair.Value == 2)
 			{
-				const FPopulationPlannedPlacement& Placement =
-					Result.HazardPlacements[PlacementIndex];
-				for (const FIntVector Address : Placement.ResourceBlockedAddresses)
-				{
-					const FString Assertion = FString::Printf(
-						TEXT("Seed %d 的第 %d 处机关不得复用实际操作格 %s"),
-						Plan.Signature.Seed,
-						PlacementIndex,
-						*Address.ToString());
-					TestFalse(*Assertion, AcceptedOperationAddresses.Contains(Address));
-					AcceptedOperationAddresses.Add(Address);
-				}
+				bFoundTwoStationsInOneLogicalCell = true;
 			}
 		}
-		TestTrue(TEXT("固定 Seed 集必须实际覆盖发射器单格占用合同"),
-			TotalLauncherCount > 0);
+		TestTrue(TEXT("同一 600cm 逻辑格的两个 300cm 站可以分别放机关"),
+			bFoundTwoStationsInOneLogicalCell);
+
+		// 转角/T 路口的垂直半站会共享一个 300×300cm 区域，必须硬互斥；
+		// 只有同一直线的前后两个半站可以在同格共存。
+		const FZeroEscapeGeneratedLevelPlan CornerPlan = MakeSingleClosedWallPlan();
+		FPopulationPlacementPlan CornerResult;
+		TestTrue(TEXT("转角半站重叠夹具规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				CornerPlan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, CornerResult, Error)
+				== EPopulationPlacementResult::Success);
+		TestEqual(TEXT("T 路口保留三个原始地刺站候选"),
+			CornerResult.KindCounts.SpikeCandidateAnchors, 3);
+		TestTrue(TEXT("垂直半站操作包络不能同时落地"),
+			CornerResult.KindCounts.SpikeTrapGroups <= 2);
+		TArray<FVector> AcceptedStationDirections;
+		for (const FPopulationPlannedPlacement& Placement :
+			CornerResult.HazardPlacements)
+		{
+			if (Placement.LocalSpawnTransforms.Num() != 2)
+			{
+				continue;
+			}
+			const FVector Center =
+				(Placement.LocalSpawnTransforms[0].GetLocation()
+					+ Placement.LocalSpawnTransforms[1].GetLocation()) * 0.5;
+			const FVector CellCenter(
+				Placement.AnchorAddress.X * CornerPlan.LogicalTileSizeCm,
+				Placement.AnchorAddress.Y * CornerPlan.LogicalTileSizeCm,
+				Placement.AnchorAddress.Z * CornerPlan.FloorHeightCm);
+			AcceptedStationDirections.Add((Center - CellCenter).GetSafeNormal2D());
+		}
+		for (int32 FirstIndex = 0;
+			FirstIndex < AcceptedStationDirections.Num();
+			++FirstIndex)
+		{
+			for (int32 SecondIndex = FirstIndex + 1;
+				SecondIndex < AcceptedStationDirections.Num();
+				++SecondIndex)
+			{
+				TestTrue(TEXT("同格共存站只能前后相反"),
+					FVector::DotProduct(
+						AcceptedStationDirections[FirstIndex],
+						AcceptedStationDirections[SecondIndex]) < -0.99f);
+			}
+		}
 		return true;
 	}
 

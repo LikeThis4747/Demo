@@ -30,7 +30,7 @@ struct DEMO_API FZeroEscapeHazardRiskTuning
 	{
 	}
 
-	/** 代表性通行时间每秒的压力；Policy 用真实格宽除以玩家名义地面速度计算时间。 */
+	/** 代表性通行时间每秒的压力；Policy 用 300cm 机关站长度除以玩家名义地面速度计算时间。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Pressure",
 		meta = (ClampMin = "0.0"))
 	float TraversalPressurePerSecond = 0.0f;
@@ -148,10 +148,10 @@ struct DEMO_API FZeroEscapeHazardPlacementScoringTuning
 		meta = (ClampMin = "1.0", ClampMax = "2.0"))
 	float RewardBranchCombinationMultiplier = 1.2f;
 
-	/** 刺轮没有冲锤或地刺搭档时的轻微贡献；保持有限且不归零。 */
+	/** 刺轮没有冲锤或地刺搭档时的有限降权；保持非零，仍允许单独出现。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Combinations",
 		meta = (ClampMin = "-4.0", ClampMax = "0.0"))
-	float SoloWheelLog2Contribution = -0.5f;
+	float SoloWheelLog2Contribution = -2.0f;
 
 	/** 多样性只观察最近多少个普通机关。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards|Diversity",
@@ -232,7 +232,7 @@ struct DEMO_API FZeroEscapeHazardPopulationTuning
 {
 	GENERATED_BODY()
 
-	/** 每 100 个玩法面积格的标准机关预算；1.0 等于 10 个十分之一预算。 */
+	/** 每 100 个玩法面积格的期望机关预算；达到后仍可为长空白段追加覆盖补位。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Population|Hazards",
 		meta = (ClampMin = "0.0"))
 	float ExpectedHazardBudgetUnitsPer100GameplayCells = 0.0f;

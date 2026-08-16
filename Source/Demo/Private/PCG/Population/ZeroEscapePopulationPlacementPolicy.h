@@ -123,6 +123,8 @@ namespace ZeroEscape::LevelGeneration
 		int32 TargetBudgetTenths = 0;
 		int32 ActualBudgetTenths = 0;
 		int32 UnderfilledBudgetTenths = 0;
+		/** 达到期望量后，为消除长空白覆盖缺口追加的放置数。 */
+		int32 CoverageSupplementCount = 0;
 	};
 
 	struct FPopulationPlacementPlan

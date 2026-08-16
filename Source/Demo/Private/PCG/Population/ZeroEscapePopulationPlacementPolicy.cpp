@@ -29,6 +29,11 @@ namespace ZeroEscape::LevelGeneration
 		{
 			FTransform LocalSpawnTransform = FTransform::Identity;
 			FVector SpikeLateralAxis = FVector::ZeroVector;
+			/** 普通格内的 300cm 半格站标识；同站只能提交一个机关。 */
+			FIntVector StationKey = FIntVector::ZeroValue;
+			/** 本站 300×600cm 操作包络会阻塞的自身与两个垂直半格站。 */
+			TArray<FIntVector> BlockedStationKeys;
+			bool bUsesStationSlot = false;
 			TArray<FIntVector> ResourceBlockedAddresses;
 			FPopulationSpikeWheelSpawnConfig SpikeWheel;
 			float PositionLog2Contribution = 0.0f;
@@ -122,6 +127,7 @@ namespace ZeroEscape::LevelGeneration
 			float TargetPressure = 0.0f;
 			float PressureAfterPlacement = 0.0f;
 			float AddedCombinationPressure = 0.0f;
+			float RouteCoverageLog2Contribution = 0.0f;
 		};
 
 		bool CoordinateLess(const FIntVector& A, const FIntVector& B)
@@ -162,6 +168,55 @@ namespace ZeroEscape::LevelGeneration
 			case 1: return FVector(1.0, 0.0, 0.0);
 			case 2: return FVector(0.0, -1.0, 0.0);
 			default: return FVector(-1.0, 0.0, 0.0);
+			}
+		}
+
+		/**
+		 * 把一个 600cm 普通格的四个半格站映射到稳定整数键。
+		 * 乘四为相邻格留出间隔，避免负坐标或相反方向发生键碰撞。
+		 */
+		FIntVector MakeStationKey(
+			const FIntVector CellAddress,
+			const uint8 Direction)
+		{
+			const FIntPoint Step = Grid::Step(FIntPoint::ZeroValue, Direction);
+			return FIntVector(
+				CellAddress.X * 4 + Step.X,
+				CellAddress.Y * 4 + Step.Y,
+				CellAddress.Z);
+		}
+
+		/** 配置一个 300×600cm 站位包络：允许同格前后站共存，禁止转角重叠。 */
+		void ConfigureStationSlot(
+			FPlacementVariant& Variant,
+			const FIntVector CellAddress,
+			const uint8 Direction)
+		{
+			Variant.StationKey = MakeStationKey(CellAddress, Direction);
+			Variant.bUsesStationSlot = true;
+			Variant.BlockedStationKeys = {
+				Variant.StationKey,
+				MakeStationKey(
+					CellAddress,
+					static_cast<uint8>((Direction + 1) % Grid::DirectionCount)),
+				MakeStationKey(
+					CellAddress,
+					static_cast<uint8>((Direction + 3) % Grid::DirectionCount))
+			};
+		}
+
+		/** 接收站位后冻结其完整操作包络，供后续候选做硬重叠检查。 */
+		void ReserveStationSlot(
+			const FPlacementVariant& Variant,
+			TSet<FIntVector>& InOutBlockedStationKeys)
+		{
+			if (!Variant.bUsesStationSlot)
+			{
+				return;
+			}
+			for (const FIntVector Key : Variant.BlockedStationKeys)
+			{
+				InOutBlockedStationKeys.Add(Key);
 			}
 		}
 
@@ -676,6 +731,28 @@ namespace ZeroEscape::LevelGeneration
 			return 0;
 		}
 
+		/** 返回一次放置实际带入世界的 Actor 数，包含发射器的预装弹体。 */
+		int32 RuntimeActorCountForHazardKind(
+			const EPopulationPlacementKind Kind,
+			const FZeroEscapeHazardPopulationAssembly& Hazards)
+		{
+			switch (Kind)
+			{
+			case EPopulationPlacementKind::SpikeTrap:
+				return Hazards.SpikeTrapActorCount;
+			case EPopulationPlacementKind::GuidedLauncher:
+				return 2;
+			case EPopulationPlacementKind::Pendulum:
+			case EPopulationPlacementKind::BatteringRam:
+			case EPopulationPlacementKind::SpikeWheel:
+				return 1;
+			case EPopulationPlacementKind::MagneticResource:
+			case EPopulationPlacementKind::EnergyOrb:
+				return 0;
+			}
+			return 0;
+		}
+
 		bool IsWheelRamPair(
 			const EPopulationPlacementKind First,
 			const EPopulationPlacementKind Second)
@@ -807,7 +884,7 @@ namespace ZeroEscape::LevelGeneration
 			for (const ItemType& Item : Items)
 			{
 				const double Weight = GetWeight(Item);
-				if (!FMath::IsFinite(Weight) || Weight <= 0.0)
+				if (!FMath::IsFinite(Weight) || Weight < 0.0)
 				{
 					return INDEX_NONE;
 				}
@@ -822,7 +899,7 @@ namespace ZeroEscape::LevelGeneration
 			double RunningWeight = 0.0;
 			for (int32 Index = 0; Index < Items.Num(); ++Index)
 			{
-				RunningWeight += GetWeight(Items[Index]);
+				RunningWeight += FMath::Max(0.0, GetWeight(Items[Index]));
 				if (Draw < RunningWeight)
 				{
 					return Index;
@@ -1211,85 +1288,117 @@ namespace ZeroEscape::LevelGeneration
 
 				const FVector FloorCenter = AddressFloorLocation(
 					Plan, Cell.Coordinate, FloorTopZCm);
-				FPlacementCandidate Spike;
-				Spike.Kind = EPopulationPlacementKind::SpikeTrap;
-				Spike.AnchorAddress = Cell.Coordinate;
-				FPlacementCandidate Ram;
-				Ram.Kind = EPopulationPlacementKind::BatteringRam;
-				Ram.AnchorAddress = Cell.Coordinate;
-				FPlacementCandidate Launcher;
-				Launcher.Kind = EPopulationPlacementKind::GuidedLauncher;
-				Launcher.AnchorAddress = Cell.Coordinate;
-				FPlacementCandidate Wheel;
-				Wheel.Kind = EPopulationPlacementKind::SpikeWheel;
-				Wheel.AnchorAddress = Cell.Coordinate;
+				const double StationOffsetCm = Plan.LogicalTileSizeCm * 0.25;
 
-				for (uint8 Direction = 0; Direction < Grid::DirectionCount; ++Direction)
+				for (uint8 TravelDirection = 0;
+					TravelDirection < Grid::DirectionCount;
+					++TravelDirection)
 				{
 					const bool bOpen =
-						(Cell.OpeningMask & Grid::DirectionBit(Direction)) != 0;
-					const bool bOpenToOrdinary = IsOrdinaryNeighborOpen(
-						Plan, OrdinaryByAddress, Cell, Direction);
-					const FVector Forward = DirectionVector(Direction);
-					if (bOpen)
+						(Cell.OpeningMask & Grid::DirectionBit(TravelDirection)) != 0;
+					if (!bOpen)
 					{
-						FPlacementVariant SpikeVariant;
-						SpikeVariant.LocalSpawnTransform = FTransform(
-							Forward.Rotation(),
-							FloorCenter + FVector(
-								0.0, 0.0, Hazards.SpikeTrapFloorOffsetCm));
-						SpikeVariant.SpikeLateralAxis = FVector::CrossProduct(
-							FVector::UpVector, Forward);
-						SpikeVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
-						Spike.Variants.Add(MoveTemp(SpikeVariant));
-
-						FPlacementVariant WheelVariant;
-						WheelVariant.LocalSpawnTransform = FTransform(
-							Forward.Rotation(), FloorCenter);
-						WheelVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
-						WheelVariant.SpikeWheel.bIsConfigured = true;
-						WheelVariant.SpikeWheel.RouteVariantSeed = static_cast<int32>(
-							MakeStablePlacementHash(
-								Plan.Signature.Seed,
-								Cell.Coordinate,
-								Direction,
-								0x1B56C4E9u));
-						Wheel.Variants.Add(MoveTemp(WheelVariant));
+						continue;
 					}
-					else
+
+					const bool bOpenToOrdinary = IsOrdinaryNeighborOpen(
+						Plan, OrdinaryByAddress, Cell, TravelDirection);
+					const FVector TravelForward = DirectionVector(TravelDirection);
+					const FVector StationFloorCenter = FloorCenter
+						+ TravelForward * StationOffsetCm;
+					FPlacementCandidate Spike;
+					Spike.Kind = EPopulationPlacementKind::SpikeTrap;
+					Spike.AnchorAddress = Cell.Coordinate;
+					FPlacementVariant SpikeVariant;
+					SpikeVariant.LocalSpawnTransform = FTransform(
+						TravelForward.Rotation(),
+						StationFloorCenter + FVector(
+							0.0, 0.0, Hazards.SpikeTrapFloorOffsetCm));
+					SpikeVariant.SpikeLateralAxis = FVector::CrossProduct(
+						FVector::UpVector, TravelForward);
+					ConfigureStationSlot(
+						SpikeVariant, Cell.Coordinate, TravelDirection);
+					SpikeVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
+					Spike.Variants.Add(MoveTemp(SpikeVariant));
+					OutSpikes.Add(MoveTemp(Spike));
+
+					FPlacementCandidate Wheel;
+					Wheel.Kind = EPopulationPlacementKind::SpikeWheel;
+					Wheel.AnchorAddress = Cell.Coordinate;
+					FPlacementVariant WheelVariant;
+					WheelVariant.LocalSpawnTransform = FTransform(
+						TravelForward.Rotation(), StationFloorCenter);
+					ConfigureStationSlot(
+						WheelVariant, Cell.Coordinate, TravelDirection);
+					WheelVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
+					WheelVariant.SpikeWheel.bIsConfigured = true;
+					WheelVariant.SpikeWheel.RouteVariantSeed = static_cast<int32>(
+						MakeStablePlacementHash(
+							Plan.Signature.Seed,
+							Cell.Coordinate,
+							TravelDirection,
+							0x1B56C4E9u));
+					Wheel.Variants.Add(MoveTemp(WheelVariant));
+					OutWheels.Add(MoveTemp(Wheel));
+
+					// 冲锤只使用当前 300cm 站位左右两侧的真实封闭墙面。
+					FPlacementCandidate Ram;
+					Ram.Kind = EPopulationPlacementKind::BatteringRam;
+					Ram.AnchorAddress = Cell.Coordinate;
+					for (const uint8 SideOffset : { uint8(1), uint8(3) })
 					{
+						const uint8 WallDirection = static_cast<uint8>(
+							(TravelDirection + SideOffset) % Grid::DirectionCount);
+						if ((Cell.OpeningMask & Grid::DirectionBit(WallDirection)) != 0)
+						{
+							continue;
+						}
+						const FVector WallOutward = DirectionVector(WallDirection);
 						FPlacementVariant RamVariant;
 						RamVariant.LocalSpawnTransform = MakeWallMountedTransform(
-							FloorCenter,
-							-Forward,
+							StationFloorCenter,
+							-WallOutward,
 							Plan.LogicalTileSizeCm * 0.5,
 							Hazards.BatteringRamWallInsetCm,
 							Hazards.BatteringRamMountHeightCm);
+						ConfigureStationSlot(
+							RamVariant, Cell.Coordinate, TravelDirection);
 						RamVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
 						Ram.Variants.Add(MoveTemp(RamVariant));
 					}
+					if (!Ram.Variants.IsEmpty())
+					{
+						OutRams.Add(MoveTemp(Ram));
+					}
 
-					const uint8 RearDirection = Grid::OppositeDirectionIndex(Direction);
+					const uint8 RearDirection =
+						Grid::OppositeDirectionIndex(TravelDirection);
 					const bool bRearClosed =
 						(Cell.OpeningMask & Grid::DirectionBit(RearDirection)) == 0;
-					const FIntVector FrontAddress = StepAddress(Cell.Coordinate, Direction);
+					const FIntVector FrontAddress = StepAddress(
+						Cell.Coordinate, TravelDirection);
 					if (bOpenToOrdinary && bRearClosed
 						&& !IsFlowCoordinate(Plan, FrontAddress))
 					{
+						FPlacementCandidate Launcher;
+						Launcher.Kind = EPopulationPlacementKind::GuidedLauncher;
+						Launcher.AnchorAddress = Cell.Coordinate;
 						FPlacementVariant LauncherVariant;
 						LauncherVariant.LocalSpawnTransform = MakeWallMountedTransform(
 							FloorCenter,
-							Forward,
+							TravelForward,
 							Plan.LogicalTileSizeCm * 0.5,
 							Hazards.GuidedLauncherWallInsetCm,
 							Hazards.GuidedLauncherMountHeightCm);
+						ConfigureStationSlot(
+							LauncherVariant, Cell.Coordinate, RearDirection);
 						LauncherVariant.ResourceBlockedAddresses.Add(Cell.Coordinate);
 						bool bHasPerpendicularOpening = false;
 						for (uint8 OtherDirection = 0;
 							OtherDirection < Grid::DirectionCount;
 							++OtherDirection)
 						{
-							if (OtherDirection != Direction
+							if (OtherDirection != TravelDirection
 								&& OtherDirection != RearDirection
 								&& (Cell.OpeningMask
 									& Grid::DirectionBit(OtherDirection)) != 0)
@@ -1303,18 +1412,20 @@ namespace ZeroEscape::LevelGeneration
 								? Hazards.PlacementScoring.LauncherCornerLog2Bonus
 								: 0.0f;
 						Launcher.Variants.Add(MoveTemp(LauncherVariant));
+						OutLaunchers.Add(MoveTemp(Launcher));
 					}
 				}
-
-				if (!Spike.Variants.IsEmpty()) OutSpikes.Add(MoveTemp(Spike));
-				if (!Ram.Variants.IsEmpty()) OutRams.Add(MoveTemp(Ram));
-				if (!Launcher.Variants.IsEmpty()) OutLaunchers.Add(MoveTemp(Launcher));
-				if (!Wheel.Variants.IsEmpty()) OutWheels.Add(MoveTemp(Wheel));
 			}
 
 			auto CandidateLess = [](const FPlacementCandidate& A, const FPlacementCandidate& B)
 			{
-				return CoordinateLess(A.AnchorAddress, B.AnchorAddress);
+				if (A.AnchorAddress != B.AnchorAddress)
+				{
+					return CoordinateLess(A.AnchorAddress, B.AnchorAddress);
+				}
+				return CoordinateLess(
+					A.Variants[0].StationKey,
+					B.Variants[0].StationKey);
 			};
 			OutSpikes.Sort(CandidateLess);
 			OutRams.Sort(CandidateLess);
@@ -1324,16 +1435,18 @@ namespace ZeroEscape::LevelGeneration
 
 		bool VariantHasOperationConflict(
 			const FPlacementVariant& Variant,
-			const TSet<FIntVector>& AcceptedOperationAddresses)
+			const TSet<FIntVector>& ReservedOperationAddresses,
+			const TSet<FIntVector>& BlockedStationKeys)
 		{
 			for (const FIntVector Address : Variant.ResourceBlockedAddresses)
 			{
-				if (AcceptedOperationAddresses.Contains(Address))
+				if (ReservedOperationAddresses.Contains(Address))
 				{
 					return true;
 				}
 			}
-			return false;
+			return Variant.bUsesStationSlot
+				&& BlockedStationKeys.Contains(Variant.StationKey);
 		}
 
 		bool EvaluateHazardCandidate(
@@ -1389,7 +1502,8 @@ namespace ZeroEscape::LevelGeneration
 					return false;
 				}
 				OutEvaluation.NearbyGroupIds.AddUnique(Accepted.GroupId);
-				if (Nearby.Distance == 1)
+				// 同一 600cm 逻辑格的两个不同半格站中心相距 300cm，按相邻组合处理。
+				if (Nearby.Distance <= 1)
 				{
 					OutEvaluation.AdjacentPlacementIndices.Add(
 						Nearby.PlacementIndex);
@@ -1505,9 +1619,11 @@ namespace ZeroEscape::LevelGeneration
 				NearestHazardDistance = FMath::Min(
 					NearestHazardDistance, State.NearestHazardDistances[Node]);
 			}
-			OutEvaluation.Score.Position = Variant.PositionLog2Contribution
-				+ CalculateRouteCoverageLog2Contribution(
+			OutEvaluation.RouteCoverageLog2Contribution =
+				CalculateRouteCoverageLog2Contribution(
 					NearestHazardDistance, Scoring);
+			OutEvaluation.Score.Position = Variant.PositionLog2Contribution
+				+ OutEvaluation.RouteCoverageLog2Contribution;
 			OutEvaluation.Score.Progress = Scoring.ProgressLog2Strength
 				* (2.0f * OutEvaluation.CandidateProgress01 - 1.0f);
 			OutEvaluation.Score.GroupPressure =
@@ -1563,7 +1679,9 @@ namespace ZeroEscape::LevelGeneration
 			const FZeroEscapeHazardPlacementScoringTuning& Scoring,
 			const float RepresentativeTraversalSeconds,
 			const FTraversalGraph& Graph,
-			const TSet<FIntVector>& AcceptedOperationAddresses,
+			const TSet<FIntVector>& ReservedOperationAddresses,
+			const TSet<FIntVector>& BlockedStationKeys,
+			const bool bRequireRouteCoverageDeficit,
 			FHazardPlanningState& State,
 			TArray<FScoredKindPool>& OutPools,
 			FString& OutError)
@@ -1590,7 +1708,9 @@ namespace ZeroEscape::LevelGeneration
 				{
 					const FPlacementVariant& Variant = Candidate.Variants[VariantIndex];
 					if (VariantHasOperationConflict(
-							Variant, AcceptedOperationAddresses))
+							Variant,
+							ReservedOperationAddresses,
+							BlockedStationKeys))
 					{
 						continue;
 					}
@@ -1609,6 +1729,12 @@ namespace ZeroEscape::LevelGeneration
 					{
 						OutError = TEXT("机关候选评分遇到非法图节点或非有限数值。");
 						return false;
+					}
+					if (bRequireRouteCoverageDeficit
+						&& Evaluation.RouteCoverageLog2Contribution
+							<= KINDA_SMALL_NUMBER)
+					{
+						continue;
 					}
 					FScoredVariant& ScoredVariant =
 						Anchor.Variants.AddDefaulted_GetRef();
@@ -1911,6 +2037,14 @@ namespace ZeroEscape::LevelGeneration
 				TArray<int32> AdjacentPlacements;
 				for (const int32 Node : Wheel.OperationNodeIndices)
 				{
+					for (const int32 OtherPlacement :
+						State.AcceptedPlacementIndicesByNode[Node])
+					{
+						if (OtherPlacement != PlacementIndex)
+						{
+							AdjacentPlacements.AddUnique(OtherPlacement);
+						}
+					}
 					for (const int32 Neighbor : Graph.Neighbors[Node])
 					{
 						for (const int32 OtherPlacement :
@@ -1960,12 +2094,20 @@ namespace ZeroEscape::LevelGeneration
 			const FZeroEscapePopulationDifficultySettings& Difficulty,
 			const FTraversalGraph& Graph,
 			const int32 HazardBudgetTargetTenths,
+			const int32 ReservedNonHazardActorCount,
 			FRandomStream& Rng,
 			FPopulationPlacementPlan& InOutPlan,
 			TSet<FIntVector>& OutResourceBlockedAddresses,
 			FString& OutError)
 		{
 			FHazardPlanningState State;
+			// 光团端点是整格保留；普通机关之间只按 300cm 站位互斥。
+			const TSet<FIntVector> ReservedOperationAddresses =
+				OutResourceBlockedAddresses;
+			TSet<FIntVector> BlockedStationKeys;
+			int32 PlannedHazardActorCount = 0;
+			const int32 MaximumPopulationActors =
+				GenerationLimits::MaxGridCells * GenerationLimits::MaxFloorCount;
 			State.AcceptedPlacementIndicesByNode.SetNum(Graph.Addresses.Num());
 			State.NearestHazardDistances.Init(
 				UnreachableDistance, Graph.Addresses.Num());
@@ -1996,7 +2138,9 @@ namespace ZeroEscape::LevelGeneration
 				}
 				const FPlacementVariant& Variant = Candidate.Variants[0];
 				if (VariantHasOperationConflict(
-						Variant, OutResourceBlockedAddresses))
+						Variant,
+						ReservedOperationAddresses,
+						BlockedStationKeys))
 				{
 					OutError = TEXT("奖励光团端点与强制摆锤占用冲突。");
 					return false;
@@ -2027,6 +2171,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					OutResourceBlockedAddresses.Add(Address);
 				}
+				ReserveStationSlot(Variant, BlockedStationKeys);
 				if (!RegisterAcceptedHazard(
 						Candidate,
 						Variant,
@@ -2042,6 +2187,8 @@ namespace ZeroEscape::LevelGeneration
 				}
 				InOutPlan.HazardStats.ActualBudgetTenths +=
 					Hazards.BudgetCosts.PendulumCostTenths;
+				PlannedHazardActorCount +=
+					RuntimeActorCountForHazardKind(Candidate.Kind, Hazards);
 			}
 
 			TArray<FPlacementCandidate> Spikes;
@@ -2063,62 +2210,96 @@ namespace ZeroEscape::LevelGeneration
 			InOutPlan.KindCounts.WheelCandidateAnchors = Wheels.Num();
 			InOutPlan.HazardStats.CandidateAnchorCount =
 				Spikes.Num() + Rams.Num() + Launchers.Num() + Wheels.Num();
-			int32 RemainingBudgetTenths = FMath::Max(
-				0,
-				HazardBudgetTargetTenths
-					- InOutPlan.HazardStats.ActualBudgetTenths);
-			while (RemainingBudgetTenths > 0)
+			const bool bOrdinaryLayerEnabled = HazardBudgetTargetTenths > 0;
+			while (bOrdinaryLayerEnabled)
 			{
+				const bool bCoverageSupplementPhase =
+					InOutPlan.HazardStats.ActualBudgetTenths
+						>= HazardBudgetTargetTenths;
+				const int32 RemainingActorCapacity = MaximumPopulationActors
+					- ReservedNonHazardActorCount
+					- PlannedHazardActorCount;
+				if (RemainingActorCapacity <= 0)
+				{
+					break;
+				}
+				const auto EligibleTypeWeight = [
+					&Hazards,
+					RemainingActorCapacity](
+						const EPopulationPlacementKind Kind,
+						const int32 BaseWeight)
+				{
+					return RuntimeActorCountForHazardKind(Kind, Hazards)
+						<= RemainingActorCapacity
+						? BaseWeight
+						: 0;
+				};
 				TArray<FScoredKindPool> Pools;
 				if (!BuildScoredKindPool(
 						EPopulationPlacementKind::SpikeTrap,
-						Difficulty.Hazards.SpikeTrapWeight,
+						EligibleTypeWeight(
+							EPopulationPlacementKind::SpikeTrap,
+							Difficulty.Hazards.SpikeTrapWeight),
 						Spikes,
 						Plan,
 						Difficulty.Hazards,
 						Hazards.PlacementScoring,
 						RepresentativeTraversalSeconds,
 						Graph,
-						OutResourceBlockedAddresses,
+						ReservedOperationAddresses,
+						BlockedStationKeys,
+						bCoverageSupplementPhase,
 						State,
 						Pools,
 						OutError)
 					|| !BuildScoredKindPool(
 						EPopulationPlacementKind::BatteringRam,
-						Difficulty.Hazards.BatteringRamWeight,
+						EligibleTypeWeight(
+							EPopulationPlacementKind::BatteringRam,
+							Difficulty.Hazards.BatteringRamWeight),
 						Rams,
 						Plan,
 						Difficulty.Hazards,
 						Hazards.PlacementScoring,
 						RepresentativeTraversalSeconds,
 						Graph,
-						OutResourceBlockedAddresses,
+						ReservedOperationAddresses,
+						BlockedStationKeys,
+						bCoverageSupplementPhase,
 						State,
 						Pools,
 						OutError)
 					|| !BuildScoredKindPool(
 						EPopulationPlacementKind::GuidedLauncher,
-						Difficulty.Hazards.GuidedLauncherWeight,
+						EligibleTypeWeight(
+							EPopulationPlacementKind::GuidedLauncher,
+							Difficulty.Hazards.GuidedLauncherWeight),
 						Launchers,
 						Plan,
 						Difficulty.Hazards,
 						Hazards.PlacementScoring,
 						RepresentativeTraversalSeconds,
 						Graph,
-						OutResourceBlockedAddresses,
+						ReservedOperationAddresses,
+						BlockedStationKeys,
+						bCoverageSupplementPhase,
 						State,
 						Pools,
 						OutError)
 					|| !BuildScoredKindPool(
 						EPopulationPlacementKind::SpikeWheel,
-						Difficulty.Hazards.SpikeWheelWeight,
+						EligibleTypeWeight(
+							EPopulationPlacementKind::SpikeWheel,
+							Difficulty.Hazards.SpikeWheelWeight),
 						Wheels,
 						Plan,
 						Difficulty.Hazards,
 						Hazards.PlacementScoring,
 						RepresentativeTraversalSeconds,
 						Graph,
-						OutResourceBlockedAddresses,
+						ReservedOperationAddresses,
+						BlockedStationKeys,
+						bCoverageSupplementPhase,
 						State,
 						Pools,
 						OutError))
@@ -2207,6 +2388,7 @@ namespace ZeroEscape::LevelGeneration
 				{
 					OutResourceBlockedAddresses.Add(Address);
 				}
+				ReserveStationSlot(Variant, BlockedStationKeys);
 				if (!RegisterAcceptedHazard(
 						Candidate,
 						Variant,
@@ -2223,10 +2405,12 @@ namespace ZeroEscape::LevelGeneration
 				const int32 PlacementCostTenths = HazardBudgetCostTenthsForKind(
 					Candidate.Kind, Hazards.BudgetCosts);
 				InOutPlan.HazardStats.ActualBudgetTenths += PlacementCostTenths;
-				RemainingBudgetTenths = FMath::Max(
-					0,
-					HazardBudgetTargetTenths
-						- InOutPlan.HazardStats.ActualBudgetTenths);
+				PlannedHazardActorCount += RuntimeActorCountForHazardKind(
+					Candidate.Kind, Hazards);
+				if (bCoverageSupplementPhase)
+				{
+					++InOutPlan.HazardStats.CoverageSupplementCount;
+				}
 			}
 			InOutPlan.HazardStats.ActualCount = InOutPlan.HazardPlacements.Num();
 			InOutPlan.HazardStats.UnderfilledBudgetTenths = FMath::Max(
@@ -2352,8 +2536,28 @@ namespace ZeroEscape::LevelGeneration
 			HazardNodes.Sort();
 			UpdateNearestDistances(Graph, HazardNodes, NearestContentDistances);
 			TArray<FIntVector> SelectedAnchors;
-			while (SelectedAnchors.Num() < ResourceTarget && !RemainingAnchors.IsEmpty())
+			int64 ReservedActorCount = Plan.RewardBranches.Num();
+			for (const FPopulationPlannedPlacement& Placement :
+				InOutPlan.HazardPlacements)
 			{
+				ReservedActorCount += Placement.LocalSpawnTransforms.Num();
+				ReservedActorCount += Placement.Kind
+					== EPopulationPlacementKind::GuidedLauncher ? 1 : 0;
+			}
+			const int32 MaximumSelectableResources = FMath::Max<int32>(
+				0,
+				static_cast<int32>(FMath::Min<int64>(
+					RemainingAnchors.Num(),
+					static_cast<int64>(GenerationLimits::MaxGridCells)
+						* GenerationLimits::MaxFloorCount
+						- ReservedActorCount)));
+			const bool bResourceLayerEnabled = ResourceTarget > 0;
+			while (bResourceLayerEnabled
+				&& SelectedAnchors.Num() < MaximumSelectableResources
+				&& !RemainingAnchors.IsEmpty())
+			{
+				const bool bCoverageSupplementPhase =
+					SelectedAnchors.Num() >= ResourceTarget;
 				// 同格与机关/光团占用已在候选阶段剔除；剩余锚点只做非零软加权。
 				const int32 PickIndex = PickWeightedIndex(
 					RemainingAnchors,
@@ -2361,7 +2565,8 @@ namespace ZeroEscape::LevelGeneration
 						&Resources,
 						&Difficulty,
 						&Graph,
-						&NearestContentDistances](const FIntVector Address)
+						&NearestContentDistances,
+						bCoverageSupplementPhase](const FIntVector Address)
 					{
 						const float* Priority = SupportPriorityByAddress.Find(Address);
 						const double SupportLog2 = static_cast<double>(
@@ -2369,6 +2574,16 @@ namespace ZeroEscape::LevelGeneration
 							* Resources.HighPressureSupportLog2Bonus;
 						const int32 Node = Graph.NodeByAddress.FindChecked(Address);
 						const int32 NearestDistance = NearestContentDistances[Node];
+						const bool bHasCoverageDeficit =
+							NearestDistance == UnreachableDistance
+							|| NearestDistance
+								> Difficulty.Resources.CoverageReferenceDistanceTiles;
+						if (bCoverageSupplementPhase
+							&& (Resources.RouteCoverageLog2Bonus <= KINDA_SMALL_NUMBER
+								|| !bHasCoverageDeficit))
+						{
+							return 0.0;
+						}
 						const float CoverageSignal = NearestDistance == UnreachableDistance
 							? 1.0f
 							: FMath::Clamp(
@@ -2390,6 +2605,10 @@ namespace ZeroEscape::LevelGeneration
 				RemainingAnchors.RemoveAt(PickIndex, 1, EAllowShrinking::No);
 				const int32 Node = Graph.NodeByAddress.FindChecked(Address);
 				SelectedAnchors.Add(Address);
+				if (bCoverageSupplementPhase)
+				{
+					++InOutPlan.ResourceStats.CoverageSupplementCount;
+				}
 				UpdateNearestDistances(
 					Graph, TConstArrayView<int32>(&Node, 1), NearestContentDistances);
 			}
@@ -2487,13 +2706,14 @@ namespace ZeroEscape::LevelGeneration
 		{
 			return EPopulationPlacementResult::InvalidConfiguration;
 		}
-		const double TraversalSeconds = LevelPlan.LogicalTileSizeCm
+		// Population 的基础放置单元是半个逻辑格：600cm 格内沿路线每 300cm 一个站。
+		const double TraversalSeconds = LevelPlan.LogicalTileSizeCm * 0.5
 			/ static_cast<double>(PlayerMaxWalkSpeedCmPerSecond);
 		if (!FMath::IsFinite(TraversalSeconds)
 			|| TraversalSeconds <= 0.0
 			|| TraversalSeconds > TNumericLimits<float>::Max())
 		{
-			OutError = TEXT("玩家速度与逻辑格宽无法得到有限通行时间。");
+			OutError = TEXT("玩家速度与半格机关站长度无法得到有限通行时间。");
 			return EPopulationPlacementResult::InvalidConfiguration;
 		}
 		const float RepresentativeTraversalSeconds =
@@ -2528,6 +2748,7 @@ namespace ZeroEscape::LevelGeneration
 				*Difficulty,
 				Graph,
 				HazardBudgetTargetTenths,
+				ResourceTarget + LevelPlan.RewardBranches.Num(),
 				HazardRng,
 				WorkingPlan,
 				ResourceBlockedAddresses,
