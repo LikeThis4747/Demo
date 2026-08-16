@@ -12,6 +12,7 @@
 #include "Components/ActorComponent.h"
 #include "CoreMinimal.h"
 #include "Engine/EngineTypes.h"
+#include "TimerManager.h"
 
 #include "ElectromagneticGrabComponent.generated.h"
 
@@ -60,9 +61,21 @@ public:
 	/** 同时检查组件弱引用与 Physics Handle，确认双方是否指向同一个当前持有刚体。 */
 	bool IsHoldingObject() const;
 
-	/** 返回光球系统接入前由本组件持有的剩余爆裂投掷次数。 */
+	/** 返回当前剩余爆裂投掷次数。 */
 	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
 	int32 GetAvailableExplosionCharges() const { return AvailableExplosionCharges; }
+
+	/** 返回配置的爆裂投掷次数上限；尚未完成装配时返回 0。 */
+	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
+	int32 GetMaximumExplosionCharges() const;
+
+	/** 返回本轮被动恢复进度 0~100；满次数或未配置时为 0。 */
+	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
+	float GetExplosionRechargePercent() const;
+
+	/** 尝试增加指定次数并返回实际增加量；达到上限时保持无副作用。 */
+	UFUNCTION(BlueprintCallable, Category = "磁力|爆裂投掷")
+	int32 TryAddExplosionCharges(int32 Amount = 1);
 
 	/** 返回当前持有物是否被玩家切换到爆裂状态。 */
 	UFUNCTION(BlueprintPure, Category = "磁力|爆裂投掷")
@@ -102,6 +115,15 @@ private:
 
 	/** 单点写入爆裂状态并广播精确持有刚体；重复写入不重复广播。 */
 	void SetExplosionModeActive(bool bActive);
+
+	/** 不足上限且尚未计时时启动一次完整恢复周期；不会重置正在进行的周期。 */
+	void StartExplosionRechargeIfNeeded();
+
+	/** 停止被动恢复并把可查询进度归零。 */
+	void StopExplosionRecharge();
+
+	/** 一轮恢复完成时增加一次，并在仍未满时安排下一轮。 */
+	void HandleExplosionRechargeCompleted();
 
 	/** 快照并关闭 Handle 目标插值，依据初始安全终点初始化确定性吸取曲线。 */
 	void BeginPull(const FVector& StartLocation, const FVector& InitialSafeHoldLocation);
@@ -202,6 +224,9 @@ private:
 	/** 当前可正式武装的爆裂投掷次数；Configure 时从现有磁力 DA 初始化。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "磁力|爆裂投掷", meta = (AllowPrivateAccess = "true"))
 	int32 AvailableExplosionCharges = 0;
+
+	/** 不足上限时使用的一次性恢复 Timer；不依赖常驻 Component Tick。 */
+	FTimerHandle ExplosionRechargeTimer;
 
 	/** 只表示当前持有物的玩家选择；放下、投掷、打断或重新抓取都会恢复普通。 */
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "磁力|爆裂投掷", meta = (AllowPrivateAccess = "true"))

@@ -33,6 +33,15 @@ public:
 	 */
 	bool Populate(AZeroEscapeRuntimeLevelGenerator& Generator);
 
+	/** 最近一次成功 Population 实际生成的光团数；失败或清理后为 0。 */
+	int32 GetLastSpawnedEnergyOrbCount() const { return LastSpawnedEnergyOrbCount; }
+
+	/** 最近一次成功 Population 对应难度的出口收集比例；失败或清理后为 0。 */
+	float GetLastRequiredEnergyOrbCollectionRatio() const
+	{
+		return LastRequiredEnergyOrbCollectionRatio;
+	}
+
 	/** GameMode 失败回滚与 EndPlay 共用的幂等清理入口。 */
 	void ClearPopulation();
 
@@ -48,4 +57,7 @@ private:
 	/** 本局已放置对象；失败回滚或结束时统一销毁。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<AActor>> SpawnedActors;
+
+	int32 LastSpawnedEnergyOrbCount = 0;
+	float LastRequiredEnergyOrbCollectionRatio = 0.0f;
 };

@@ -48,6 +48,8 @@ UElectromagneticGrabComponent::UElectromagneticGrabComponent()
 /** 保存角色装配引用，校验唯一 Tuning 资产，声明 PrePhysics 顺序并应用 Physics Handle 参数。 */
 void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysicsHandle, UCameraComponent* InViewCamera)
 {
+	StopExplosionRecharge();
+	AvailableExplosionCharges = 0;
 	if (GrabPhase != EGrabPhase::None || HeldComponent.IsValid() || bHandleTargetInterpolationOverridden)
 	{
 		ReleaseHeldObject(false);
@@ -105,6 +107,7 @@ void UElectromagneticGrabComponent::Configure(UPhysicsHandleComponent* InPhysics
 	AvailableExplosionCharges = TuningData->InitialExplosionCharges;
 	SetExplosionModeActive(false);
 	bConfigurationReady = true;
+	StartExplosionRechargeIfNeeded();
 }
 
 /** 按下时只选取一次，持有过程中准星经过其他物体不会改变当前目标。 */
@@ -172,6 +175,7 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 			if (bArmed && IsValid(ExplosionTuningForThrow))
 			{
 				AvailableExplosionCharges = FMath::Max(0, AvailableExplosionCharges - 1);
+				StartExplosionRechargeIfNeeded();
 			}
 		}
 
@@ -214,6 +218,100 @@ void UElectromagneticGrabComponent::ToggleExplosionMode()
 	}
 
 	SetExplosionModeActive(false);
+}
+
+int32 UElectromagneticGrabComponent::GetMaximumExplosionCharges() const
+{
+	return IsValid(TuningData) ? TuningData->MaximumExplosionCharges : 0;
+}
+
+float UElectromagneticGrabComponent::GetExplosionRechargePercent() const
+{
+	const UWorld* World = GetWorld();
+	if (!IsConfigurationReady()
+		|| !IsValid(World)
+		|| AvailableExplosionCharges >= TuningData->MaximumExplosionCharges
+		|| !World->GetTimerManager().IsTimerActive(ExplosionRechargeTimer))
+	{
+		return 0.0f;
+	}
+
+	const float ElapsedSeconds =
+		World->GetTimerManager().GetTimerElapsed(ExplosionRechargeTimer);
+	return FMath::Clamp(
+		ElapsedSeconds / TuningData->ExplosionRechargeSecondsPerCharge * 100.0f,
+		0.0f,
+		100.0f);
+}
+
+int32 UElectromagneticGrabComponent::TryAddExplosionCharges(const int32 Amount)
+{
+	if (!IsConfigurationReady() || Amount <= 0)
+	{
+		return 0;
+	}
+
+	const int32 PreviousCharges = AvailableExplosionCharges;
+	const int64 RequestedCharges =
+		static_cast<int64>(AvailableExplosionCharges) + static_cast<int64>(Amount);
+	AvailableExplosionCharges = static_cast<int32>(FMath::Min<int64>(
+		RequestedCharges,
+		static_cast<int64>(TuningData->MaximumExplosionCharges)));
+	if (AvailableExplosionCharges >= TuningData->MaximumExplosionCharges)
+	{
+		StopExplosionRecharge();
+	}
+	else
+	{
+		StartExplosionRechargeIfNeeded();
+	}
+	return AvailableExplosionCharges - PreviousCharges;
+}
+
+void UElectromagneticGrabComponent::StartExplosionRechargeIfNeeded()
+{
+	UWorld* World = GetWorld();
+	if (!IsConfigurationReady()
+		|| !IsValid(World)
+		|| AvailableExplosionCharges >= TuningData->MaximumExplosionCharges
+		|| World->GetTimerManager().IsTimerActive(ExplosionRechargeTimer))
+	{
+		return;
+	}
+
+	World->GetTimerManager().SetTimer(
+		ExplosionRechargeTimer,
+		this,
+		&UElectromagneticGrabComponent::HandleExplosionRechargeCompleted,
+		TuningData->ExplosionRechargeSecondsPerCharge,
+		false);
+}
+
+void UElectromagneticGrabComponent::StopExplosionRecharge()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(ExplosionRechargeTimer);
+	}
+}
+
+void UElectromagneticGrabComponent::HandleExplosionRechargeCompleted()
+{
+	if (!IsConfigurationReady())
+	{
+		return;
+	}
+
+	// 一次性 Timer 的委托执行期间仍可能被报告为 Active；先显式清理，
+	// 让下一轮恢复可以安全复用同一个 Handle。
+	StopExplosionRecharge();
+	AvailableExplosionCharges = FMath::Min(
+		AvailableExplosionCharges + 1,
+		TuningData->MaximumExplosionCharges);
+	if (AvailableExplosionCharges < TuningData->MaximumExplosionCharges)
+	{
+		StartExplosionRechargeIfNeeded();
+	}
 }
 
 /** 真实重冲击只中断正在吸取或持有的事务；空手调用不得改变输入释放锁。 */
@@ -300,6 +398,7 @@ void UElectromagneticGrabComponent::TickComponent(
 /** World 或 Owner 销毁前恢复全部临时物理覆盖，随后再交还基类生命周期。 */
 void UElectromagneticGrabComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	StopExplosionRecharge();
 	ReleaseHeldObject(false);
 	if (IsValid(PhysicsHandle))
 	{

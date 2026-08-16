@@ -292,6 +292,11 @@ struct DEMO_API FZeroEscapePopulationDifficultySettings
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty")
 	EZeroEscapeDifficulty Difficulty = EZeroEscapeDifficulty::Normal;
 
+	/** 通往出口前必须收集的实际光团比例；只影响流程门槛，不参与任何放置随机数。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty|Energy Orb",
+		meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	float RequiredEnergyOrbCollectionRatio = 0.5f;
+
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Difficulty")
 	FZeroEscapeHazardPopulationTuning Hazards;
 

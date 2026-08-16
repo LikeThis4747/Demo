@@ -926,6 +926,9 @@ namespace ZeroEscape::LevelGeneration
 			{
 				const int32 Index = static_cast<int32>(Difficulty.Difficulty);
 				if (Index < 0 || Index >= Counts.Num()
+					|| !FMath::IsFinite(Difficulty.RequiredEnergyOrbCollectionRatio)
+					|| Difficulty.RequiredEnergyOrbCollectionRatio < 0.0f
+					|| Difficulty.RequiredEnergyOrbCollectionRatio > 1.0f
 					|| !FMath::IsFinite(
 						Difficulty.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells)
 					|| Difficulty.Hazards.ExpectedHazardBudgetUnitsPer100GameplayCells < 0.0f

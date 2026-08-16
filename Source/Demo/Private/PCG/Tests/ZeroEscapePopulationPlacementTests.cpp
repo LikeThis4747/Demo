@@ -506,6 +506,14 @@ namespace ZeroEscape::LevelGeneration::Tests
 				&& Result.EnergyOrbPlacements.IsEmpty()
 				&& Result.HazardGroups.IsEmpty());
 
+		Difficulties = MakeDifficulties();
+		Difficulties[1].RequiredEnergyOrbCollectionRatio = 1.01f;
+		TestTrue(TEXT("出口光团比例超出 0~1 必须拒绝"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, Result, Error)
+				== EPopulationPlacementResult::InvalidConfiguration);
+
 		FZeroEscapeHazardPopulationAssembly DisabledSpikeHazards = Hazards;
 		DisabledSpikeHazards.SpikeTrapActorCount = MAX_int32;
 		DisabledSpikeHazards.SpikeTrapLateralSpacingCm = 0.0f;
@@ -756,7 +764,7 @@ namespace ZeroEscape::LevelGeneration::Tests
 		const FIntVector Endpoint = Plan.RewardBranches[0].EndpointCoordinate;
 		const FZeroEscapeHazardPopulationAssembly Hazards = MakeHazards();
 		FZeroEscapeResourcePopulationAssembly Resources = MakeResources();
-		const TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
+		TArray<FZeroEscapePopulationDifficultySettings> Difficulties =
 			MakeDifficulties(20.0f, 40.0f);
 
 		FPopulationPlacementPlan First;
@@ -828,6 +836,22 @@ namespace ZeroEscape::LevelGeneration::Tests
 		TestFalse(TEXT("光团高度配置实际改变光团 Transform"),
 			PlacementsEqual(
 				First.EnergyOrbPlacements, HeightChanged.EnergyOrbPlacements));
+
+		Resources.EnergyOrbSpawnZOffsetCm = 100.0f;
+		Difficulties[1].RequiredEnergyOrbCollectionRatio = 0.75f;
+		FPopulationPlacementPlan ObjectiveChanged;
+		TestTrue(TEXT("只修改出口光团比例仍规划成功"),
+			FPopulationPlacementPolicy::BuildPlan(
+				Plan, 0.0, TestPlayerMaxWalkSpeedCmPerSecond,
+				Hazards, Resources, Difficulties, ObjectiveChanged, Error)
+				== EPopulationPlacementResult::Success);
+		TestTrue(TEXT("出口比例不洗牌机关"),
+			PlacementsEqual(First.HazardPlacements, ObjectiveChanged.HazardPlacements));
+		TestTrue(TEXT("出口比例不洗牌普通资源"),
+			PlacementsEqual(First.ResourcePlacements, ObjectiveChanged.ResourcePlacements));
+		TestTrue(TEXT("出口比例不洗牌光团"),
+			PlacementsEqual(
+				First.EnergyOrbPlacements, ObjectiveChanged.EnergyOrbPlacements));
 
 		FZeroEscapeGeneratedLevelPlan InvalidEndpoint = Plan;
 		InvalidEndpoint.RewardBranches[0].EndpointCoordinate =

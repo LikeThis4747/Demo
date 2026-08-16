@@ -160,9 +160,17 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|投掷", meta = (ClampMin = "0.1", ClampMax = "10.0", UIMin = "0.5", UIMax = "5.0", Units = "s"))
 	float ThrownWeaponActiveDuration = 2.5f;
 
-	/** 光球系统接入前可直接测试的爆裂投掷次数；只在爆裂物成功建立正式投掷事务后扣除。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0", ClampMax = "999", UIMin = "0", UIMax = "50"))
-	int32 InitialExplosionCharges = 10;
+	/** 每局开局可用的爆裂投掷次数；不得大于 MaximumExplosionCharges。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0", ClampMax = "99", UIMin = "0", UIMax = "10"))
+	int32 InitialExplosionCharges = 1;
+
+	/** 爆裂投掷次数硬上限；光团和被动恢复都不得超过它。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "1", ClampMax = "99", UIMin = "1", UIMax = "10"))
+	int32 MaximumExplosionCharges = 3;
+
+	/** 不足上限时，被动恢复一整次爆裂投掷所需时间。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.1", ClampMax = "600.0", UIMin = "1.0", UIMax = "120.0", Units = "s"))
+	float ExplosionRechargeSecondsPerCharge = 30.0f;
 
 	/** 激活爆裂状态后允许按 E 取消的最短时间；不限制激活后立即投掷。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷", meta = (ClampMin = "0.0", ClampMax = "5.0", UIMin = "0.0", UIMax = "2.0", Units = "s"))

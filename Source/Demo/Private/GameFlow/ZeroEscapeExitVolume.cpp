@@ -49,7 +49,17 @@ void AZeroEscapeExitVolume::Activate(const FTransform& WorldTransform)
 		TEXT("出口已激活，位置=%s"), *WorldTransform.GetLocation().ToString());
 }
 
-/** 只认玩家 Pawn 的首次进入；广播后禁用触发防重复。 */
+void AZeroEscapeExitVolume::ConfirmReached()
+{
+	if (bReached)
+	{
+		return;
+	}
+	bReached = true;
+	GoalTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+}
+
+/** 只认玩家 Pawn；门槛不足时允许玩家离开后再次进入，真正判胜才关闭触发。 */
 void AZeroEscapeExitVolume::HandleGoalBeginOverlap(
 	UPrimitiveComponent* /*OverlappedComponent*/,
 	AActor* OtherActor,
@@ -64,7 +74,5 @@ void AZeroEscapeExitVolume::HandleGoalBeginOverlap(
 		return;
 	}
 
-	bReached = true;
-	GoalTrigger->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	OnExitReached.Broadcast();
 }

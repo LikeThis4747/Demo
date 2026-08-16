@@ -36,6 +36,9 @@ public:
 	/** 指定与原型一致的玩家角色、Controller 与准星 HUD。 */
 	AZeroEscapeGameMode();
 
+	/** 正式奖励光团的唯一收集入口；成功即计入出口目标并尝试补充一次爆裂投掷。 */
+	bool TryCollectEnergyOrb(APawn& PlayerPawn);
+
 protected:
 	/** 请求前绑定最终事件并锁输入；直接运行正式游戏关卡也走同一异步流程。 */
 	virtual void BeginPlay() override;

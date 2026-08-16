@@ -12,6 +12,7 @@
 #include "Characters/ZeroEscapeCharacter.h"
 #include "Components/Attributes/HealthComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Components/Magnetism/ElectromagneticGrabComponent.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFlow/ZeroEscapeExitVolume.h"
@@ -196,6 +197,13 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 		AbortSetupAndReturnToMainMenu(TEXT("RoundDelegateBindingFailed"));
 		return;
 	}
+	if (!BoundRoundState->InitializeEnergyOrbObjective(
+			ActivePopulator->GetLastSpawnedEnergyOrbCount(),
+			ActivePopulator->GetLastRequiredEnergyOrbCollectionRatio()))
+	{
+		AbortSetupAndReturnToMainMenu(TEXT("EnergyOrbObjectiveInvalid"));
+		return;
+	}
 
 	ActiveGenerator->OnGenerationFinished.RemoveDynamic(
 		this, &AZeroEscapeGameMode::HandleGenerationFinished);
@@ -203,11 +211,39 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 	bSetupTerminal = true;
 	SetGameplayInputLocked(false);
 	UE_LOG(LogZeroEscapeGameMode, Display,
-		TEXT("ZE_GAME_SETUP result=Success operation=%lld player=%s pursuer=%s exit=%s"),
+		TEXT("ZE_GAME_SETUP result=Success operation=%lld player=%s pursuer=%s exit=%s energy_orbs=%d required_orbs=%d"),
 		static_cast<long long>(Report.OperationId),
 		*GetNameSafe(UGameplayStatics::GetPlayerPawn(this, 0)),
 		*GetNameSafe(SpawnedPursuer),
-		*GetNameSafe(SpawnedExit));
+		*GetNameSafe(SpawnedExit),
+		BoundRoundState->GetTotalEnergyOrbCount(),
+		BoundRoundState->GetRequiredEnergyOrbCount());
+}
+
+bool AZeroEscapeGameMode::TryCollectEnergyOrb(APawn& PlayerPawn)
+{
+	if (!bRoundStarted
+		|| !IsValid(BoundRoundState)
+		|| &PlayerPawn != UGameplayStatics::GetPlayerPawn(this, 0)
+		|| !BoundRoundState->TryCollectEnergyOrb())
+	{
+		return false;
+	}
+
+	UElectromagneticGrabComponent* MagneticGrab =
+		PlayerPawn.FindComponentByClass<UElectromagneticGrabComponent>();
+	const int32 AddedCharges = IsValid(MagneticGrab)
+		? MagneticGrab->TryAddExplosionCharges(1)
+		: 0;
+	UE_LOG(LogZeroEscapeGameMode, Display,
+		TEXT("ZE_ENERGY_PICKUP player=%s charge_added=%d charges=%d/%d collected=%d/%d"),
+		*GetNameSafe(&PlayerPawn),
+		AddedCharges,
+		IsValid(MagneticGrab) ? MagneticGrab->GetAvailableExplosionCharges() : 0,
+		IsValid(MagneticGrab) ? MagneticGrab->GetMaximumExplosionCharges() : 0,
+		BoundRoundState->GetCollectedEnergyOrbCount(),
+		BoundRoundState->GetTotalEnergyOrbCount());
+	return true;
 }
 
 bool AZeroEscapeGameMode::PlacePlayerAndPursuer(
@@ -315,6 +351,19 @@ void AZeroEscapeGameMode::HandleExitReached()
 {
 	if (bRoundStarted && IsValid(BoundRoundState))
 	{
+		if (!BoundRoundState->IsEnergyOrbRequirementMet())
+		{
+			UE_LOG(LogZeroEscapeGameMode, Display,
+				TEXT("ZE_EXIT_LOCKED collected=%d required=%d total=%d"),
+				BoundRoundState->GetCollectedEnergyOrbCount(),
+				BoundRoundState->GetRequiredEnergyOrbCount(),
+				BoundRoundState->GetTotalEnergyOrbCount());
+			return;
+		}
+		if (IsValid(SpawnedExit))
+		{
+			SpawnedExit->ConfirmReached();
+		}
 		BoundRoundState->SetRoundWon();
 	}
 }

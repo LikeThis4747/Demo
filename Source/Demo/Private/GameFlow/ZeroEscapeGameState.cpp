@@ -10,6 +10,39 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeRound, Log, All);
 
+bool FZeroEscapeEnergyOrbObjective::Initialize(
+	const int32 InTotalCount,
+	const float RequiredFraction)
+{
+	if (bInitialized
+		|| InTotalCount < 0
+		|| !FMath::IsFinite(RequiredFraction)
+		|| RequiredFraction < 0.0f
+		|| RequiredFraction > 1.0f)
+	{
+		return false;
+	}
+
+	TotalCount = InTotalCount;
+	CollectedCount = 0;
+	RequiredCount = InTotalCount == 0
+		? 0
+		: FMath::CeilToInt(static_cast<float>(InTotalCount) * RequiredFraction);
+	RequiredCount = FMath::Clamp(RequiredCount, 0, TotalCount);
+	bInitialized = true;
+	return true;
+}
+
+bool FZeroEscapeEnergyOrbObjective::TryCollect()
+{
+	if (!bInitialized || CollectedCount >= TotalCount)
+	{
+		return false;
+	}
+	++CollectedCount;
+	return true;
+}
+
 void AZeroEscapeGameState::SetRoundWon()
 {
 	TransitionTo(EZeroEscapeRoundState::Won);
@@ -18,6 +51,40 @@ void AZeroEscapeGameState::SetRoundWon()
 void AZeroEscapeGameState::SetRoundLost()
 {
 	TransitionTo(EZeroEscapeRoundState::Lost);
+}
+
+bool AZeroEscapeGameState::InitializeEnergyOrbObjective(
+	const int32 TotalCount,
+	const float RequiredFraction)
+{
+	if (RoundState != EZeroEscapeRoundState::InProgress
+		|| !EnergyOrbObjective.Initialize(TotalCount, RequiredFraction))
+	{
+		return false;
+	}
+
+	UE_LOG(LogZeroEscapeRound, Display,
+		TEXT("ZE_ENERGY_OBJECTIVE total=%d required=%d fraction=%.3f"),
+		EnergyOrbObjective.GetTotalCount(),
+		EnergyOrbObjective.GetRequiredCount(),
+		RequiredFraction);
+	return true;
+}
+
+bool AZeroEscapeGameState::TryCollectEnergyOrb()
+{
+	if (RoundState != EZeroEscapeRoundState::InProgress
+		|| !EnergyOrbObjective.TryCollect())
+	{
+		return false;
+	}
+
+	UE_LOG(LogZeroEscapeRound, Display,
+		TEXT("ZE_ENERGY_COLLECT collected=%d required=%d total=%d"),
+		EnergyOrbObjective.GetCollectedCount(),
+		EnergyOrbObjective.GetRequiredCount(),
+		EnergyOrbObjective.GetTotalCount());
+	return true;
 }
 
 /** 只处理进行中→终态的首次转移；已分胜负后忽略后续请求。 */

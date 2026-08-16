@@ -53,7 +53,10 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		|| !ValidateFloat(TEXT("MaximumHoldError"), MaximumHoldError, 100.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("ThrowSpeed"), ThrowSpeed, 100.0f, 8000.0f)
 		|| !ValidateFloat(TEXT("ThrownWeaponActiveDuration"), ThrownWeaponActiveDuration, 0.1f, 10.0f)
-		|| InitialExplosionCharges < 0 || InitialExplosionCharges > 999
+		|| InitialExplosionCharges < 0 || InitialExplosionCharges > 99
+		|| MaximumExplosionCharges < 1 || MaximumExplosionCharges > 99
+		|| InitialExplosionCharges > MaximumExplosionCharges
+		|| !ValidateFloat(TEXT("ExplosionRechargeSecondsPerCharge"), ExplosionRechargeSecondsPerCharge, 0.1f, 600.0f)
 		|| !ValidateFloat(TEXT("ExplosionModeCancelLockSeconds"), ExplosionModeCancelLockSeconds, 0.0f, 5.0f)
 		|| !ValidateFloat(TEXT("ExplosionRadius"), ExplosionRadius, 50.0f, 2000.0f)
 		|| !ValidateFloat(TEXT("ExplosionHorizontalVelocityChange"), ExplosionHorizontalVelocityChange, 0.0f, 5000.0f)
@@ -75,9 +78,10 @@ bool UMagneticGrabTuningData::IsConfigured(FString& OutError) const
 		if (OutError.IsEmpty())
 		{
 			OutError = FString::Printf(
-				TEXT("磁力 Tuning DataAsset 的整数字段非法：MaximumCandidateChecks=%d，InitialExplosionCharges=%d。"),
+				TEXT("磁力 Tuning DataAsset 的整数字段非法：MaximumCandidateChecks=%d，InitialExplosionCharges=%d，MaximumExplosionCharges=%d。"),
 				MaximumCandidateChecks,
-				InitialExplosionCharges);
+				InitialExplosionCharges,
+				MaximumExplosionCharges);
 		}
 		return false;
 	}

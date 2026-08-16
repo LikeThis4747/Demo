@@ -31,7 +31,10 @@ public:
 	/** 在指定世界 Transform 处激活出口：定位、显示外观、启用触发器。 */
 	void Activate(const FTransform& WorldTransform);
 
-	/** 玩家首次进入出口触发器时广播一次。 */
+	/** GameMode 真正判胜后确认出口完成并关闭碰撞；未达光团门槛时不得调用。 */
+	void ConfirmReached();
+
+	/** 玩家每次重新进入出口触发器时广播；只有 GameMode 确认判胜后才停止触发。 */
 	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Exit")
 	FOnExitReached OnExitReached;
 
@@ -53,6 +56,6 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZeroEscape|Exit", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMeshComponent> GoalVisual;
 
-	/** 防止 OnExitReached 重复广播。 */
+	/** 只在 GameMode 确认判胜后置真；门槛不足时保持可再次进入。 */
 	bool bReached = false;
 };

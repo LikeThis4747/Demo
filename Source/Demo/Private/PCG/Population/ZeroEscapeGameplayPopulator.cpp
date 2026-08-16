@@ -12,6 +12,7 @@
 #include "Actors/Hazards/PendulumHazard.h"
 #include "Actors/Hazards/SpikeTrapHazard.h"
 #include "Actors/Hazards/SpikeWheelHazard.h"
+#include "Actors/Items/ZeroEscapeEnergyOrb.h"
 #include "Engine/World.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -120,6 +121,12 @@ namespace
 				OutError = FString::Printf(
 					TEXT("Type %s must use an ASpikeWheelHazard subclass."),
 					PlacementKindName(Kind));
+				return false;
+			}
+			if (Kind == LevelGen::EPopulationPlacementKind::EnergyOrb
+				&& !LoadedClass->IsChildOf(AZeroEscapeEnergyOrb::StaticClass()))
+			{
+				OutError = TEXT("EnergyOrb must use an AZeroEscapeEnergyOrb subclass.");
 				return false;
 			}
 			OutClasses.Add(Kind, LoadedClass);
@@ -334,6 +341,16 @@ bool AZeroEscapeGameplayPopulator::Populate(
 	{
 		return Fail(PlacementResultName(Result), PlacementError);
 	}
+	const FZeroEscapePopulationDifficultySettings* ActiveDifficulty =
+		PopulationProfile->Difficulties.FindByPredicate(
+			[&LevelPlan](const FZeroEscapePopulationDifficultySettings& Entry)
+			{
+				return Entry.Difficulty == LevelPlan.Signature.Difficulty;
+			});
+	if (ActiveDifficulty == nullptr)
+	{
+		return Fail(TEXT("PopulationDifficultyUnavailable"));
+	}
 
 	TMap<LevelGen::EPopulationPlacementKind, UClass*> LoadedClasses;
 	if (!LoadUsedClasses(
@@ -494,6 +511,9 @@ bool AZeroEscapeGameplayPopulator::Populate(
 			Group.ResourceSupportPriority,
 			Group.SafeApproachAddresses.Num());
 	}
+	LastSpawnedEnergyOrbCount = PlacementPlan.KindCounts.EnergyOrbs;
+	LastRequiredEnergyOrbCollectionRatio =
+		ActiveDifficulty->RequiredEnergyOrbCollectionRatio;
 	UE_LOG(LogZeroEscapePopulator, Display,
 		TEXT("ZE_POPULATION result=Success seed=%d layout_hash=%lld player_max_walk_speed_cm_s=%.3f hazard_budget_tenths=%d/%d hazard_placements=%d pendulums=%d spikes=%d rams=%d launchers=%d wheels=%d resource_target=%d resource_actual=%d energy_orbs=%d spike_candidates=%d ram_candidates=%d launcher_candidates=%d wheel_candidates=%d groups=%d wheel_ram_combos=%d wheel_spike_combos=%d unpaired_wheels=%d literal_solo_wheels=%d resource_candidates=%d actors=%d"),
 		LevelPlan.Signature.Seed,
@@ -526,6 +546,8 @@ bool AZeroEscapeGameplayPopulator::Populate(
 
 void AZeroEscapeGameplayPopulator::ClearPopulation()
 {
+	LastSpawnedEnergyOrbCount = 0;
+	LastRequiredEnergyOrbCollectionRatio = 0.0f;
 	for (const TObjectPtr<AActor>& Actor : SpawnedActors)
 	{
 		if (IsValid(Actor))
