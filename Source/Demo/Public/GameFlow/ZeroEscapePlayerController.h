@@ -15,6 +15,7 @@
 #include "ZeroEscapePlayerController.generated.h"
 
 class UPauseMenuWidget;
+class UUserWidget;
 class UInputAction;
 
 /**
@@ -27,6 +28,9 @@ class DEMO_API AZeroEscapePlayerController final : public APlayerController
 	GENERATED_BODY()
 
 public:
+	/** 创建局内 Gameplay HUD；Widget 只显示状态，不持有玩法权威。 */
+	virtual void BeginPlay() override;
+
 	virtual void SetupInputComponent() override;
 
 	/** Enables or blocks opening the pause menu while the round is being set up. */
@@ -51,6 +55,14 @@ private:
 	/** 当前暂停菜单实例。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UPauseMenuWidget> PauseMenuWidget;
+
+	/** 局内 HUD Widget 类；由 BP 在类默认值中指定。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|HUD")
+	TSubclassOf<UUserWidget> GameplayHUDWidgetClass;
+
+	/** 当前局内 HUD 实例。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> GameplayHUDWidget;
 
 	bool bPauseMenuEnabled = true;
 };

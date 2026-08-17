@@ -8,12 +8,30 @@
 
 #include "GameFlow/ZeroEscapePlayerController.h"
 
+#include "Blueprint/UserWidget.h"
 #include "EnhancedInputComponent.h"
 #include "InputActionValue.h"
 #include "Kismet/GameplayStatics.h"
 #include "UI/PauseMenuWidget.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePlayerController, Log, All);
+
+/** 创建一次局内 HUD；所有资源与玩法状态仍由 Widget 读取现有组件。 */
+void AZeroEscapePlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+
+	if (!IsLocalController() || GameplayHUDWidgetClass == nullptr)
+	{
+		return;
+	}
+
+	GameplayHUDWidget = CreateWidget<UUserWidget>(this, GameplayHUDWidgetClass);
+	if (IsValid(GameplayHUDWidget))
+	{
+		GameplayHUDWidget->AddToViewport(0);
+	}
+}
 
 void AZeroEscapePlayerController::SetupInputComponent()
 {
