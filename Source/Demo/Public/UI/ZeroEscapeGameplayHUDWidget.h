@@ -38,17 +38,9 @@ private:
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UProgressBar> EnergyBar;
 
-	/** 低成本的可读备用能量条；用字符段保证不同分辨率下仍有明确反馈。 */
-	UPROPERTY(meta = (BindWidget))
-	TObjectPtr<UTextBlock> EnergyMeterText;
-
 	/** 红色生命进度条。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UProgressBar> HealthBar;
-
-	/** 低成本的可读备用生命条；与 HealthBar 使用同一百分比。 */
-	UPROPERTY(meta = (BindWidget))
-	TObjectPtr<UTextBlock> HealthMeterText;
 
 	/** 当前可用爆炸次数/最大次数，例如 1/3。 */
 	UPROPERTY(meta = (BindWidget))

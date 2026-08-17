@@ -17,23 +17,6 @@
 namespace
 {
 	constexpr float RefreshIntervalSeconds = 0.1f;
-	constexpr int32 MeterSegments = 12;
-
-	FText MakeMeterText(const float Percent)
-	{
-		const int32 FilledSegments = FMath::Clamp(
-			FMath::RoundToInt(FMath::Clamp(Percent, 0.0f, 1.0f) * MeterSegments),
-			0,
-			MeterSegments);
-
-		FString Meter;
-		Meter.Reserve(MeterSegments);
-		for (int32 Index = 0; Index < MeterSegments; ++Index)
-		{
-			Meter += Index < FilledSegments ? TEXT("#") : TEXT("-");
-		}
-		return FText::FromString(Meter);
-	}
 }
 
 /** 初始化首次显示，并以低频 Timer 读取会随时间变化的充能进度。 */
@@ -84,10 +67,6 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 		{
 			HealthBar->SetPercent(HealthPercent);
 		}
-		if (IsValid(HealthMeterText))
-		{
-			HealthMeterText->SetText(MakeMeterText(HealthPercent));
-		}
 	}
 
 	if (UElectromagneticGrabComponent* MagneticGrab =
@@ -102,20 +81,15 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 				TEXT("%d/%d"), AvailableCharges, MaximumCharges)));
 		}
 
-		const float ChargePercent = MaximumCharges > 0
-			? FMath::Clamp(static_cast<float>(AvailableCharges) / MaximumCharges, 0.0f, 1.0f)
-			: 0.0f;
-		if (IsValid(EnergyMeterText))
-		{
-			EnergyMeterText->SetText(MakeMeterText(ChargePercent));
-		}
-
+		// 能量条表达"下一次爆裂次数的充能进度"：未满时随时间 0→100%，
+		// 到 100% 由组件把次数 +1；已满（3/3）不再需要充能，显示 0。
 		if (IsValid(EnergyBar))
 		{
-			const float RechargePercent = MaximumCharges > 0 && AvailableCharges >= MaximumCharges
-				? 1.0f
+			const bool bChargesFull = MaximumCharges > 0 && AvailableCharges >= MaximumCharges;
+			const float RechargePercent = bChargesFull
+				? 0.0f
 				: FMath::Clamp(MagneticGrab->GetExplosionRechargePercent() / 100.0f, 0.0f, 1.0f);
-			EnergyBar->SetPercent(FMath::Max(ChargePercent, RechargePercent));
+			EnergyBar->SetPercent(RechargePercent);
 		}
 	}
 }
