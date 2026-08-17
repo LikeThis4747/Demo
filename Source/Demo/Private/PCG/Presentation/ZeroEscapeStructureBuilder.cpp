@@ -63,8 +63,7 @@ namespace ZeroEscape::LevelGeneration
 		{
 			Result.RelatedStableId = RelatedStableId;
 			Result.FixedLightLocalTransforms.Reset();
-			Result.StairTurnSpotLightLocalTransforms.Reset();
-			Result.StairEndpointPointLightLocalTransforms.Reset();
+			Result.StairGuidancePointLightLocalTransforms.Reset();
 			Result.Error = MoveTemp(Message);
 			return false;
 		}
@@ -94,6 +93,17 @@ namespace ZeroEscape::LevelGeneration
 				static_cast<double>(Coordinate.X) * Plan.LogicalTileSizeCm,
 				static_cast<double>(Coordinate.Y) * Plan.LogicalTileSizeCm,
 				static_cast<double>(Coordinate.Z) * Plan.FloorHeightCm + FloorTopZCm);
+		}
+
+		FTransform MakeStairGuidancePointLightTransform(
+			const FZeroEscapeGeneratedStructureOpening& Opening,
+			const FZeroEscapeGeneratedLevelPlan& Plan,
+			const double FloorTopZCm)
+		{
+			FVector LightLocation = AddressFloorLocation(
+				Opening.ConnectedOrdinaryCoordinate, Plan, FloorTopZCm);
+			LightLocation.Z += 120.0;
+			return FTransform(FRotator::ZeroRotator, LightLocation);
 		}
 
 		FName MakeRecipeGroupId(
@@ -484,21 +494,34 @@ namespace ZeroEscape::LevelGeneration
 								Structure.StableStructureId,
 								TEXT("完整结构生成了非法的固定灯位 Transform。"));
 						}
-						const bool bIsStair =
-							Recipe->Kind == EZeroEscapeStructureKind::TwoFloorStair
-							|| Recipe->Kind == EZeroEscapeStructureKind::ThreeFloorStairwell;
-						if (!bIsStair)
+						OutResult.FixedLightLocalTransforms.Add(LocalLightTransform);
+					}
+
+					const bool bIsStair =
+						Recipe->Kind == EZeroEscapeStructureKind::TwoFloorStair
+						|| Recipe->Kind == EZeroEscapeStructureKind::ThreeFloorStairwell;
+					if (bIsStair && !Structure.Openings.IsEmpty())
+					{
+						const FZeroEscapeGeneratedStructureOpening* Entrance = &Structure.Openings[0];
+						const FZeroEscapeGeneratedStructureOpening* Exit = &Structure.Openings[0];
+						for (const FZeroEscapeGeneratedStructureOpening& Opening : Structure.Openings)
 						{
-							OutResult.FixedLightLocalTransforms.Add(LocalLightTransform);
+							if (CoordinateLess(Opening.StructureCoordinate, Entrance->StructureCoordinate))
+							{
+								Entrance = &Opening;
+							}
+							if (CoordinateLess(Exit->StructureCoordinate, Opening.StructureCoordinate))
+							{
+								Exit = &Opening;
+							}
 						}
-						else if (LightIndex == Recipe->FixedLightRelativeTransforms.Num() - 1)
-						{
-							OutResult.StairEndpointPointLightLocalTransforms.Add(LocalLightTransform);
-						}
-						else
-						{
-							OutResult.StairTurnSpotLightLocalTransforms.Add(LocalLightTransform);
-						}
+
+						OutResult.StairGuidancePointLightLocalTransforms.Add(
+							MakeStairGuidancePointLightTransform(
+								*Entrance, Plan, Profile.FloorTopZCm));
+						OutResult.StairGuidancePointLightLocalTransforms.Add(
+							MakeStairGuidancePointLightTransform(
+								*Exit, Plan, Profile.FloorTopZCm));
 					}
 				}
 

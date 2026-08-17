@@ -41,8 +41,7 @@ namespace ZeroEscape::LevelGeneration
 		int32 HismComponentCount = 0;
 		int32 RelatedStableId = INDEX_NONE;
 		TArray<FTransform> FixedLightLocalTransforms;
-		TArray<FTransform> StairTurnSpotLightLocalTransforms;
-		TArray<FTransform> StairEndpointPointLightLocalTransforms;
+		TArray<FTransform> StairGuidancePointLightLocalTransforms;
 		FString Error;
 
 		void Reset()
@@ -51,8 +50,7 @@ namespace ZeroEscape::LevelGeneration
 			HismComponentCount = 0;
 			RelatedStableId = INDEX_NONE;
 			FixedLightLocalTransforms.Reset();
-			StairTurnSpotLightLocalTransforms.Reset();
-			StairEndpointPointLightLocalTransforms.Reset();
+			StairGuidancePointLightLocalTransforms.Reset();
 			Error.Reset();
 		}
 	};
