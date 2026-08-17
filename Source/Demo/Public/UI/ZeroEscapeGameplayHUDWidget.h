@@ -16,6 +16,7 @@
 
 class UProgressBar;
 class UTextBlock;
+class UHorizontalBox;
 
 /** 右下角局内 HUD；数据权威仍由 HealthComponent 与 ElectromagneticGrabComponent 持有。 */
 UCLASS()
@@ -34,6 +35,9 @@ private:
 	/** 从当前拥有 Pawn 读取生命、爆炸次数和下一次爆炸充能进度。 */
 	void RefreshGameplayState();
 
+	/** 从 GameState 读取通关目标进度并更新顶部目标行计数与配色。 */
+	void RefreshObjectiveState();
+
 	/** 蓝色爆炸充能进度条；满次数时保持满格。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UProgressBar> EnergyBar;
@@ -45,6 +49,22 @@ private:
 	/** 当前可用爆炸次数/最大次数，例如 1/3。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UTextBlock> ChargesText;
+
+	/** 顶部通关目标："收集能量团"四字，固定黄色强调。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ObjectiveOrbText;
+
+	/** 顶部通关目标："逃往出口"中的"出口"，固定蓝色强调。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ObjectiveExitText;
+
+	/** 顶部通关目标计数：已收集/所需，例如 0/4；未达标红色、达标蓝色。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ObjectiveCountText;
+
+	/** 顶部通关目标整条容器；未达所需数时整条隐藏，避免开局误导。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UHorizontalBox> ObjectiveRow;
 
 	/** 低频 UI 刷新句柄；不参与玩家移动、磁力或战斗逻辑。 */
 	FTimerHandle RefreshTimer;

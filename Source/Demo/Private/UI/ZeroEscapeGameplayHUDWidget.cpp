@@ -12,7 +12,10 @@
 #include "Components/Magnetism/ElectromagneticGrabComponent.h"
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
+#include "Components/HorizontalBox.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/GameStateBase.h"
+#include "GameFlow/ZeroEscapeGameState.h"
 
 namespace
 {
@@ -91,5 +94,48 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 				: FMath::Clamp(MagneticGrab->GetExplosionRechargePercent() / 100.0f, 0.0f, 1.0f);
 			EnergyBar->SetPercent(RechargePercent);
 		}
+	}
+
+	RefreshObjectiveState();
+}
+
+/** 从 GameState 读取通关目标进度，更新顶部"收集能量团逃往出口 X/Y"计数与配色。 */
+void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
+{
+	UWorld* World = GetWorld();
+	AGameStateBase* GameStateBase = World ? World->GetGameState() : nullptr;
+	AZeroEscapeGameState* ZeroEscapeState = Cast<AZeroEscapeGameState>(GameStateBase);
+	if (!IsValid(ZeroEscapeState))
+	{
+		return;
+	}
+
+	const int32 Collected = ZeroEscapeState->GetCollectedEnergyOrbCount();
+	const int32 Required = ZeroEscapeState->GetRequiredEnergyOrbCount();
+	const bool bRequirementMet = ZeroEscapeState->IsEnergyOrbRequirementMet();
+
+	// 计数：未达标红、达标蓝，直观提示"可以去出口了"。
+	if (IsValid(ObjectiveCountText))
+	{
+		ObjectiveCountText->SetText(FText::FromString(FString::Printf(TEXT("%d/%d"), Collected, Required)));
+		ObjectiveCountText->SetColorAndOpacity(FSlateColor(bRequirementMet
+			? FLinearColor(0.35f, 0.82f, 1.0f, 1.0f)
+			: FLinearColor(0.95f, 0.30f, 0.30f, 1.0f)));
+	}
+
+	// 固定强调色：能量团黄、出口蓝。
+	if (IsValid(ObjectiveOrbText))
+	{
+		ObjectiveOrbText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.85f, 0.25f, 1.0f)));
+	}
+	if (IsValid(ObjectiveExitText))
+	{
+		ObjectiveExitText->SetColorAndOpacity(FSlateColor(FLinearColor(0.35f, 0.82f, 1.0f, 1.0f)));
+	}
+
+	// 仅当局内确实存在光团目标时显示，避免其它模式下出现 0/0。
+	if (IsValid(ObjectiveRow))
+	{
+		ObjectiveRow->SetVisibility(Required > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 }
