@@ -11,11 +11,13 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "TimerManager.h"
 
 #include "ZeroEscapeExitVolume.generated.h"
 
 class UStaticMeshComponent;
 class USphereComponent;
+class UPointLightComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnExitReached);
 
@@ -33,6 +35,9 @@ public:
 
 	/** GameMode 真正判胜后确认出口完成并关闭碰撞；未达光团门槛时不得调用。 */
 	void ConfirmReached();
+
+	/** 光团达到出口门槛后播放一次短促的传送门闪烁提示。 */
+	void SetEnergyOrbRequirementMet();
 
 	/** 玩家每次重新进入出口触发器时广播；只有 GameMode 确认判胜后才停止触发。 */
 	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Exit")
@@ -56,6 +61,20 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZeroEscape|Exit", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UStaticMeshComponent> GoalVisual;
 
+	/** 蓝色全息门面；资源由 BP_ZeroEscapeExitVolume Class Defaults 装配。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZeroEscape|Exit", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UStaticMeshComponent> PortalSurface;
+
+	/** 传送门环境蓝光；资源与强度由 C++ 默认值和蓝图装配共同控制。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZeroEscape|Exit", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UPointLightComponent> PortalLight;
+
+	void HandlePortalBlink();
+
 	/** 只在 GameMode 确认判胜后置真；门槛不足时保持可再次进入。 */
 	bool bReached = false;
+	bool bEnergyOrbRequirementMet = false;
+	bool bPortalBlinkVisible = true;
+	int32 PortalBlinkStep = 0;
+	FTimerHandle PortalBlinkTimer;
 };

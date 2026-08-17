@@ -258,6 +258,10 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 		AbortSetupAndReturnToMainMenu(TEXT("EnergyOrbObjectiveInvalid"));
 		return;
 	}
+	if (BoundRoundState->IsEnergyOrbRequirementMet() && IsValid(SpawnedExit))
+	{
+		SpawnedExit->SetEnergyOrbRequirementMet();
+	}
 
 	ActiveGenerator->OnGenerationFinished.RemoveDynamic(
 		this, &AZeroEscapeGameMode::HandleGenerationFinished);
@@ -289,6 +293,10 @@ bool AZeroEscapeGameMode::TryCollectEnergyOrb(APawn& PlayerPawn)
 	const int32 AddedCharges = IsValid(MagneticGrab)
 		? MagneticGrab->TryAddExplosionCharges(1)
 		: 0;
+	if (BoundRoundState->IsEnergyOrbRequirementMet() && IsValid(SpawnedExit))
+	{
+		SpawnedExit->SetEnergyOrbRequirementMet();
+	}
 	UE_LOG(LogZeroEscapeGameMode, Display,
 		TEXT("ZE_ENERGY_PICKUP player=%s charge_added=%d charges=%d/%d collected=%d/%d"),
 		*GetNameSafe(&PlayerPawn),
