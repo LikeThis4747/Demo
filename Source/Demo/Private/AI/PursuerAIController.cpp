@@ -154,7 +154,8 @@ void APursuerAIController::Think()
 		NotifyImpactMovementBlocked();
 		return;
 	}
-	const bool bAttackSuppressed = Pursuer->IsImpactAttackSuppressed();
+	const bool bAttackSuppressed =
+		Pursuer->IsImpactAttackSuppressed() || !Config->bEnableAttacks;
 	UPursuerAttackComponent* AttackComponent = Pursuer->GetAttackComponent();
 	if (!IsValid(AttackComponent))
 	{

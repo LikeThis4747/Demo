@@ -69,6 +69,13 @@ public:
 	float AttackCooldown = 1.2f;
 
 	/**
+	 * Whether the pursuer may start a new attack. This is a reversible recording/debug switch;
+	 * disabling it keeps AI movement and impact-reaction systems active.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (DisplayName = "Enable Attacks"))
+	bool bEnableAttacks = true;
+
+	/**
 	 * 近距离斧击全身 Montage，由 UPursuerAttackComponent 同步加载；必须在 DA_Pursuer 指定。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击")
