@@ -1,8 +1,32 @@
 # 当前任务
 
-- 2026-08-16 白天实现已形成内部提交与未提交收尾：能量光团/出口比例闭环、300cm 机关站、Heavy 三秒应急恢复、机关伤害与难度生命、追猎者镜头外恢复，以及楼梯蓝灯/磁力可拾取闪光。
-- Windows Development 阶段包已生成，UnrealPak 日志为 Success；尚未完成目标机启动与正式完整一局回归。
-- 楼梯蓝灯与磁力闪光已通过 DemoEditor Development 编译及资产回读；未跑自动化/PIE，等待用户验收灯光方向、强度、半径和拿起前后的闪烁。
-- Level0 当前打开、PIE 停止；关键关卡、Blueprint、DataAsset 与新增材质实例均非 Dirty。Population 仍引用五类机关、BP_MagneticProp 与 BP_ThrowEnergyOrb。
-- 下一步优先级：同一正式包或正式 PIE 完成动态 Recast + 真实追猎者多层追逐 + 机关/光团/出口/死亡闭环；随后集中验收 Heavy、追猎者恢复、楼梯蓝灯、磁力闪光与爆裂/Stop。
-- 仍需复验：当前正式链路是否还能出现 BP_MagneticProp 破碎配置错误；打包运行中追猎者骨骼/动画是否受保存日志中的 /Engine/EngineMeshes/Humanoid 缺失依赖影响。
+- 2026-08-17 根据用户第二次现场反馈继续调整楼梯引导灯：楼梯原普通顶灯仍全部保留。
+- 下层入口与上层出口都改为蓝色点光源；灯位从结构边界移到各自连接的普通格中心，位于地面上方 120cm，让玩家接近楼梯前就能看到环境蓝光。
+- 点光源强度为 16000、影响半径 2000cm；取消入口向下照射的聚光灯。
+- 磁力物进入可拾取范围闪蓝光、拿到手上停止的实现未改动。
+- DemoEditor Win64 Development 编译成功，UE 已重新打开且官方 MCP 在线；按用户要求未跑自动化、PIE 或正式测试，等待用户验收可见性。
+
+<!-- written by shiqiqiwang at 2026-08-17 03:16 UTC -->
+
+
+## 2026-08-17 追猎者录制调试开关
+
+- 已完成：`UPursuerConfig.bEnableAttacks` + AI 决策层拦截；`DA_Pursuer` 已设为 false 并保存。
+- 验证：DemoEditor Development 编译成功；Level0 PIE smoke 启动/停止成功；等待用户录制验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 04:18 UTC -->
+
+
+## 2026-08-17 Level0 蓝色全息传送门
+
+- 已按用户确认使用现有 `SM_HydroLab_DoorFrame` + `MI_hologram2` 装配出口传送门；门框约 450x300cm，全息面约 400x250cm，适配 600cm 逻辑房间。
+- `AZeroEscapeExitVolume` 新增蓝色 `PortalSurface` 与 `PortalLight`；能量光团达到目标数后通过一次 8 次、0.12 秒间隔的短闪烁，之后保持常亮。
+- `DemoEditor Win64 Development` 构建成功；官方 UE MCP 已回读蓝图组件和参数；Level0 PIE 已启动并保持运行，等待用户视觉验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 05:07 UTC -->
+
+
+## 2026-08-17 Level0 测试地图摆放修正
+
+- 用户指出 Level0 是测试地图，没有运行时终点；已改为在 `PlayerStart_0` 前方约 600cm 直接放置 `Portal_Test_PlayerStart` 静态预览实例。
+- 通过实例覆盖让门框、全息面和蓝色点光源在 Level0 中直接可见；Level0 PIE 已确认出生点附近能看到传送门。

@@ -32,3 +32,48 @@
 ## 2026-07 月度摘要
 
 - 建立 UE5.8 C++ 优先 Demo、Project Memory MCP、内部工蜂 Git/LFS、夜间只读维护与双 MCP 协同规范。
+
+<!-- written by shiqiqiwang at 2026-08-17 02:57 UTC -->
+
+## 2026-08-17 楼梯入口/出口蓝灯修正
+
+- 根据用户现场截图确认首版误把楼梯固定顶灯替换为蓝灯；已恢复全部原普通顶灯。
+- 蓝色聚光灯改为额外生成在最低层实际入口 Opening，朝入口外侧来向；亮蓝色点光源改为额外生成在最高层实际出口 Opening。
+- 磁力可拾取闪蓝光逻辑未改；DemoEditor Win64 Development 编译成功，UE 已重开，未跑自动化/PIE，等待用户验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 03:05 UTC -->
+
+- 用户反馈边界处向下聚光仍不明显；入口/出口已统一改为放在外侧普通格中心、地面上方 120cm 的蓝色点光源，强度 16000、半径 2000cm；编译成功并重开 UE，待验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 03:16 UTC -->
+
+
+## 2026-08-17
+
+- 完成追猎者录制调试开关：保留 AI 与受击反馈，仅关闭攻击启动；`DA_Pursuer.Enable Attacks=false` 已保存。
+- 验证：DemoEditor Development 编译成功，Level0 PIE smoke 成功启动/停止；待用户录制验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 04:18 UTC -->
+
+
+## 2026-08-17 Level0 蓝色全息传送门
+
+- 完成：用现有 `SM_HydroLab_DoorFrame`、`MI_hologram2` 和 Basic Plane 装配终点蓝色全息传送门，门框约 450x300cm，全息面约 400x250cm，额外蓝色点光源强度 16000、半径 1000cm。
+- 完成：光团达标后由出口 GameMode 触发一次短促闪烁，随后保持常亮；未改 PCG/WFC、楼梯、磁力拾取和追猎逻辑。
+- 验证：`DemoEditor Win64 Development` 构建成功；官方 MCP 回读蓝图组件/材质/位置/灯光参数；Level0 PIE 运行中，待用户验收。
+- 遗留：当前为现有素材组合的传送门原型，最终 Portal 2 风格的材质动画与边缘能量可根据验收再做小范围调整。
+
+<!-- written by shiqiqiwang at 2026-08-17 05:07 UTC -->
+
+
+## 2026-08-17 Level0 传送门视觉纠偏
+
+- 按验收反馈撤掉旧门框/白色玻璃环预览，Level0 出口蓝图改为竖直椭圆、不透景的深蓝能量面，配动态蓝色噪声边缘和蓝色点光源。
+- 清理临时 RimDetail 组件与 Level0 试摆静态球体，Level0 出口实例回读仅保留蓝图原有组件。
+- 验证：PIE 已启动，PlayerStart 附近可见动态蓝色传送门；视觉质量仍待用户验收，不标记完成。
+
+
+## 2026-08-17 Level0 测试地图摆放修正
+
+- 修正：Level0 是测试地图，不再以运行时终点作为验收入口；直接在 `PlayerStart_0` 前方约 600cm 放置 `Portal_Test_PlayerStart`。
+- 验证：Level0 PIE 出生点附近已能看到蓝色门框、全息面和蓝色点光源；关卡已保存。

@@ -38,3 +38,46 @@
 ## 验收边界
 
 - 自动化、构建、静态 Recast Actor、资产非 Dirty、阶段包生成和单次日志不能替代目标机正式一局与玩家手感验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 02:57 UTC -->
+
+## 2026-08-17 楼梯灯位纠错
+
+- 已恢复 PCG 楼梯全部原普通固定顶灯，并将蓝色入口聚光灯/出口点光源改为基于实际结构 Opening 的额外灯；编译通过，待用户视觉验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 03:05 UTC -->
+
+- 楼梯入口/出口蓝灯根据现场反馈改为外侧普通格中心的低位高亮点光源，取消入口向下聚光，待视觉验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 03:16 UTC -->
+
+
+## 2026-08-17 追猎者录制调试开关
+
+- 在 `UPursuerConfig` 增加 `bEnableAttacks`（编辑器显示为 `Enable Attacks`），仅由 `APursuerAIController::Think()` 拦截攻击启动；AI 移动与 Heavy/Light 受击组件保持启用。
+- `/Game/ZeroEscape/Enemies/DA_Pursuer` 已保存为 `bEnableAttacks=false`，用于 Level0 录制。
+- `DemoEditor Win64 Development` 编译成功；Level0 PIE smoke 启动/停止成功，等待用户画面验收。
+
+<!-- written by shiqiqiwang at 2026-08-17 04:18 UTC -->
+
+
+## 2026-08-17 Level0 终点传送门
+
+- [x] 使用项目已有门框与蓝色全息材质完成出口传送门原型，按 600cm 房间尺寸控制比例，并加入蓝色点光源。
+- [x] 光团达到目标数后传送门短闪一次；`DemoEditor Win64 Development` 构建成功，Level0 PIE 已启动。
+- [ ] 用户验收传送门在终点房间的可见性、朝向和最终美术质量。
+
+<!-- written by shiqiqiwang at 2026-08-17 05:07 UTC -->
+
+
+## 2026-08-17 Level0 传送门视觉纠偏
+
+- [x] 将出口视觉收敛到蓝色不透景能量面 + 动态噪声边缘 + 蓝色点光源，保留光团达标短闪逻辑。
+- [x] 清理临时组件/试摆球体，Level0 出口蓝图实例无残留临时组件。
+- [ ] 用户验收边缘能量是否达到参考图的火焰撕裂质感。
+
+
+## 2026-08-17 Level0 测试地图摆放修正
+
+- [x] Level0 测试地图新增 `Portal_Test_PlayerStart`，放在 PlayerStart 前方约 600cm；PIE 出生点附近可直接看到蓝色传送门。
+- [ ] 用户验收门框朝向、蓝光强度和全息面最终表现。
