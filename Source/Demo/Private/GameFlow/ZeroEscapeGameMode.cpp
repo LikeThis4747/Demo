@@ -834,9 +834,9 @@ void AZeroEscapeGameMode::ShowPursuerView()
 		return;
 	}
 
-	// 追猎者略抬：相机稍高于胸口，视线落在胸口，避免俯视穿层。
+	// 追猎者近平视：相机与胸口基本同高，避免俯视穿层。
 	IntroPursuerCamera = SpawnIntroCamera(
-		SpawnedPursuer->GetActorLocation(), PlayerPawn->GetActorLocation(), 180.0f, 130.0f);
+		SpawnedPursuer->GetActorLocation(), PlayerPawn->GetActorLocation(), 140.0f, 115.0f);
 	if (IntroPursuerCamera.IsValid())
 	{
 		PlayerController->SetViewTargetWithBlend(IntroPursuerCamera.Get(), 0.0f);
