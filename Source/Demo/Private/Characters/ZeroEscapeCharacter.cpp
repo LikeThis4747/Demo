@@ -295,10 +295,11 @@ void AZeroEscapeCharacter::TryJump()
 	}
 }
 
-/** 把鼠标或手柄的二维视角值转发给控制器，不在角色中重复实现灵敏度。 */
+/** 把鼠标或手柄的二维视角值按默认灵敏度倍率缩放后转发给控制器。 */
 void AZeroEscapeCharacter::Look(const FInputActionValue& Value)
 {
-	const FVector2D LookAxisVector = Value.Get<FVector2D>();
+	constexpr float DefaultLookSensitivity = 0.35f;
+	const FVector2D LookAxisVector = Value.Get<FVector2D>() * DefaultLookSensitivity;
 	AddControllerYawInput(LookAxisVector.X);
 	AddControllerPitchInput(LookAxisVector.Y);
 }

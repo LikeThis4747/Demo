@@ -24,6 +24,13 @@ class DEMO_API UZeroEscapeGameplayHUDWidget final : public UUserWidget
 {
 	GENERATED_BODY()
 
+public:
+	/** 显示/隐藏出口能量不足红字闪烁；只操作表现，不裁决能量门槛。 */
+	void SetExitLockedWarningVisible(bool bVisible);
+
+	/** 镜头切回玩家后显示一次很短的“开始逃亡！”提示；只操作 UMG 表现。 */
+	void ShowEscapeStartMessage();
+
 protected:
 	/** 初始化首次显示并启动低频状态刷新。 */
 	virtual void NativeConstruct() override;
@@ -40,6 +47,9 @@ private:
 
 	/** 把顶部目标行按当前视口宽度水平居中（分辨率无关，仅布局变化时调用）。 */
 	void CenterObjectiveRow();
+
+	/** 组件未被标记变量时按名字兜底解析提示 TextBlock，避免 Widget 默认可视残留。 */
+	void ResolveMessageTexts();
 
 	/** 能量光团计数变化回调；订阅 GameState 委托以事件驱动刷新。 */
 	UFUNCTION()
@@ -73,12 +83,26 @@ private:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UHorizontalBox> ObjectiveRow;
 
+	/** 出口能量不足提示；由 WBP_GameplayHUD 可选装配，缺失时不显示。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ExitLockedWarningText;
+
+	/** 画面中央偏上的“开始逃亡！”提示；由 WBP_GameplayHUD 可选装配，缺失时不显示。 */
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> EscapeStartText;
+
 	/** 低频 UI 刷新句柄；不参与玩家移动、磁力或战斗逻辑。 */
 	FTimerHandle RefreshTimer;
 
 	/** 上次写入的能量团计数，避免每帧重复 SetText/SetColor。 */
 	int32 LastOrbCollected = -1;
 	int32 LastOrbRequired = -1;
+
+	/** 出口能量不足提示当前是否应由玩家位置触发显示。 */
+	bool bExitLockedWarningVisible = false;
+
+	/** “开始逃亡！”提示的截止世界时间；0 表示不显示。 */
+	double EscapeStartMessageUntilTimeSeconds = 0.0;
 
 	/** 上次居中时所用的视口宽度，分辨率不变则不重复布局。 */
 	float LastCenteredViewportX = -1.0f;

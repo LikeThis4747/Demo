@@ -63,6 +63,8 @@ void AZeroEscapeExitVolume::Activate(const FTransform& WorldTransform)
 
 	GoalTrigger->OnComponentBeginOverlap.AddDynamic(
 		this, &AZeroEscapeExitVolume::HandleGoalBeginOverlap);
+	GoalTrigger->OnComponentEndOverlap.AddDynamic(
+		this, &AZeroEscapeExitVolume::HandleGoalEndOverlap);
 
 	UE_LOG(LogZeroEscapeExit, Display,
 		TEXT("出口已激活，位置=%s"), *WorldTransform.GetLocation().ToString());
@@ -139,4 +141,20 @@ void AZeroEscapeExitVolume::HandleGoalBeginOverlap(
 	}
 
 	OnExitReached.Broadcast();
+}
+
+/** 只认玩家 Pawn；离开时不做门槛判断，只通知 GameMode 清除提示。 */
+void AZeroEscapeExitVolume::HandleGoalEndOverlap(
+	UPrimitiveComponent* /*OverlappedComponent*/,
+	AActor* OtherActor,
+	UPrimitiveComponent* /*OtherComp*/,
+	int32 /*OtherBodyIndex*/)
+{
+	const APawn* Pawn = Cast<APawn>(OtherActor);
+	if (!IsValid(Pawn) || !Pawn->IsPlayerControlled())
+	{
+		return;
+	}
+
+	OnExitLeft.Broadcast();
 }

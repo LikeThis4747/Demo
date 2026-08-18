@@ -13,6 +13,7 @@
 #include "InputActionValue.h"
 #include "Kismet/GameplayStatics.h"
 #include "UI/PauseMenuWidget.h"
+#include "UI/ZeroEscapeGameplayHUDWidget.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapePlayerController, Log, All);
 
@@ -99,4 +100,22 @@ void AZeroEscapePlayerController::ClosePauseMenu()
 	SetInputMode(FInputModeGameOnly());
 	SetShowMouseCursor(false);
 	UGameplayStatics::SetGamePaused(this, false);
+}
+
+void AZeroEscapePlayerController::SetExitLockedWarningVisible(const bool bVisible)
+{
+	if (UZeroEscapeGameplayHUDWidget* ZeroEscapeHUDWidget =
+		Cast<UZeroEscapeGameplayHUDWidget>(GameplayHUDWidget))
+	{
+		ZeroEscapeHUDWidget->SetExitLockedWarningVisible(bVisible);
+	}
+}
+
+void AZeroEscapePlayerController::ShowEscapeStartMessage()
+{
+	if (UZeroEscapeGameplayHUDWidget* ZeroEscapeHUDWidget =
+		Cast<UZeroEscapeGameplayHUDWidget>(GameplayHUDWidget))
+	{
+		ZeroEscapeHUDWidget->ShowEscapeStartMessage();
+	}
 }

@@ -39,6 +39,12 @@ public:
 	/** 关闭暂停菜单：移除界面+切回游戏输入+取消暂停。供 PauseMenuWidget 的"继续"调用。 */
 	void ClosePauseMenu();
 
+	/** 转发出口能量不足提示到局内 HUD；Widget 缺失时安全 no-op。 */
+	void SetExitLockedWarningVisible(bool bVisible);
+
+	/** 转发“开始逃亡！”提示到局内 HUD；Widget 缺失时安全 no-op。 */
+	void ShowEscapeStartMessage();
+
 private:
 	/** ESC 触发：若无暂停菜单则弹出。 */
 	UFUNCTION()

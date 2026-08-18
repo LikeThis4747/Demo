@@ -20,6 +20,7 @@ class USphereComponent;
 class UPointLightComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnExitReached);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnExitLeft);
 
 /** 出口体积：激活后玩家进入触发器广播 OnExitReached；默认隐藏且无碰撞。 */
 UCLASS(Blueprintable)
@@ -43,6 +44,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Exit")
 	FOnExitReached OnExitReached;
 
+	/** 玩家离开出口触发器时广播；GameMode 用它清除"能量不足"提示。 */
+	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Exit")
+	FOnExitLeft OnExitLeft;
+
 private:
 	UFUNCTION()
 	void HandleGoalBeginOverlap(
@@ -52,6 +57,15 @@ private:
 		int32 OtherBodyIndex,
 		bool bFromSweep,
 		const FHitResult& SweepResult);
+
+	/** 玩家离开触发器时广播；不判断门槛，只报告离开事实。 */
+	UFUNCTION()
+	void HandleGoalEndOverlap(
+		UPrimitiveComponent* OverlappedComponent,
+		AActor* OtherActor,
+		UPrimitiveComponent* OtherComp,
+		int32 OtherBodyIndex);
+
 
 	/** 检测玩家 Pawn 的球形触发区；激活前无碰撞。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "ZeroEscape|Exit", meta = (AllowPrivateAccess = "true"))

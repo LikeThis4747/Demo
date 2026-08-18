@@ -304,6 +304,7 @@ bool AZeroEscapeGameMode::TryCollectEnergyOrb(APawn& PlayerPawn)
 	if (BoundRoundState->IsEnergyOrbRequirementMet() && IsValid(SpawnedExit))
 	{
 		SpawnedExit->SetEnergyOrbRequirementMet();
+		SetExitLockedWarningVisible(false);
 	}
 	UE_LOG(LogZeroEscapeGameMode, Display,
 		TEXT("ZE_ENERGY_PICKUP player=%s charge_added=%d charges=%d/%d collected=%d/%d"),
@@ -390,6 +391,8 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
 	}
 	SpawnedExit->OnExitReached.AddUniqueDynamic(
 		this, &AZeroEscapeGameMode::HandleExitReached);
+	SpawnedExit->OnExitLeft.AddUniqueDynamic(
+		this, &AZeroEscapeGameMode::HandleExitLeft);
 	SpawnedExit->Activate(ExitTransform);
 	return true;
 }
@@ -447,6 +450,7 @@ void AZeroEscapeGameMode::HandleExitReached()
 	{
 		if (!BoundRoundState->IsEnergyOrbRequirementMet())
 		{
+			SetExitLockedWarningVisible(true);
 			UE_LOG(LogZeroEscapeGameMode, Display,
 				TEXT("ZE_EXIT_LOCKED collected=%d required=%d total=%d"),
 				BoundRoundState->GetCollectedEnergyOrbCount(),
@@ -454,12 +458,18 @@ void AZeroEscapeGameMode::HandleExitReached()
 				BoundRoundState->GetTotalEnergyOrbCount());
 			return;
 		}
+		SetExitLockedWarningVisible(false);
 		if (IsValid(SpawnedExit))
 		{
 			SpawnedExit->ConfirmReached();
 		}
 		BoundRoundState->SetRoundWon();
 	}
+}
+
+void AZeroEscapeGameMode::HandleExitLeft()
+{
+	SetExitLockedWarningVisible(false);
 }
 
 void AZeroEscapeGameMode::HandlePlayerDeath()
@@ -635,6 +645,16 @@ void AZeroEscapeGameMode::SetGameplayInputLocked(const bool bLocked) const
 	PlayerController->SetShowMouseCursor(false);
 }
 
+void AZeroEscapeGameMode::SetExitLockedWarningVisible(const bool bVisible) const
+{
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (AZeroEscapePlayerController* ZeroEscapeController =
+		Cast<AZeroEscapePlayerController>(PlayerController))
+	{
+		ZeroEscapeController->SetExitLockedWarningVisible(bVisible);
+	}
+}
+
 void AZeroEscapeGameMode::AbortSetupAndReturnToMainMenu(const TCHAR* Reason)
 {
 	if (bSetupTerminal || bEndingPlay)
@@ -716,6 +736,8 @@ void AZeroEscapeGameMode::UnbindRuntimeDelegates()
 	{
 		SpawnedExit->OnExitReached.RemoveDynamic(
 			this, &AZeroEscapeGameMode::HandleExitReached);
+		SpawnedExit->OnExitLeft.RemoveDynamic(
+			this, &AZeroEscapeGameMode::HandleExitLeft);
 	}
 }
 
@@ -973,6 +995,11 @@ void AZeroEscapeGameMode::ShowPlayerViewAndUnlock()
 	if (IsValid(PlayerController) && IsValid(PlayerPawn))
 	{
 		PlayerController->SetViewTargetWithBlend(PlayerPawn, 0.0f);
+		if (AZeroEscapePlayerController* ZeroEscapeController =
+			Cast<AZeroEscapePlayerController>(PlayerController))
+		{
+			ZeroEscapeController->ShowEscapeStartMessage();
+		}
 	}
 
 	if (UWorld* World = GetWorld())

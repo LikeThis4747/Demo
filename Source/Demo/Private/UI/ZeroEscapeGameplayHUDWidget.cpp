@@ -43,6 +43,12 @@ void UZeroEscapeGameplayHUDWidget::NativeConstruct()
 
 	RefreshGameplayState();
 	CenterObjectiveRow();
+	ResolveMessageTexts();
+	SetExitLockedWarningVisible(false);
+	if (IsValid(EscapeStartText))
+	{
+		EscapeStartText->SetVisibility(ESlateVisibility::Collapsed);
+	}
 
 	if (UWorld* World = GetWorld())
 	{
@@ -119,6 +125,27 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 
 	RefreshObjectiveState();
 	CenterObjectiveRow();
+
+	// 复用现有 0.1s 刷新做红字闪烁，不新增 Timer/Tick。
+	if (bExitLockedWarningVisible && IsValid(ExitLockedWarningText))
+	{
+		const UWorld* World = GetWorld();
+		const float BlinkPhase = World ? FMath::Fmod(World->GetTimeSeconds() * 5.0f, 1.0f) : 0.0f;
+		ExitLockedWarningText->SetRenderOpacity(BlinkPhase < 0.5f ? 1.0f : 0.25f);
+	}
+
+	if (EscapeStartMessageUntilTimeSeconds > 0.0)
+	{
+		const UWorld* World = GetWorld();
+		if (World && World->GetTimeSeconds() >= EscapeStartMessageUntilTimeSeconds)
+		{
+			EscapeStartMessageUntilTimeSeconds = 0.0;
+			if (IsValid(EscapeStartText))
+			{
+				EscapeStartText->SetVisibility(ESlateVisibility::Collapsed);
+			}
+		}
+	}
 }
 
 /** 从 GameState 读取通关目标进度，更新顶部"收集能量团逃往出口 X/Y"计数与配色；仅在数值变化时写 UI。 */
@@ -168,6 +195,88 @@ void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 	if (IsValid(ObjectiveRow))
 	{
 		ObjectiveRow->SetVisibility(Required > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+}
+
+void UZeroEscapeGameplayHUDWidget::ResolveMessageTexts()
+{
+	if (!IsValid(ExitLockedWarningText))
+	{
+		ExitLockedWarningText = Cast<UTextBlock>(GetWidgetFromName(TEXT("ExitLockedWarningText")));
+	}
+	if (!IsValid(EscapeStartText))
+	{
+		EscapeStartText = Cast<UTextBlock>(GetWidgetFromName(TEXT("EscapeStartText")));
+	}
+}
+
+void UZeroEscapeGameplayHUDWidget::SetExitLockedWarningVisible(const bool bVisible)
+{
+	ResolveMessageTexts();
+	if (!IsValid(ExitLockedWarningText))
+	{
+		bExitLockedWarningVisible = false;
+		return;
+	}
+
+	if (!bVisible)
+	{
+		bExitLockedWarningVisible = false;
+		ExitLockedWarningText->SetVisibility(ESlateVisibility::Collapsed);
+		return;
+	}
+	if (bExitLockedWarningVisible)
+	{
+		return;
+	}
+	bExitLockedWarningVisible = true;
+
+	ExitLockedWarningText->SetText(FText::FromString(TEXT("能量团数量不足！传送门激活失败！")));
+	if (IsValid(ObjectiveOrbText))
+	{
+		ExitLockedWarningText->SetFont(ObjectiveOrbText->GetFont());
+	}
+	ExitLockedWarningText->SetColorAndOpacity(FSlateColor(FLinearColor(0.95f, 0.18f, 0.12f, 1.0f)));
+	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(ExitLockedWarningText->Slot))
+	{
+		// 顶部目标行下面一行；不是 AHUD Canvas 绘制，只是 UMG 顶层 CanvasPanel 定位。
+		CanvasSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+		CanvasSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+		CanvasSlot->SetAutoSize(true);
+		CanvasSlot->SetOffsets(FMargin(0.0f, 52.0f, 0.0f, 0.0f));
+	}
+	ExitLockedWarningText->SetRenderOpacity(1.0f);
+	ExitLockedWarningText->SetVisibility(ESlateVisibility::HitTestInvisible);
+}
+
+void UZeroEscapeGameplayHUDWidget::ShowEscapeStartMessage()
+{
+	ResolveMessageTexts();
+	if (!IsValid(EscapeStartText))
+	{
+		return;
+	}
+
+	EscapeStartText->SetText(FText::FromString(TEXT("开始逃亡！")));
+	if (IsValid(ObjectiveOrbText))
+	{
+		FSlateFontInfo EscapeFont = ObjectiveOrbText->GetFont();
+		EscapeFont.Size = FMath::Max(EscapeFont.Size * 2, 40);
+		EscapeStartText->SetFont(EscapeFont);
+	}
+	EscapeStartText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.85f, 0.15f, 1.0f)));
+	if (UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(EscapeStartText->Slot))
+	{
+		CanvasSlot->SetAnchors(FAnchors(0.5f, 0.18f, 0.5f, 0.18f));
+		CanvasSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+		CanvasSlot->SetAutoSize(true);
+		CanvasSlot->SetOffsets(FMargin(0.0f));
+	}
+	EscapeStartText->SetVisibility(ESlateVisibility::HitTestInvisible);
+
+	if (const UWorld* World = GetWorld())
+	{
+		EscapeStartMessageUntilTimeSeconds = World->GetTimeSeconds() + 1.5;
 	}
 }
 

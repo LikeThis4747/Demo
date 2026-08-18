@@ -98,6 +98,10 @@ private:
 	UFUNCTION()
 	void HandleExitReached();
 
+	/** 出口离开回调：清除“能量不足”提示。 */
+	UFUNCTION()
+	void HandleExitLeft();
+
 	/** 玩家生命归零回调：转发判负给 GameState。 */
 	UFUNCTION()
 	void HandlePlayerDeath();
@@ -116,6 +120,8 @@ private:
 	void ShowResultMenu(bool bVictory);
 
 	void SetGameplayInputLocked(bool bLocked) const;
+	/** 通过 PlayerController 转发出口能量不足提示；HUD 缺失时安全 no-op。 */
+	void SetExitLockedWarningVisible(bool bVisible) const;
 	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
 	void BeginSetupTransition(
 		const TCHAR* Reason,
