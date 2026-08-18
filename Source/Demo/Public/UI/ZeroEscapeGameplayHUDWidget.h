@@ -35,8 +35,15 @@ private:
 	/** 从当前拥有 Pawn 读取生命、爆炸次数和下一次爆炸充能进度。 */
 	void RefreshGameplayState();
 
-	/** 从 GameState 读取通关目标进度并更新顶部目标行计数与配色。 */
+	/** 从 GameState 读取通关目标进度并更新顶部目标行计数与配色；仅在数值变化时写 UI。 */
 	void RefreshObjectiveState();
+
+	/** 把顶部目标行按当前视口宽度水平居中（分辨率无关，仅布局变化时调用）。 */
+	void CenterObjectiveRow();
+
+	/** 能量光团计数变化回调；订阅 GameState 委托以事件驱动刷新。 */
+	UFUNCTION()
+	void HandleEnergyOrbCountChanged(int32 CollectedCount, int32 RequiredCount);
 
 	/** 蓝色爆炸充能进度条；满次数时保持满格。 */
 	UPROPERTY(meta = (BindWidget))
@@ -68,4 +75,11 @@ private:
 
 	/** 低频 UI 刷新句柄；不参与玩家移动、磁力或战斗逻辑。 */
 	FTimerHandle RefreshTimer;
+
+	/** 上次写入的能量团计数，避免每帧重复 SetText/SetColor。 */
+	int32 LastOrbCollected = -1;
+	int32 LastOrbRequired = -1;
+
+	/** 上次居中时所用的视口宽度，分辨率不变则不重复布局。 */
+	float LastCenteredViewportX = -1.0f;
 };

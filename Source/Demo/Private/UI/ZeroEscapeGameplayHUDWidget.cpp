@@ -13,8 +13,11 @@
 #include "Components/ProgressBar.h"
 #include "Components/TextBlock.h"
 #include "Components/HorizontalBox.h"
+#include "Components/CanvasPanel.h"
+#include "Components/CanvasPanelSlot.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/GameStateBase.h"
+#include "Engine/GameViewportClient.h"
 #include "GameFlow/ZeroEscapeGameState.h"
 
 namespace
@@ -27,7 +30,19 @@ void UZeroEscapeGameplayHUDWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 
+	// 订阅能量团计数变化：顶部目标行事件驱动刷新，无需每帧读 GameState。
+	if (UWorld* World = GetWorld())
+	{
+		if (AZeroEscapeGameState* ZeroEscapeState =
+			Cast<AZeroEscapeGameState>(World->GetGameState()))
+		{
+			ZeroEscapeState->OnEnergyOrbCountChanged.AddDynamic(
+				this, &UZeroEscapeGameplayHUDWidget::HandleEnergyOrbCountChanged);
+		}
+	}
+
 	RefreshGameplayState();
+	CenterObjectiveRow();
 
 	if (UWorld* World = GetWorld())
 	{
@@ -45,6 +60,12 @@ void UZeroEscapeGameplayHUDWidget::NativeDestruct()
 {
 	if (UWorld* World = GetWorld())
 	{
+		if (AZeroEscapeGameState* ZeroEscapeState =
+			Cast<AZeroEscapeGameState>(World->GetGameState()))
+		{
+			ZeroEscapeState->OnEnergyOrbCountChanged.RemoveDynamic(
+				this, &UZeroEscapeGameplayHUDWidget::HandleEnergyOrbCountChanged);
+		}
 		World->GetTimerManager().ClearTimer(RefreshTimer);
 	}
 
@@ -97,9 +118,10 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 	}
 
 	RefreshObjectiveState();
+	CenterObjectiveRow();
 }
 
-/** 从 GameState 读取通关目标进度，更新顶部"收集能量团逃往出口 X/Y"计数与配色。 */
+/** 从 GameState 读取通关目标进度，更新顶部"收集能量团逃往出口 X/Y"计数与配色；仅在数值变化时写 UI。 */
 void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 {
 	UWorld* World = GetWorld();
@@ -112,6 +134,15 @@ void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 
 	const int32 Collected = ZeroEscapeState->GetCollectedEnergyOrbCount();
 	const int32 Required = ZeroEscapeState->GetRequiredEnergyOrbCount();
+
+	// 数值未变化则不写 UI，消除重复 SetText/SetColor 的 Slate 无效化开销。
+	if (Collected == LastOrbCollected && Required == LastOrbRequired)
+	{
+		return;
+	}
+	LastOrbCollected = Collected;
+	LastOrbRequired = Required;
+
 	const bool bRequirementMet = ZeroEscapeState->IsEnergyOrbRequirementMet();
 
 	// 计数：未达标红、达标蓝，直观提示"可以去出口了"。
@@ -123,7 +154,7 @@ void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 			: FLinearColor(0.95f, 0.30f, 0.30f, 1.0f)));
 	}
 
-	// 固定强调色：能量团黄、出口蓝。
+	// 固定强调色：能量团黄、出口蓝（资产层已设，此处兜底保证一致）。
 	if (IsValid(ObjectiveOrbText))
 	{
 		ObjectiveOrbText->SetColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.85f, 0.25f, 1.0f)));
@@ -138,4 +169,46 @@ void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 	{
 		ObjectiveRow->SetVisibility(Required > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
+}
+
+/** 把顶部目标行按当前视口宽度水平居中；分辨率不变则不重复布局。 */
+void UZeroEscapeGameplayHUDWidget::CenterObjectiveRow()
+{
+	if (!IsValid(ObjectiveRow))
+	{
+		return;
+	}
+
+	UWorld* World = GetWorld();
+	UGameViewportClient* Viewport = World ? World->GetGameViewport() : nullptr;
+	if (!IsValid(Viewport))
+	{
+		return;
+	}
+
+	FVector2D ViewportSize;
+	Viewport->GetViewportSize(ViewportSize);
+	if (FMath::IsNearlyEqual(ViewportSize.X, LastCenteredViewportX, 0.5f))
+	{
+		return;
+	}
+	LastCenteredViewportX = ViewportSize.X;
+
+	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(ObjectiveRow->Slot);
+	if (!IsValid(CanvasSlot))
+	{
+		return;
+	}
+
+	// 锚点锁到顶部中点，alignment(0.5,0) 使面板按自身宽度居中，向下留 24px。
+	CanvasSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+	CanvasSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+	CanvasSlot->SetAutoSize(true);
+	CanvasSlot->SetOffsets(FMargin(0.0f, 24.0f, 0.0f, 0.0f));
+}
+
+/** 能量团计数变化：直接刷新顶部目标行（事件驱动，无需每帧轮询）。 */
+void UZeroEscapeGameplayHUDWidget::HandleEnergyOrbCountChanged(int32 /*CollectedCount*/, int32 /*RequiredCount*/)
+{
+	RefreshObjectiveState();
 }

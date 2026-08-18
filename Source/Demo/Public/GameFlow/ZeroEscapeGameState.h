@@ -26,6 +26,10 @@ enum class EZeroEscapeRoundState : uint8
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FOnRoundStateChanged, EZeroEscapeRoundState, NewState);
 
+/** 能量光团计数变化：Collected/Required；初始化与每次成功收集时广播，供 HUD 事件驱动刷新。 */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(
+	FOnEnergyOrbCountChanged, int32, CollectedCount, int32, RequiredCount);
+
 /** 本局能量光团目标的纯值状态；由 GameState 独占，拆出后可在无 World 测试中验证边界。 */
 struct DEMO_API FZeroEscapeEnergyOrbObjective
 {
@@ -89,6 +93,10 @@ public:
 	/** 局状态变化事件；结算 UI 与 GameMode 订阅。 */
 	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Round")
 	FOnRoundStateChanged OnRoundStateChanged;
+
+	/** 能量光团计数变化事件；HUD 顶部目标行订阅以事件驱动刷新。 */
+	UPROPERTY(BlueprintAssignable, Category = "ZeroEscape|Energy Orb")
+	FOnEnergyOrbCountChanged OnEnergyOrbCountChanged;
 
 private:
 	/** 只允许 InProgress→Won/Lost 的一次性转移，防止重复或胜负互覆盖。 */

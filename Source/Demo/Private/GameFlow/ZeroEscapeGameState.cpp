@@ -68,6 +68,10 @@ bool AZeroEscapeGameState::InitializeEnergyOrbObjective(
 		EnergyOrbObjective.GetTotalCount(),
 		EnergyOrbObjective.GetRequiredCount(),
 		RequiredFraction);
+
+	OnEnergyOrbCountChanged.Broadcast(
+		EnergyOrbObjective.GetCollectedCount(),
+		EnergyOrbObjective.GetRequiredCount());
 	return true;
 }
 
@@ -84,6 +88,10 @@ bool AZeroEscapeGameState::TryCollectEnergyOrb()
 		EnergyOrbObjective.GetCollectedCount(),
 		EnergyOrbObjective.GetRequiredCount(),
 		EnergyOrbObjective.GetTotalCount());
+
+	OnEnergyOrbCountChanged.Broadcast(
+		EnergyOrbObjective.GetCollectedCount(),
+		EnergyOrbObjective.GetRequiredCount());
 	return true;
 }
 
