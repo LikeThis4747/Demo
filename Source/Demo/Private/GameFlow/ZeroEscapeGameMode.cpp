@@ -697,11 +697,14 @@ void AZeroEscapeGameMode::SetRoundFrozen(const bool bFrozen)
 }
 
 /** 生成一台看向目标的临时运镜相机。
- *  位置：沿"目标→参考点(玩家)"方向后退固定距离，抬到视线高度；
- *  从目标到候选点做射线检测，撞墙则把相机收回到命中点前方，保证不穿墙。 */
+ *  在"目标→参考点(玩家)"方向附近按角度与距离做探测：
+ *  每个候选点先验证"看向目标胸口"的视线无遮挡，且相机背后不贴墙；
+ *  全部失败时沿目标→玩家连线逐步向玩家侧收敛，兜底保证不穿墙、不黑屏。 */
 ACameraActor* AZeroEscapeGameMode::SpawnIntroCamera(
 	const FVector& TargetLocation,
-	const FVector& ReferenceLocation)
+	const FVector& ReferenceLocation,
+	const float CameraHeightOffset,
+	const float LookAtHeightOffset)
 {
 	UWorld* World = GetWorld();
 	if (!IsValid(World))
@@ -709,32 +712,78 @@ ACameraActor* AZeroEscapeGameMode::SpawnIntroCamera(
 		return nullptr;
 	}
 
-	constexpr float CameraDistance = 450.0f;
-	constexpr float EyeHeight = 150.0f;
-
-	FVector Direction = ReferenceLocation - TargetLocation;
-	Direction.Z = 0.0f;
-	if (!Direction.Normalize())
-	{
-		Direction = FVector::ForwardVector;
-	}
-
-	const FVector EyeTarget = TargetLocation + FVector(0.0f, 0.0f, EyeHeight * 0.5f);
-	FVector Candidate = EyeTarget + Direction * CameraDistance + FVector(0.0f, 0.0f, EyeHeight);
-
-	// 防穿墙：目标到相机候选点之间有阻挡时，相机收回到命中点前方一点。
-	FHitResult Hit;
 	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(IntroCameraTrace), false);
-	if (World->LineTraceSingleByChannel(Hit, EyeTarget, Candidate, ECC_Visibility, QueryParams))
+	const FVector LookTarget = TargetLocation + FVector(0.0f, 0.0f, LookAtHeightOffset);
+
+	FVector BaseDir = ReferenceLocation - TargetLocation;
+	BaseDir.Z = 0.0f;
+	if (!BaseDir.Normalize())
 	{
-		Candidate = Hit.ImpactPoint + Direction * 40.0f;
+		BaseDir = FVector::ForwardVector;
 	}
 
-	ACameraActor* CameraActor = World->SpawnActor<ACameraActor>(Candidate, FRotator::ZeroRotator);
+	// 视线是否通畅：从候选点到目标胸口无遮挡才算有效机位。
+	const auto bHasClearView = [World, &QueryParams](const FVector& From, const FVector& To)
+	{
+		FHitResult Hit;
+		return !World->LineTraceSingleByChannel(Hit, From, To, ECC_Visibility, QueryParams);
+	};
+	// 相机背后是否贴墙：向相机后方短距探测，有阻挡则该点太贴近障碍。
+	const auto bBackIsFree = [World, &QueryParams](const FVector& Pos, const FVector& BackDir)
+	{
+		FHitResult Hit;
+		return !World->LineTraceSingleByChannel(Hit, Pos, Pos + BackDir * 80.0f, ECC_Visibility, QueryParams);
+	};
+
+	static const float AnglesDeg[] = { 0.0f, 25.0f, -25.0f, 50.0f, -50.0f };
+	static const float Distances[] = { 400.0f, 300.0f, 200.0f };
+
+	FVector Chosen = FVector::ZeroVector;
+	bool bFound = false;
+	for (const float Distance : Distances)
+	{
+		for (const float AngleDeg : AnglesDeg)
+		{
+			const FVector Dir = BaseDir.RotateAngleAxis(AngleDeg, FVector::UpVector);
+			const FVector Candidate = LookTarget + Dir * Distance + FVector(0.0f, 0.0f, CameraHeightOffset - LookAtHeightOffset);
+			if (bHasClearView(Candidate, LookTarget) && bBackIsFree(Candidate, Dir))
+			{
+				Chosen = Candidate;
+				bFound = true;
+				break;
+			}
+		}
+		if (bFound)
+		{
+			break;
+		}
+	}
+
+	if (!bFound)
+	{
+		// 兜底：沿目标→玩家连线从近到远找第一个视线通畅的点。
+		for (const float Distance : { 150.0f, 250.0f, 350.0f, 500.0f, 700.0f })
+		{
+			const FVector Candidate = LookTarget + BaseDir * Distance + FVector(0.0f, 0.0f, CameraHeightOffset - LookAtHeightOffset);
+			if (bHasClearView(Candidate, LookTarget))
+			{
+				Chosen = Candidate;
+				bFound = true;
+				break;
+			}
+		}
+	}
+
+	if (!bFound)
+	{
+		// 极端兜底：直接放在目标与玩家中间，至少不穿墙。
+		Chosen = (LookTarget + ReferenceLocation) * 0.5f;
+	}
+
+	ACameraActor* CameraActor = World->SpawnActor<ACameraActor>(Chosen, FRotator::ZeroRotator);
 	if (IsValid(CameraActor))
 	{
-		const FRotator LookRotation = (EyeTarget - Candidate).Rotation();
-		CameraActor->SetActorRotation(LookRotation);
+		CameraActor->SetActorRotation((LookTarget - Chosen).Rotation());
 	}
 	return CameraActor;
 }
@@ -765,7 +814,9 @@ void AZeroEscapeGameMode::ShowExitView()
 		return;
 	}
 
-	IntroExitCamera = SpawnIntroCamera(SpawnedExit->GetActorLocation(), PlayerPawn->GetActorLocation());
+	// 出口平视：相机与看点同高，正对传送门。
+	IntroExitCamera = SpawnIntroCamera(
+		SpawnedExit->GetActorLocation(), PlayerPawn->GetActorLocation(), 120.0f, 120.0f);
 	if (IntroExitCamera.IsValid())
 	{
 		PlayerController->SetViewTargetWithBlend(IntroExitCamera.Get(), 0.0f);
@@ -783,7 +834,9 @@ void AZeroEscapeGameMode::ShowPursuerView()
 		return;
 	}
 
-	IntroPursuerCamera = SpawnIntroCamera(SpawnedPursuer->GetActorLocation(), PlayerPawn->GetActorLocation());
+	// 追猎者略抬：相机稍高于胸口，视线落在胸口，避免俯视穿层。
+	IntroPursuerCamera = SpawnIntroCamera(
+		SpawnedPursuer->GetActorLocation(), PlayerPawn->GetActorLocation(), 180.0f, 130.0f);
 	if (IntroPursuerCamera.IsValid())
 	{
 		PlayerController->SetViewTargetWithBlend(IntroPursuerCamera.Get(), 0.0f);

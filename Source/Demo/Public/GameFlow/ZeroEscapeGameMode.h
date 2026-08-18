@@ -126,10 +126,13 @@ private:
 	void UnlockGameplay();
 	void SetRoundFrozen(bool bFrozen);
 
-	/** 生成一台看向目标的临时运镜相机：放在"目标→参考点"方向、视线高度，射线防穿墙。 */
+	/** 生成一台看向目标的临时运镜相机。
+	 *  在"目标→参考点"方向附近做多方向、多距离探测，选出平视能看到目标的空位；找不到则向玩家侧收敛。 */
 	ACameraActor* SpawnIntroCamera(
 		const FVector& TargetLocation,
-		const FVector& ReferenceLocation);
+		const FVector& ReferenceLocation,
+		float CameraHeightOffset,
+		float LookAtHeightOffset);
 	void DestroyIntroCameras();
 
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
