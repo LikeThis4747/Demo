@@ -17,6 +17,7 @@
 
 #include "ZeroEscapeGameMode.generated.h"
 
+class ACameraActor;
 class APawn;
 class APursuerCharacter;
 class AZeroEscapeGameplayPopulator;
@@ -125,6 +126,12 @@ private:
 	void UnlockGameplay();
 	void SetRoundFrozen(bool bFrozen);
 
+	/** 生成一台看向目标的临时运镜相机：放在"目标→参考点"方向、视线高度，射线防穿墙。 */
+	ACameraActor* SpawnIntroCamera(
+		const FVector& TargetLocation,
+		const FVector& ReferenceLocation);
+	void DestroyIntroCameras();
+
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
 	TSubclassOf<APursuerCharacter> PursuerClass;
@@ -183,4 +190,8 @@ private:
 	bool bSetupTransitionScheduled = false;
 	bool bEndingPlay = false;
 	bool bIntroSequencePlaying = false;
+
+	/** 开局运镜临时相机；序列结束或关卡退出时销毁。 */
+	TWeakObjectPtr<ACameraActor> IntroExitCamera;
+	TWeakObjectPtr<ACameraActor> IntroPursuerCamera;
 };
