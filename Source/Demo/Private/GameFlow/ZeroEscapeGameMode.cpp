@@ -10,6 +10,8 @@
 
 #include "Camera/CameraActor.h"
 #include "Characters/PursuerCharacter.h"
+#include "Components/Physics/HeavyImpactResponseComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Characters/ZeroEscapeCharacter.h"
 #include "Components/Attributes/HealthComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -474,14 +476,125 @@ void AZeroEscapeGameMode::HandleRoundStateChanged(
 	if (!bRoundStarted
 		|| NewState == EZeroEscapeRoundState::InProgress
 		|| ResultMenuWidgetClass == nullptr
-		|| IsValid(ResultMenuWidget))
+		|| IsValid(ResultMenuWidget)
+		|| bEndSequenceStarted)
 	{
 		return;
 	}
+	bEndSequenceStarted = true;
 
+	if (NewState == EZeroEscapeRoundState::Won)
+	{
+		BeginWinSequence();
+	}
+	else
+	{
+		BeginLoseSequence();
+	}
+}
+
+/** 胜利过渡：冻结双方与输入，玩家淡出消失，随后延迟弹结算。 */
+void AZeroEscapeGameMode::BeginWinSequence()
+{
+	SetGameplayInputLocked(true);
+	SetRoundFrozen(true);
+
+	if (UWorld* World = GetWorld())
+	{
+		// 淡出用高频 Timer 近似 Timeline；材质无 Opacity 参数时由 Tick 兜底直接隐藏。
+		World->GetTimerManager().SetTimer(
+			WinFadeTimer, this, &AZeroEscapeGameMode::TickWinFadeOut, 0.05f, true);
+	}
+
+	bPendingResultVictory = true;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			ResultShowTimer,
+			FTimerDelegate::CreateUObject(this, &AZeroEscapeGameMode::ShowResultMenu, true),
+			2.0f,
+			false);
+	}
+}
+
+/** 胜利淡出：优先材质 Opacity 参数 1→0；参数无效时到时直接隐藏 Mesh。 */
+void AZeroEscapeGameMode::TickWinFadeOut()
+{
+	constexpr float FadeDuration = 1.5f;
+	WinFadeElapsed += 0.05f;
+	const float Alpha = FMath::Clamp(1.0f - WinFadeElapsed / FadeDuration, 0.0f, 1.0f);
+
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	ACharacter* PlayerCharacter = Cast<ACharacter>(PlayerPawn);
+	USkeletalMeshComponent* PlayerMesh = IsValid(PlayerCharacter) ? PlayerCharacter->GetMesh() : nullptr;
+	if (IsValid(PlayerMesh))
+	{
+		// 尝试常见不透明度参数名；任一生效则走参数淡出，否则到时隐藏。
+		static const FName OpacityNames[] = { TEXT("Opacity"), TEXT("Fill"), TEXT("Fade"), TEXT("Dissolve") };
+		for (const FName& ParamName : OpacityNames)
+		{
+			PlayerMesh->SetScalarParameterValueOnMaterials(ParamName, Alpha);
+		}
+	}
+
+	if (WinFadeElapsed >= FadeDuration)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(WinFadeTimer);
+		}
+		if (IsValid(PlayerMesh))
+		{
+			// 兜底：无论材质参数是否生效，最终彻底隐藏，保证"消失"一定成立。
+			PlayerMesh->SetVisibility(false, true);
+		}
+	}
+}
+
+/** 失败过渡：冻结输入与追猎者，玩家经 HeavyImpact 布娃娃倒地并致命定格，镜头留在尸体。 */
+void AZeroEscapeGameMode::BeginLoseSequence()
+{
+	SetGameplayInputLocked(true);
+	// 只冻结追猎者，玩家交由布娃娃物理接管。
+	if (IsValid(SpawnedPursuer))
+	{
+		SpawnedPursuer->GetCharacterMovement()->DisableMovement();
+	}
+
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	UHeavyImpactResponseComponent* HeavyImpact = IsValid(PlayerPawn)
+		? PlayerPawn->FindComponentByClass<UHeavyImpactResponseComponent>()
+		: nullptr;
+	if (IsValid(HeavyImpact))
+	{
+		HeavyImpact->SetFatalMode(true);
+		if (!HeavyImpact->IsCommitted())
+		{
+			// 轻受击或站立死亡：以一次径向冲击放倒，进入与重受击一致的倒地流程。
+			HeavyImpact->RequestRadialImpact(
+				FGuid::NewGuid(),
+				SpawnedPursuer.Get(),
+				FVector(0.0f, 0.0f, 200.0f));
+		}
+	}
+
+	bPendingResultVictory = false;
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			ResultShowTimer,
+			FTimerDelegate::CreateUObject(this, &AZeroEscapeGameMode::ShowResultMenu, false),
+			2.0f,
+			false);
+	}
+}
+
+/** 延迟弹结算：恢复结算 UI、切 UI 输入并暂停。 */
+void AZeroEscapeGameMode::ShowResultMenu(const bool bVictory)
+{
 	APlayerController* PlayerController =
 		UGameplayStatics::GetPlayerController(this, 0);
-	if (!IsValid(PlayerController))
+	if (!IsValid(PlayerController) || ResultMenuWidgetClass == nullptr || IsValid(ResultMenuWidget))
 	{
 		return;
 	}
@@ -491,7 +604,7 @@ void AZeroEscapeGameMode::HandleRoundStateChanged(
 	{
 		return;
 	}
-	ResultMenuWidget->ShowResult(NewState == EZeroEscapeRoundState::Won);
+	ResultMenuWidget->ShowResult(bVictory);
 	ResultMenuWidget->AddToViewport();
 	PlayerController->SetInputMode(FInputModeUIOnly());
 	PlayerController->SetShowMouseCursor(true);
@@ -634,6 +747,9 @@ void AZeroEscapeGameMode::EndPlay(
 		World->GetTimerManager().ClearTimer(IntroExitViewTimer);
 		World->GetTimerManager().ClearTimer(IntroPursuerViewTimer);
 		World->GetTimerManager().ClearTimer(IntroPlayerViewTimer);
+		World->GetTimerManager().ClearTimer(IntroUnlockTimer);
+		World->GetTimerManager().ClearTimer(WinFadeTimer);
+		World->GetTimerManager().ClearTimer(ResultShowTimer);
 	}
 	UnbindRuntimeDelegates();
 	DestroyIntroCameras();

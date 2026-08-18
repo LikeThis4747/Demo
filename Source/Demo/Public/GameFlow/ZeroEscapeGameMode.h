@@ -105,9 +105,15 @@ private:
 	/** 订阅 GameState 状态变化，用于分出胜负时弹结算界面。 */
 	bool BindRoundStateForUI();
 
-	/** 局状态变化回调：非进行中时创建结算界面、切 UI 输入并暂停。 */
+	/** 局状态变化回调：非进行中时先入局末过渡，延迟后弹结算。 */
 	UFUNCTION()
 	void HandleRoundStateChanged(EZeroEscapeRoundState NewState);
+
+	/** 局末过渡：胜利淡出消失 / 失败布娃娃定格，延迟后由 ShowResultMenu 弹结算。 */
+	void BeginWinSequence();
+	void BeginLoseSequence();
+	void TickWinFadeOut();
+	void ShowResultMenu(bool bVictory);
 
 	void SetGameplayInputLocked(bool bLocked) const;
 	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
@@ -184,6 +190,8 @@ private:
 	FTimerHandle IntroPursuerViewTimer;
 	FTimerHandle IntroPlayerViewTimer;
 	FTimerHandle IntroUnlockTimer;
+	FTimerHandle WinFadeTimer;
+	FTimerHandle ResultShowTimer;
 	TSoftObjectPtr<UWorld> PendingTransitionLevel;
 	FString PendingTransitionReason;
 	int64 LastHandledGenerationOperationId = 0;
@@ -191,6 +199,10 @@ private:
 	bool bSetupTerminal = false;
 	bool bRoundStarted = false;
 	bool bSetupTransitionScheduled = false;
+	bool bEndSequenceStarted = false;
+	bool bWinFadeMaterialParamWorks = false;
+	bool bPendingResultVictory = false;
+	float WinFadeElapsed = 0.0f;
 	bool bEndingPlay = false;
 	bool bIntroSequencePlaying = false;
 

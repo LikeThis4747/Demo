@@ -153,6 +153,10 @@ public:
 	/** 返回当前项目重冲击状态。 */
 	EHeavyImpactState GetState() const { return State; }
 
+	/** 致命定格：开启后倒地不再发起起身恢复；用于死亡尸体表现。不可逆，仅当局末调用。 */
+	void SetFatalMode(bool bFatal) { bFatalMode = bFatal; }
+	bool IsFatalMode() const { return bFatalMode; }
+
 	/** Prepared 到 Recovering 均会阻止角色身体输入或 AI 行为。 */
 	bool IsBusy() const { return State != EHeavyImpactState::Inactive; }
 
@@ -461,6 +465,8 @@ private:
 	uint32 QueuedRecoveryAttemptSerial = 0;
 	bool bConfigured = false;
 	bool bInitialized = false;
+	/** 致命定格：死亡时由 GameMode 开启，倒地后拦截恢复流程，定格为尸体。 */
+	bool bFatalMode = false;
 	bool bFreeFallbackInvoked = false;
 	bool bPendingDownedSleep = false;
 	/** 当前已提交事务是否已经放开 Mesh 对 PhysicsBody 的阻挡。 */

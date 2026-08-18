@@ -1050,6 +1050,11 @@ void UHeavyImpactResponseComponent::ResumeFromDownedHit(
 /** 唤醒 Downed 的同一物理身体；调用方决定冲量来自真实接触还是独立径向入口。 */
 void UHeavyImpactResponseComponent::ResumeFromDowned(AActor* SourceActor)
 {
+	// 致命定格：尸体不再被任何命中唤醒。
+	if (bFatalMode)
+	{
+		return;
+	}
 	// The sleeping pose is still authoritative until the new impact resumes Chaos simulation.
 	Mesh->bPauseAnims = true;
 	CancelRecoveryAsync(false);
@@ -1585,6 +1590,11 @@ void UHeavyImpactResponseComponent::ScheduleRecoveryAttempt(const float DelaySec
 {
 	UWorld* World = GetWorld();
 	if (!IsValid(World) || State != EHeavyImpactState::Downed)
+	{
+		return;
+	}
+	// 致命定格：死亡尸体不起身，保持在 Downed 睡眠状态。
+	if (bFatalMode)
 	{
 		return;
 	}
