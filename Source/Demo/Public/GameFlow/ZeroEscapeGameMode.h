@@ -117,11 +117,13 @@ private:
 	void CleanupRoundActors();
 	void UnbindRuntimeDelegates();
 
-	/** 开局运镜：出口→追猎者→玩家，最后开放输入。 */
+	/** 开局运镜：出口→追猎者→玩家（均硬切静止 1s），落地后再隔 1s 解锁。 */
 	void PlayIntroSequence();
 	void ShowExitView();
 	void ShowPursuerView();
 	void ShowPlayerViewAndUnlock();
+	void UnlockGameplay();
+	void SetRoundFrozen(bool bFrozen);
 
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
@@ -171,6 +173,7 @@ private:
 	FTimerHandle IntroExitViewTimer;
 	FTimerHandle IntroPursuerViewTimer;
 	FTimerHandle IntroPlayerViewTimer;
+	FTimerHandle IntroUnlockTimer;
 	TSoftObjectPtr<UWorld> PendingTransitionLevel;
 	FString PendingTransitionReason;
 	int64 LastHandledGenerationOperationId = 0;

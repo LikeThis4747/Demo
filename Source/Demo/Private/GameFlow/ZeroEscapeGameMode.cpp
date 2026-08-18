@@ -19,6 +19,8 @@
 #include "GameFlow/ZeroEscapeGameSetupGate.h"
 #include "GameFlow/ZeroEscapeGameInstance.h"
 #include "GameFlow/ZeroEscapePlayerController.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PawnMovementComponent.h"
 #include "GameFramework/PlayerController.h"
@@ -639,7 +641,7 @@ void AZeroEscapeGameMode::EndPlay(
 	Super::EndPlay(EndPlayReason);
 }
 
-/** 开局运镜：出口→追猎者→玩家，最后开放输入；任何一步失败则直接开放输入。 */
+/** 开局运镜：冻结双方移动后，出口→追猎者→玩家（均硬切静止 1s），落地后再隔 1s 解锁。 */
 void AZeroEscapeGameMode::PlayIntroSequence()
 {
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
@@ -650,6 +652,7 @@ void AZeroEscapeGameMode::PlayIntroSequence()
 	}
 
 	bIntroSequencePlaying = true;
+	SetRoundFrozen(true);
 	ShowExitView();
 
 	if (UWorld* World = GetWorld())
@@ -659,7 +662,35 @@ void AZeroEscapeGameMode::PlayIntroSequence()
 	}
 }
 
-/** 运镜第一步：切到出口。 */
+/** 冻结/解冻玩家与追猎者的移动（运镜期间防止玩家被攻击或 AI 提前逼近）。 */
+void AZeroEscapeGameMode::SetRoundFrozen(const bool bFrozen)
+{
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (ACharacter* PlayerCharacter = Cast<ACharacter>(PlayerPawn))
+	{
+		if (bFrozen)
+		{
+			PlayerCharacter->GetCharacterMovement()->DisableMovement();
+		}
+		else
+		{
+			PlayerCharacter->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		}
+	}
+	if (IsValid(SpawnedPursuer))
+	{
+		if (bFrozen)
+		{
+			SpawnedPursuer->GetCharacterMovement()->DisableMovement();
+		}
+		else
+		{
+			SpawnedPursuer->GetCharacterMovement()->SetMovementMode(MOVE_Walking);
+		}
+	}
+}
+
+/** 运镜第一步：硬切到出口，静止 1s。 */
 void AZeroEscapeGameMode::ShowExitView()
 {
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
@@ -668,10 +699,10 @@ void AZeroEscapeGameMode::ShowExitView()
 		ShowPlayerViewAndUnlock();
 		return;
 	}
-	PlayerController->SetViewTargetWithBlend(SpawnedExit, 1.0f);
+	PlayerController->SetViewTargetWithBlend(SpawnedExit, 0.0f);
 }
 
-/** 运镜第二步：切到追猎者。 */
+/** 运镜第二步：硬切到追猎者，静止 1s。 */
 void AZeroEscapeGameMode::ShowPursuerView()
 {
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
@@ -680,7 +711,7 @@ void AZeroEscapeGameMode::ShowPursuerView()
 		ShowPlayerViewAndUnlock();
 		return;
 	}
-	PlayerController->SetViewTargetWithBlend(SpawnedPursuer, 1.0f);
+	PlayerController->SetViewTargetWithBlend(SpawnedPursuer, 0.0f);
 
 	if (UWorld* World = GetWorld())
 	{
@@ -689,16 +720,31 @@ void AZeroEscapeGameMode::ShowPursuerView()
 	}
 }
 
-/** 运镜第三步：切回玩家并开放输入。 */
+/** 运镜第三步：硬切回玩家，静止 1s 后才解锁移动。 */
 void AZeroEscapeGameMode::ShowPlayerViewAndUnlock()
 {
 	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
 	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
 	if (IsValid(PlayerController) && IsValid(PlayerPawn))
 	{
-		PlayerController->SetViewTargetWithBlend(PlayerPawn, 0.5f);
+		PlayerController->SetViewTargetWithBlend(PlayerPawn, 0.0f);
 	}
 
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			IntroPlayerViewTimer, this, &AZeroEscapeGameMode::UnlockGameplay, 1.0f, false);
+	}
+	else
+	{
+		UnlockGameplay();
+	}
+}
+
+/** 运镜结束：恢复移动并开放输入（此处预留"可以开始动了"的 UI 提示钩子）。 */
+void AZeroEscapeGameMode::UnlockGameplay()
+{
 	bIntroSequencePlaying = false;
+	SetRoundFrozen(false);
 	SetGameplayInputLocked(false);
 }
