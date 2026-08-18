@@ -371,6 +371,10 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
 		return false;
 	}
 
+	// Keep the PCG cell's X/Y and lower the portal onto the floor. The generator
+	// already orients the transform from the exit cell's corridor opening.
+	ExitTransform.AddToTranslation(FVector(0.0f, 0.0f, -71.0f));
+
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.Owner = this;
 	SpawnParameters.SpawnCollisionHandlingOverride =

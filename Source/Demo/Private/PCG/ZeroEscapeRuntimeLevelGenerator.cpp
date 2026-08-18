@@ -1102,8 +1102,81 @@ bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedPursuerSpawnWorldTransform(
 bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedExitWorldTransform(
 	FTransform& OutTransform) const
 {
-	return State == EZeroEscapeRuntimeGenerationState::Ready
-		&& AddressToWorldTransform(LastPlan, LastPlan.ExitCoordinate, true, OutTransform);
+	if (State != EZeroEscapeRuntimeGenerationState::Ready
+		|| !AddressToWorldTransform(
+			LastPlan, LastPlan.ExitCoordinate, true, OutTransform))
+	{
+		return false;
+	}
+
+	const FZeroEscapeGeneratedOrdinaryCell* ExitCell =
+		LastPlan.OrdinaryCells.FindByPredicate(
+			[this](const FZeroEscapeGeneratedOrdinaryCell& Cell)
+			{
+				return Cell.Coordinate == LastPlan.ExitCoordinate;
+			});
+	if (ExitCell == nullptr)
+	{
+		return true;
+	}
+
+	uint8 CorridorDirection = ZeroEscape::Grid::DirectionCount;
+	int32 BestDistance = MAX_int32;
+	if (LastPlan.Floors.IsValidIndex(LastPlan.ExitCoordinate.Z))
+	{
+		const FIntVector Enter =
+			LastPlan.Floors[LastPlan.ExitCoordinate.Z].RequiredEnterCoordinate;
+		for (uint8 Direction = 0;
+			Direction < ZeroEscape::Grid::DirectionCount;
+			++Direction)
+		{
+			if ((ExitCell->OpeningMask
+				& ZeroEscape::Grid::DirectionBit(Direction)) == 0)
+			{
+				continue;
+			}
+			const FIntPoint Neighbor = ZeroEscape::Grid::Step(
+				FIntPoint(LastPlan.ExitCoordinate.X, LastPlan.ExitCoordinate.Y),
+				Direction);
+			const int32 Distance =
+				FMath::Abs(Neighbor.X - Enter.X)
+				+ FMath::Abs(Neighbor.Y - Enter.Y);
+			if (Distance < BestDistance)
+			{
+				BestDistance = Distance;
+				CorridorDirection = Direction;
+			}
+		}
+	}
+	if (CorridorDirection >= ZeroEscape::Grid::DirectionCount)
+	{
+		for (uint8 Direction = 0;
+			Direction < ZeroEscape::Grid::DirectionCount;
+			++Direction)
+		{
+			if ((ExitCell->OpeningMask
+				& ZeroEscape::Grid::DirectionBit(Direction)) != 0)
+			{
+				CorridorDirection = Direction;
+				break;
+			}
+		}
+	}
+	if (CorridorDirection >= ZeroEscape::Grid::DirectionCount)
+	{
+		return true;
+	}
+
+	const FIntPoint CorridorStep = ZeroEscape::Grid::Step(
+		FIntPoint::ZeroValue, CorridorDirection);
+	const FVector WorldDirection = OutTransform.TransformVectorNoScale(
+		FVector(CorridorStep.X, CorridorStep.Y, 0.0f));
+	if (WorldDirection.SizeSquared2D() > KINDA_SMALL_NUMBER)
+	{
+		OutTransform.SetRotation(
+			FRotator(0.0f, WorldDirection.Rotation().Yaw, 0.0f).Quaternion());
+	}
+	return true;
 }
 
 bool AZeroEscapeRuntimeLevelGenerator::GetGeneratedPopulationSnapshot(
