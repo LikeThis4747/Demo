@@ -71,7 +71,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 按类型定位关卡中唯一的对象；缺失或多于一个都失败，不选择“第一个”。 */
+	/** 按类型定位关卡中唯一的对象；缺失或多于一个都失败，不选择"第一个"。 */
 	AZeroEscapeRuntimeLevelGenerator* FindLevelGenerator() const;
 	AZeroEscapeGameplayPopulator* FindGameplayPopulator() const;
 
@@ -116,6 +116,12 @@ private:
 	void FinalizeSetupTransition();
 	void CleanupRoundActors();
 	void UnbindRuntimeDelegates();
+
+	/** 开局运镜：出口→追猎者→玩家，最后开放输入。 */
+	void PlayIntroSequence();
+	void ShowExitView();
+	void ShowPursuerView();
+	void ShowPlayerViewAndUnlock();
 
 	/** 本局唯一追猎者类；由正式 GameMode 蓝图在类默认值中指定现有 BP_Pursuer。 */
 	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round")
@@ -162,6 +168,9 @@ private:
 	TObjectPtr<AZeroEscapeGameState> BoundRoundState;
 
 	FTimerHandle SetupTransitionTimer;
+	FTimerHandle IntroExitViewTimer;
+	FTimerHandle IntroPursuerViewTimer;
+	FTimerHandle IntroPlayerViewTimer;
 	TSoftObjectPtr<UWorld> PendingTransitionLevel;
 	FString PendingTransitionReason;
 	int64 LastHandledGenerationOperationId = 0;
@@ -170,4 +179,5 @@ private:
 	bool bRoundStarted = false;
 	bool bSetupTransitionScheduled = false;
 	bool bEndingPlay = false;
+	bool bIntroSequencePlaying = false;
 };

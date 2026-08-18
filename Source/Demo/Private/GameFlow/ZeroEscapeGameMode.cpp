@@ -267,7 +267,10 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 		this, &AZeroEscapeGameMode::HandleGenerationFinished);
 	bRoundStarted = true;
 	bSetupTerminal = true;
-	SetGameplayInputLocked(false);
+
+	// 开局运镜：出口→追猎者→玩家，最后开放输入；失败则直接开放输入。
+	PlayIntroSequence();
+
 	UE_LOG(LogZeroEscapeGameMode, Display,
 		TEXT("ZE_GAME_SETUP result=Success operation=%lld player=%s pursuer=%s exit=%s energy_orbs=%d required_orbs=%d"),
 		static_cast<long long>(Report.OperationId),
@@ -621,6 +624,9 @@ void AZeroEscapeGameMode::EndPlay(
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(SetupTransitionTimer);
+		World->GetTimerManager().ClearTimer(IntroExitViewTimer);
+		World->GetTimerManager().ClearTimer(IntroPursuerViewTimer);
+		World->GetTimerManager().ClearTimer(IntroPlayerViewTimer);
 	}
 	UnbindRuntimeDelegates();
 	CleanupRoundActors();
@@ -631,4 +637,68 @@ void AZeroEscapeGameMode::EndPlay(
 	ResultMenuWidget = nullptr;
 	SetGameplayInputLocked(false);
 	Super::EndPlay(EndPlayReason);
+}
+
+/** 开局运镜：出口→追猎者→玩家，最后开放输入；任何一步失败则直接开放输入。 */
+void AZeroEscapeGameMode::PlayIntroSequence()
+{
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (!IsValid(PlayerController) || !IsValid(SpawnedExit) || !IsValid(SpawnedPursuer))
+	{
+		SetGameplayInputLocked(false);
+		return;
+	}
+
+	bIntroSequencePlaying = true;
+	ShowExitView();
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			IntroExitViewTimer, this, &AZeroEscapeGameMode::ShowPursuerView, 1.0f, false);
+	}
+}
+
+/** 运镜第一步：切到出口。 */
+void AZeroEscapeGameMode::ShowExitView()
+{
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (!IsValid(PlayerController) || !IsValid(SpawnedExit))
+	{
+		ShowPlayerViewAndUnlock();
+		return;
+	}
+	PlayerController->SetViewTargetWithBlend(SpawnedExit, 1.0f);
+}
+
+/** 运镜第二步：切到追猎者。 */
+void AZeroEscapeGameMode::ShowPursuerView()
+{
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	if (!IsValid(PlayerController) || !IsValid(SpawnedPursuer))
+	{
+		ShowPlayerViewAndUnlock();
+		return;
+	}
+	PlayerController->SetViewTargetWithBlend(SpawnedPursuer, 1.0f);
+
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().SetTimer(
+			IntroPursuerViewTimer, this, &AZeroEscapeGameMode::ShowPlayerViewAndUnlock, 1.0f, false);
+	}
+}
+
+/** 运镜第三步：切回玩家并开放输入。 */
+void AZeroEscapeGameMode::ShowPlayerViewAndUnlock()
+{
+	APlayerController* PlayerController = UGameplayStatics::GetPlayerController(this, 0);
+	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	if (IsValid(PlayerController) && IsValid(PlayerPawn))
+	{
+		PlayerController->SetViewTargetWithBlend(PlayerPawn, 0.5f);
+	}
+
+	bIntroSequencePlaying = false;
+	SetGameplayInputLocked(false);
 }
