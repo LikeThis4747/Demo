@@ -272,6 +272,7 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 		this, &AZeroEscapeGameMode::HandleGenerationFinished);
 	bRoundStarted = true;
 	bSetupTerminal = true;
+	StartBgm();
 
 	// 开局运镜：出口→追猎者→玩家，最后开放输入；失败则直接开放输入。
 	PlayIntroSequence();
@@ -506,6 +507,7 @@ void AZeroEscapeGameMode::HandleRoundStateChanged(
 /** 胜利过渡：冻结双方与输入，玩家淡出消失，随后延迟弹结算。 */
 void AZeroEscapeGameMode::BeginWinSequence()
 {
+	StopBgm();
 	SetGameplayInputLocked(true);
 	SetRoundFrozen(true);
 
@@ -564,6 +566,7 @@ void AZeroEscapeGameMode::TickWinFadeOut()
 /** 失败过渡：冻结输入与追猎者，玩家经 HeavyImpact 布娃娃倒地并致命定格，镜头留在尸体。 */
 void AZeroEscapeGameMode::BeginLoseSequence()
 {
+	StopBgm();
 	SetGameplayInputLocked(true);
 	// 只冻结追猎者，玩家交由布娃娃物理接管。
 	if (IsValid(SpawnedPursuer))
@@ -655,6 +658,35 @@ void AZeroEscapeGameMode::SetExitLockedWarningVisible(const bool bVisible) const
 	}
 }
 
+void AZeroEscapeGameMode::StartBgm()
+{
+	if (IsValid(BgmComponent) && BgmComponent->IsPlaying())
+	{
+		return;
+	}
+	if (!IsValid(BgmSound))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Warning,
+			TEXT("ZE_BGM result=Failure reason=BgmSoundUnset"));
+		return;
+	}
+
+	BgmComponent = UGameplayStatics::SpawnSound2D(this, BgmSound.Get());
+	UE_LOG(LogZeroEscapeGameMode, Display,
+		TEXT("ZE_BGM result=%s sound=%s"),
+		IsValid(BgmComponent) ? TEXT("Started") : TEXT("Failure"),
+		*GetNameSafe(BgmSound));
+}
+
+void AZeroEscapeGameMode::StopBgm()
+{
+	if (IsValid(BgmComponent) && BgmComponent->IsPlaying())
+	{
+		BgmComponent->Stop();
+	}
+	BgmComponent = nullptr;
+}
+
 void AZeroEscapeGameMode::AbortSetupAndReturnToMainMenu(const TCHAR* Reason)
 {
 	if (bSetupTerminal || bEndingPlay)
@@ -743,6 +775,7 @@ void AZeroEscapeGameMode::UnbindRuntimeDelegates()
 
 void AZeroEscapeGameMode::CleanupRoundActors()
 {
+	StopBgm();
 	if (IsValid(ActivePopulator))
 	{
 		ActivePopulator->ClearPopulation();

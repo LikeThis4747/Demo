@@ -10,8 +10,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Components/AudioComponent.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFlow/ZeroEscapeGameState.h"
+#include "Sound/SoundBase.h"
 #include "PCG/ZeroEscapeGenerationTypes.h"
 #include "TimerManager.h"
 
@@ -122,6 +124,10 @@ private:
 	void SetGameplayInputLocked(bool bLocked) const;
 	/** 通过 PlayerController 转发出口能量不足提示；HUD 缺失时安全 no-op。 */
 	void SetExitLockedWarningVisible(bool bVisible) const;
+	/** 一局正式开始后播放 BGM；未配置音频资产时只记录警告，不阻塞开局。 */
+	void StartBgm();
+	/** 局末、回主菜单或清理回合时停止 BGM；组件已销毁时安全 no-op。 */
+	void StopBgm();
 	void AbortSetupAndReturnToMainMenu(const TCHAR* Reason);
 	void BeginSetupTransition(
 		const TCHAR* Reason,
@@ -178,6 +184,14 @@ private:
 	/** 本局创建的结算界面实例。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UResultMenuWidget> ResultMenuWidget;
+
+	/** 一局 BGM 音频资产；由正式 GameMode 蓝图在类默认值中指定，建议使用循环 WAV/OGG。 */
+	UPROPERTY(EditDefaultsOnly, Category = "ZeroEscape|Round|Audio")
+	TObjectPtr<USoundBase> BgmSound;
+
+	/** 当前播放中的 BGM 组件；仅用于显式停止，不参与玩法逻辑。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UAudioComponent> BgmComponent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<AZeroEscapeRuntimeLevelGenerator> ActiveGenerator;
