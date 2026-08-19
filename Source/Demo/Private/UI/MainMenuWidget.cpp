@@ -12,6 +12,7 @@
 #include "Components/Border.h"
 #include "Components/Button.h"
 #include "Components/EditableTextBox.h"
+#include "Components/Slider.h"
 #include "GameFlow/ZeroEscapeGameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Kismet/KismetSystemLibrary.h"
@@ -44,6 +45,23 @@ void UMainMenuWidget::NativeConstruct()
 	SeedInput->SetText(FText::AsNumber(SelectedSeed));
 	SettingsPanel->SetVisibility(ESlateVisibility::Collapsed);
 	RefreshDifficultyHighlight();
+
+	// 灵敏度与音量滑条：范围固定，初值从 GameInstance 读，拖动即写回。
+	SensitivitySlider->SetMinValue(0.1f);
+	SensitivitySlider->SetMaxValue(3.0f);
+	MusicSlider->SetMinValue(0.0f);
+	MusicSlider->SetMaxValue(1.0f);
+	SfxSlider->SetMinValue(0.0f);
+	SfxSlider->SetMaxValue(1.0f);
+	if (const UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		SensitivitySlider->SetValue(GameInstancePtr->GetMouseSensitivity());
+		MusicSlider->SetValue(GameInstancePtr->GetMusicVolume());
+		SfxSlider->SetValue(GameInstancePtr->GetSfxVolume());
+	}
+	SensitivitySlider->OnValueChanged.AddDynamic(this, &UMainMenuWidget::HandleSensitivityChanged);
+	MusicSlider->OnValueChanged.AddDynamic(this, &UMainMenuWidget::HandleMusicChanged);
+	SfxSlider->OnValueChanged.AddDynamic(this, &UMainMenuWidget::HandleSfxChanged);
 }
 
 /** 记录难度并刷新高亮。 */
@@ -143,6 +161,33 @@ void UMainMenuWidget::HandleDifficultyNormalClicked()
 void UMainMenuWidget::HandleDifficultyHardClicked()
 {
 	SetDifficulty(EZeroEscapeDifficulty::Hard);
+}
+
+/** 灵敏度滑条拖动：写入 GameInstance，角色 Look 时每帧读取。 */
+void UMainMenuWidget::HandleSensitivityChanged(float Value)
+{
+	if (UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		GameInstancePtr->SetMouseSensitivity(Value);
+	}
+}
+
+/** 音乐滑条拖动：写入 GameInstance，游戏关卡播 BGM 时读取。 */
+void UMainMenuWidget::HandleMusicChanged(float Value)
+{
+	if (UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		GameInstancePtr->SetMusicVolume(Value);
+	}
+}
+
+/** 音效滑条拖动：写入 GameInstance，各播音效处播放时读取。 */
+void UMainMenuWidget::HandleSfxChanged(float Value)
+{
+	if (UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		GameInstancePtr->SetSfxVolume(Value);
+	}
 }
 
 /** 选中难度按钮高亮，其余恢复普通色。 */

@@ -8,6 +8,8 @@
 
 #include "GameFlow/ZeroEscapeGameInstance.h"
 
+#include "Kismet/GameplayStatics.h"
+
 void UZeroEscapeGameInstance::SetPendingRequest(
 	const FZeroEscapeGenerationRequest& InRequest)
 {
@@ -23,4 +25,14 @@ void UZeroEscapeGameInstance::SetPendingDifficulty(
 	const EZeroEscapeDifficulty InDifficulty)
 {
 	PendingRequest.Difficulty = InDifficulty;
+}
+
+float UZeroEscapeGameInstance::GetSfxVolumeFor(const UObject* WorldContextObject)
+{
+	if (const UZeroEscapeGameInstance* GameInstancePtr =
+			Cast<UZeroEscapeGameInstance>(UGameplayStatics::GetGameInstance(WorldContextObject)))
+	{
+		return GameInstancePtr->GetSfxVolume();
+	}
+	return 1.0f;
 }

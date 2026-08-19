@@ -671,7 +671,14 @@ void AZeroEscapeGameMode::StartBgm()
 		return;
 	}
 
-	BgmComponent = UGameplayStatics::SpawnSound2D(this, BgmSound.Get());
+	// BGM 基准音量固定 25%，设置面板的音乐音量在它之上继续缩放。
+	constexpr float BgmBaseVolume = 0.25f;
+	float BgmVolume = BgmBaseVolume;
+	if (const UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		BgmVolume *= GameInstancePtr->GetMusicVolume();
+	}
+	BgmComponent = UGameplayStatics::SpawnSound2D(this, BgmSound.Get(), BgmVolume);
 	UE_LOG(LogZeroEscapeGameMode, Display,
 		TEXT("ZE_BGM result=%s sound=%s"),
 		IsValid(BgmComponent) ? TEXT("Started") : TEXT("Failure"),

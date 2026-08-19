@@ -19,12 +19,14 @@
 class UBorder;
 class UButton;
 class UEditableTextBox;
+class USlider;
 
 /**
  * 主菜单逻辑基类：蓝图子类做布局，本类提供开始/退出与参数写入。
  * 蓝图控件命名必须与下方 BindWidget 成员一致：
  * SeedInput / RandomButton / SettingsButton / StartButton / QuitButton /
- * SettingsPanel / DiffEasyButton / DiffNormalButton / DiffHardButton / BackButton。
+ * SettingsPanel / DiffEasyButton / DiffNormalButton / DiffHardButton / BackButton /
+ * SensitivitySlider / MusicSlider / SfxSlider。
  */
 UCLASS(Abstract)
 class DEMO_API UMainMenuWidget : public UUserWidget
@@ -131,4 +133,28 @@ private:
 	/** 设置面板返回按钮。 */
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidget, AllowPrivateAccess = "true"))
 	TObjectPtr<UButton> BackButton;
+
+	/** 鼠标灵敏度滑条（0.1~3.0）。 */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidget, AllowPrivateAccess = "true"))
+	TObjectPtr<USlider> SensitivitySlider;
+
+	/** 音乐音量滑条（0~1）。 */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidget, AllowPrivateAccess = "true"))
+	TObjectPtr<USlider> MusicSlider;
+
+	/** 音效音量滑条（0~1）。 */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidget, AllowPrivateAccess = "true"))
+	TObjectPtr<USlider> SfxSlider;
+
+	/** 灵敏度滑条拖动：写入 GameInstance。 */
+	UFUNCTION()
+	void HandleSensitivityChanged(float Value);
+
+	/** 音乐滑条拖动：写入 GameInstance。 */
+	UFUNCTION()
+	void HandleMusicChanged(float Value);
+
+	/** 音效滑条拖动：写入 GameInstance。 */
+	UFUNCTION()
+	void HandleSfxChanged(float Value);
 };

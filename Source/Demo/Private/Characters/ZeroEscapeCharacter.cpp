@@ -20,6 +20,7 @@
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Engine/LocalPlayer.h"
+#include "GameFlow/ZeroEscapeGameInstance.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/DamageType.h"
 #include "GameFramework/PlayerController.h"
@@ -295,11 +296,16 @@ void AZeroEscapeCharacter::TryJump()
 	}
 }
 
-/** 把鼠标或手柄的二维视角值按默认灵敏度倍率缩放后转发给控制器。 */
+/** 把鼠标或手柄的二维视角值按默认灵敏度 × 设置面板倍率缩放后转发给控制器。 */
 void AZeroEscapeCharacter::Look(const FInputActionValue& Value)
 {
 	constexpr float DefaultLookSensitivity = 0.35f;
-	const FVector2D LookAxisVector = Value.Get<FVector2D>() * DefaultLookSensitivity;
+	float SensitivityScale = 1.0f;
+	if (const UZeroEscapeGameInstance* GameInstancePtr = GetGameInstance<UZeroEscapeGameInstance>())
+	{
+		SensitivityScale = GameInstancePtr->GetMouseSensitivity();
+	}
+	const FVector2D LookAxisVector = Value.Get<FVector2D>() * DefaultLookSensitivity * SensitivityScale;
 	AddControllerYawInput(LookAxisVector.X);
 	AddControllerPitchInput(LookAxisVector.Y);
 }
