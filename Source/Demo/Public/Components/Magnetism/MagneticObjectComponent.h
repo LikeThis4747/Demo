@@ -57,6 +57,7 @@ public:
 		AActor* Thrower,
 		float LightActiveDurationSeconds,
 		float MaximumBreakMonitoringSeconds = 0.0f,
+		UMagneticGrabTuningData* TuningData = nullptr,
 		UMagneticGrabTuningData* ExplosionTuning = nullptr);
 
 	/** 幂等结束当前投掷事务并精确恢复该 Primitive 的全部碰撞快照。 */
@@ -160,6 +161,7 @@ private:
 	FGuid ActiveImpactId;
 
 	/** 仅爆裂投掷持有现有磁力 DA；普通投掷保持为空，不读取任何爆裂参数。 */
+	TWeakObjectPtr<UMagneticGrabTuningData> ActiveTuningData;
 	TWeakObjectPtr<UMagneticGrabTuningData> ActiveExplosionTuning;
 
 	/** 当前被红光 Overlay 覆盖的精确网格；持有切换与投掷事务共享同一份状态。 */

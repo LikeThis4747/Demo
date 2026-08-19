@@ -1,0 +1,6 @@
+  ZeroEscapeFootstepNotify_0 -> volume=5.0
+  ZeroEscapeFootstepNotify_1 -> volume=5.0
+ThirdPersonRun fixed=2
+  ZeroEscapeFootstepNotify_0 -> volume=5.0
+  ZeroEscapeFootstepNotify_1 -> volume=5.0
+ThirdPersonWalk fixed=2

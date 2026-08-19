@@ -87,6 +87,22 @@ bool UPursuerAttackComponent::TryStartJumpSmash(APawn* Target)
 
 	LockedImpactPoint = FVector::ZeroVector;
 	BeginAttack(EPursuerAttackPhase::JumpWindup, Target, Target->GetActorLocation());
+	if (IsValid(Config->JumpAttackStartSound))
+	{
+		// Sweep_02 没有自带衰减包；用起跳时与目标的二维距离做简单的近响远弱。
+		const float DistanceToTarget = FVector::Dist2D(
+			Character->GetActorLocation(), Target->GetActorLocation());
+		const float DistanceAlpha = FMath::Clamp(
+			DistanceToTarget / FMath::Max(1.0f, Config->JumpAttackMaxRange),
+			0.0f,
+			1.0f);
+		const float DistanceVolumeScale = FMath::Lerp(1.0f, 0.25f, DistanceAlpha);
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			Config->JumpAttackStartSound.Get(),
+			Character->GetActorLocation(),
+			Config->JumpAttackStartVolume * DistanceVolumeScale);
+	}
 
 	FTimerManager& TimerManager = GetWorld()->GetTimerManager();
 	TimerManager.SetTimer(
@@ -686,6 +702,15 @@ void UPursuerAttackComponent::FinalizeCommittedHeavyHit()
 	if (IsValid(TargetPrimitive) && TargetPrimitive->IsAnySimulatingPhysics())
 	{
 		TargetPrimitive->AddImpulse(PendingKnockbackVelocity, NAME_None, true);
+	}
+
+	if (IsValid(Config->AttackHitSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			Config->AttackHitSound.Get(),
+			Target->GetActorLocation(),
+			Config->AttackHitVolume);
 	}
 
 	UGameplayStatics::ApplyDamage(

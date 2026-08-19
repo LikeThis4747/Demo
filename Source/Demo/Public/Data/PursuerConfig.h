@@ -15,6 +15,7 @@
 #include "PursuerConfig.generated.h"
 
 class UAnimMontage;
+class USoundBase;
 
 /** 单一追猎者原型的行为调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
 UCLASS(BlueprintType)
@@ -80,6 +81,22 @@ public:
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击")
 	TSoftObjectPtr<UAnimMontage> AttackMontage;
+
+	/** 追猎者攻击真实命中玩家时播放的一次性音效；其他机关 Heavy 不使用。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|表现")
+	TObjectPtr<USoundBase> AttackHitSound = nullptr;
+
+	/** 追猎者攻击命中音效的独立音量倍率；不影响菜单整体音效。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|表现", meta = (ClampMin = "0.0", ClampMax = "10.0", UIMin = "0.0", UIMax = "10.0"))
+	float AttackHitVolume = 1.0f;
+
+	/** 追猎者开始跑跳攻击时播放的一次性起手音效；为空时不播放。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|表现")
+	TObjectPtr<USoundBase> JumpAttackStartSound = nullptr;
+
+	/** 跑跳攻击起手音效的基础音量倍率；实际播放还会按目标距离做简单衰减。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|表现", meta = (ClampMin = "0.0", ClampMax = "20.0", UIMin = "0.0", UIMax = "20.0"))
+	float JumpAttackStartVolume = 5.0f;
 
 	/** 近距离 Montage 播放倍率；初始值 1.2，调高会同步提前视觉动作但命中时刻仍由 CloseAttackHitDelay 独立决定。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击|近战", meta = (ClampMin = "0.1", ClampMax = "3.0"))

@@ -23,6 +23,8 @@
 #include "GameFramework/PlayerController.h"
 #include "PhysicsEngine/PhysicsHandleComponent.h"
 #include "Physics/DemoCollisionChannels.h"
+#include "Kismet/GameplayStatics.h"
+#include "Sound/SoundBase.h"
 #include "TimerManager.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogZeroEscapeMagneticGrab, Log, All);
@@ -179,6 +181,7 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 				GetOwner(),
 				TuningData->ThrownWeaponActiveDuration,
 				BreakMonitoringSeconds,
+				TuningData.Get(),
 				ExplosionTuningForThrow);
 			if (bArmed && IsValid(ExplosionTuningForThrow))
 			{
@@ -189,6 +192,14 @@ void UElectromagneticGrabComponent::ThrowHeldObject()
 
 		// 使用速度变化冲量而非固定冲量，让策划填写的目标速度不随允许质量线性衰减。
 		ComponentToThrow->AddImpulse(DesiredVelocity - ExistingVelocity, NAME_None, true);
+		if (IsValid(TuningData->ReleaseSound))
+		{
+			UGameplayStatics::PlaySoundAtLocation(
+				this,
+				TuningData->ReleaseSound.Get(),
+				ComponentToThrow->GetComponentLocation(),
+				TuningData->ReleaseVolume);
+		}
 	}
 }
 
@@ -653,6 +664,14 @@ void UElectromagneticGrabComponent::GrabCandidate(
 		ReleaseHeldObject(false);
 		return;
 	}
+	if (IsValid(TuningData->GrabSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			TuningData->GrabSound.Get(),
+			CandidateComponent->GetComponentLocation(),
+			TuningData->GrabVolume);
+	}
 
 	bool bIgnoredInitialObstruction = false;
 	const FVector InitialSafeHoldLocation = ResolveSafeHoldLocation(
@@ -725,6 +744,14 @@ void UElectromagneticGrabComponent::EnterHoldingPhase()
 	GrabPhase = EGrabPhase::Holding;
 	HoldingElapsedSeconds = 0.0f;
 	bRestoreHandleInterpolationNextTick = bHandleTargetInterpolationOverridden;
+	if (IsValid(TuningData->HoldSound) && IsValid(HeldComponent.Get()))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			TuningData->HoldSound.Get(),
+			HeldComponent->GetComponentLocation(),
+			TuningData->HoldVolume);
+	}
 }
 
 /** 恢复抓取前的 Handle 目标插值状态；Handle 已销毁时也清掉本地覆盖标记。 */

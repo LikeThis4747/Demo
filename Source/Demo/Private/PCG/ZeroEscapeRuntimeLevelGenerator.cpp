@@ -10,6 +10,7 @@
 
 #include "Components/HierarchicalInstancedStaticMeshComponent.h"
 #include "Components/LightComponent.h"
+#include "Components/LocalLightComponent.h"
 #include "Components/PointLightComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SceneComponent.h"
@@ -409,6 +410,7 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnConfiguredLights(
 	SpawnParameters.Owner = this;
 	SpawnParameters.SpawnCollisionHandlingOverride =
 		ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	constexpr float GeneratedCeilingLightAttenuationRadiusCm = 1200.0f;
 	auto SpawnLight = [this, World, LightActorClass, &SpawnParameters, &InOutReport](
 		const FTransform& LocalTransform) -> bool
 	{
@@ -452,6 +454,12 @@ bool AZeroEscapeRuntimeLevelGenerator::SpawnConfiguredLights(
 			if (IsValid(LightComponent))
 			{
 				LightComponent->SetMobility(EComponentMobility::Movable);
+				if (ULocalLightComponent* LocalLightComponent =
+					Cast<ULocalLightComponent>(LightComponent))
+				{
+					LocalLightComponent->SetAttenuationRadius(
+						GeneratedCeilingLightAttenuationRadiusCm);
+				}
 			}
 		}
 		GeneratedLightActors.Add(Light);

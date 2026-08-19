@@ -16,6 +16,7 @@
 
 class UMaterialInterface;
 class UParticleSystem;
+class USoundBase;
 
 /** 玩家磁力抓取基线的独立调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
 UCLASS(BlueprintType)
@@ -223,6 +224,37 @@ public:
 	/** 在真实爆点短时发射后自然消散的火焰与烟雾效果。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现")
 	TObjectPtr<UParticleSystem> ExplosionFireSmokeEffect = nullptr;
+
+	/** Optional one-shot feedback sounds for magnetic interaction and thrown impact presentation. */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio")
+	TObjectPtr<USoundBase> GrabSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio")
+	TObjectPtr<USoundBase> HoldSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio")
+	TObjectPtr<USoundBase> ReleaseSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio")
+	TObjectPtr<USoundBase> ImpactSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio")
+	TObjectPtr<USoundBase> ExplosionSound = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio", meta = (ClampMin = "0.0", ClampMax = "2.0", UIMin = "0.0", UIMax = "2.0"))
+	float GrabVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio", meta = (ClampMin = "0.0", ClampMax = "2.0", UIMin = "0.0", UIMax = "2.0"))
+	float HoldVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio", meta = (ClampMin = "0.0", ClampMax = "2.0", UIMin = "0.0", UIMax = "2.0"))
+	float ReleaseVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio", meta = (ClampMin = "0.0", ClampMax = "2.0", UIMin = "0.0", UIMax = "2.0"))
+	float ImpactVolume = 1.0f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Magnetism|Audio", meta = (ClampMin = "0.0", ClampMax = "2.0", UIMin = "0.0", UIMax = "2.0"))
+	float ExplosionVolume = 1.0f;
 
 	/** 火星资产在缩放为 1 时的参考半径；实际缩放为 ExplosionRadius 除以该值。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "磁力手感|爆裂投掷|表现", meta = (ClampMin = "1.0", ClampMax = "2000.0", UIMin = "50.0", UIMax = "500.0", Units = "cm"))

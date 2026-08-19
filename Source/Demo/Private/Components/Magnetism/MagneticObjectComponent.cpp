@@ -90,6 +90,7 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	AActor* Thrower,
 	const float LightActiveDurationSeconds,
 	const float MaximumBreakMonitoringSeconds,
+	UMagneticGrabTuningData* TuningData,
 	UMagneticGrabTuningData* ExplosionTuning)
 {
 	DisarmThrownImpact();
@@ -109,6 +110,7 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 		|| (bArmExplosion && !ExplosionTuning->IsConfigured(ConfigurationError))
 		|| !FMath::IsFinite(LightActiveDurationSeconds)
 		|| LightActiveDurationSeconds <= 0.0f
+		|| !IsValid(TuningData)
 		|| !IsValid(GetWorld()))
 	{
 		UE_LOG(LogMagneticObjectImpact, Warning,
@@ -147,6 +149,7 @@ bool UMagneticObjectComponent::ArmThrownImpact(
 	ArmedPrimitive = ThrownPrimitive;
 	ActiveThrower = Thrower;
 	ActiveImpactId = FGuid::NewGuid();
+	ActiveTuningData = TuningData;
 	ActiveExplosionTuning = bArmExplosion ? ExplosionTuning : nullptr;
 	bLightImpactWindowActive = !bArmExplosion;
 	bExplosionImpactWindowActive = bArmExplosion;
@@ -231,6 +234,7 @@ void UMagneticObjectComponent::DisarmThrownImpact()
 
 	ArmedPrimitive.Reset();
 	ActiveThrower.Reset();
+	ActiveTuningData.Reset();
 	ActiveExplosionTuning.Reset();
 	ActiveImpactId.Invalidate();
 	CollisionSnapshot.Reset();
@@ -288,6 +292,18 @@ void UMagneticObjectComponent::HandleArmedPrimitiveHit(
 			FragmentMultiplier);
 		DisarmThrownImpact();
 		return;
+	}
+
+	const FVector ImpactOrigin = Hit.ImpactPoint.ContainsNaN()
+		? HitComponent->GetComponentLocation()
+		: FVector(Hit.ImpactPoint);
+	if (ActiveTuningData.IsValid() && IsValid(ActiveTuningData->ImpactSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			ActiveTuningData->ImpactSound.Get(),
+			ImpactOrigin,
+			ActiveTuningData->ImpactVolume);
 	}
 
 	ThrownBlockingHit.Broadcast(
@@ -379,6 +395,14 @@ void UMagneticObjectComponent::TriggerExplosion(const FVector& ExplosionOrigin)
 	if (!IsValid(World) || !IsValid(ExplosionTuning) || !ActiveImpactId.IsValid())
 	{
 		return;
+	}
+	if (IsValid(ExplosionTuning->ExplosionSound))
+	{
+		UGameplayStatics::PlaySoundAtLocation(
+			this,
+			ExplosionTuning->ExplosionSound.Get(),
+			ExplosionOrigin,
+			ExplosionTuning->ExplosionVolume);
 	}
 	SpawnExplosionPresentation(ExplosionOrigin, *ExplosionTuning);
 

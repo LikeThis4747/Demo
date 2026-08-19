@@ -1,0 +1,6 @@
+attenuate = True
+spatialize = True
+distance_algorithm = <AttenuationDistanceModel.NATURAL_SOUND: 4>
+attenuation_shape = <AttenuationShape.SPHERE: 0>
+attenuation_shape_extents = <Struct 'Vector' (0x000001EEA4E98740) {x: 300.000000, y: 0.000000, z: 0.000000}>
+falloff_distance = 2200.0
