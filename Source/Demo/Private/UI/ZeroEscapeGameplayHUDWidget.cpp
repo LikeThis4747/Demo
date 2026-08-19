@@ -16,6 +16,7 @@
 #include "Components/CanvasPanel.h"
 #include "Components/CanvasPanelSlot.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/GameStateBase.h"
 #include "Engine/GameViewportClient.h"
 #include "GameFlow/ZeroEscapeGameState.h"
@@ -43,8 +44,13 @@ void UZeroEscapeGameplayHUDWidget::NativeConstruct()
 
 	RefreshGameplayState();
 	CenterObjectiveRow();
+	CenterGuideRow();
 	ResolveMessageTexts();
 	SetExitLockedWarningVisible(false);
+	if (IsValid(GuideRow))
+	{
+		GuideRow->SetVisibility(ESlateVisibility::Collapsed);
+	}
 	if (IsValid(EscapeStartText))
 	{
 		EscapeStartText->SetVisibility(ESlateVisibility::Collapsed);
@@ -125,6 +131,7 @@ void UZeroEscapeGameplayHUDWidget::RefreshGameplayState()
 
 	RefreshObjectiveState();
 	CenterObjectiveRow();
+	RefreshFloorGuidance();
 
 	// 复用现有 0.1s 刷新做红字闪烁，不新增 Timer/Tick。
 	if (bExitLockedWarningVisible && IsValid(ExitLockedWarningText))
@@ -195,6 +202,110 @@ void UZeroEscapeGameplayHUDWidget::RefreshObjectiveState()
 	if (IsValid(ObjectiveRow))
 	{
 		ObjectiveRow->SetVisibility(Required > 0 ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+}
+
+void UZeroEscapeGameplayHUDWidget::SetFloorGuidanceTargets(
+	const TArray<FVector>& TargetWorldLocations,
+	const int32 InFloorCount,
+	const float InFloorTopZCm,
+	const float InFloorHeightCm)
+{
+	FloorGuidanceTargetWorldLocations = TargetWorldLocations;
+	GuidanceFloorCount = InFloorCount;
+	GuidanceFloorTopZCm = InFloorTopZCm;
+	GuidanceFloorHeightCm = InFloorHeightCm;
+	LastGuidanceFloorIndex = INDEX_NONE;
+	bFloorGuidanceReady = GuidanceFloorCount > 0
+		&& GuidanceFloorHeightCm > UE_SMALL_NUMBER
+		&& FloorGuidanceTargetWorldLocations.Num() >= GuidanceFloorCount;
+
+	if (IsValid(GuideRow))
+	{
+		GuideRow->SetVisibility(
+			bFloorGuidanceReady
+				? ESlateVisibility::HitTestInvisible
+				: ESlateVisibility::Collapsed);
+	}
+}
+
+void UZeroEscapeGameplayHUDWidget::RefreshFloorGuidance()
+{
+	if (!bFloorGuidanceReady)
+	{
+		return;
+	}
+
+	APawn* PlayerPawn = GetOwningPlayerPawn();
+	APlayerController* PlayerController = GetOwningPlayer();
+	if (!IsValid(PlayerPawn) || !IsValid(PlayerController))
+	{
+		return;
+	}
+
+	const int32 CurrentFloorIndex = FMath::Clamp(
+		FMath::RoundToInt(
+			(PlayerPawn->GetActorLocation().Z - GuidanceFloorTopZCm)
+				/ GuidanceFloorHeightCm),
+		0,
+		GuidanceFloorCount - 1);
+	if (!FloorGuidanceTargetWorldLocations.IsValidIndex(CurrentFloorIndex))
+	{
+		return;
+	}
+
+	if (CurrentFloorIndex != LastGuidanceFloorIndex)
+	{
+		LastGuidanceFloorIndex = CurrentFloorIndex;
+		if (IsValid(GuideFloorText))
+		{
+			GuideFloorText->SetText(FText::FromString(FString::Printf(
+				TEXT("第 %d/%d 层"),
+				CurrentFloorIndex + 1,
+				GuidanceFloorCount)));
+		}
+		if (IsValid(GuideTargetText))
+		{
+			GuideTargetText->SetText(FText::FromString(
+				CurrentFloorIndex + 1 < GuidanceFloorCount
+					? TEXT("前往下一层楼梯")
+					: TEXT("前往终点")));
+		}
+	}
+
+	FVector CameraLocation;
+	FRotator CameraRotation;
+	PlayerController->GetPlayerViewPoint(CameraLocation, CameraRotation);
+
+	FVector ToTarget = FloorGuidanceTargetWorldLocations[CurrentFloorIndex]
+		- CameraLocation;
+	ToTarget.Z = 0.0f;
+	if (ToTarget.SizeSquared2D() <= KINDA_SMALL_NUMBER)
+	{
+		return;
+	}
+	ToTarget.Normalize();
+
+	FVector CameraForward = CameraRotation.Vector();
+	CameraForward.Z = 0.0f;
+	if (!CameraForward.Normalize())
+	{
+		return;
+	}
+
+	FVector CameraRight = FRotationMatrix(CameraRotation).GetUnitAxis(EAxis::Y);
+	CameraRight.Z = 0.0f;
+	if (!CameraRight.Normalize())
+	{
+		return;
+	}
+
+	const float RelativeAngleDegrees = FMath::RadiansToDegrees(FMath::Atan2(
+		FVector::DotProduct(ToTarget, CameraRight),
+		FVector::DotProduct(ToTarget, CameraForward)));
+	if (IsValid(GuideArrowText))
+	{
+		GuideArrowText->SetRenderTransformAngle(RelativeAngleDegrees);
 	}
 }
 
@@ -320,4 +431,23 @@ void UZeroEscapeGameplayHUDWidget::CenterObjectiveRow()
 void UZeroEscapeGameplayHUDWidget::HandleEnergyOrbCountChanged(int32 /*CollectedCount*/, int32 /*RequiredCount*/)
 {
 	RefreshObjectiveState();
+}
+
+void UZeroEscapeGameplayHUDWidget::CenterGuideRow()
+{
+	if (!IsValid(GuideRow))
+	{
+		return;
+	}
+
+	UCanvasPanelSlot* CanvasSlot = Cast<UCanvasPanelSlot>(GuideRow->Slot);
+	if (!IsValid(CanvasSlot))
+	{
+		return;
+	}
+
+	CanvasSlot->SetAnchors(FAnchors(0.5f, 0.0f, 0.5f, 0.0f));
+	CanvasSlot->SetAlignment(FVector2D(0.5f, 0.0f));
+	CanvasSlot->SetAutoSize(true);
+	CanvasSlot->SetOffsets(FMargin(0.0f, 80.0f, 0.0f, 0.0f));
 }

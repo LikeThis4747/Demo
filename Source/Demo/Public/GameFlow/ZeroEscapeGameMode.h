@@ -90,6 +90,8 @@ private:
 	/** 生成成功后在出口坐标放置出口体积并激活；失败记录错误并返回 false。 */
 	bool PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator);
 
+	bool InitializeFloorGuidance(AZeroEscapeRuntimeLevelGenerator& Generator);
+
 	/** 必需绑定失败也让本局回滚，避免生成一局无法判负的半成品。 */
 	bool BindPlayerDeath();
 

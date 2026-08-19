@@ -45,6 +45,12 @@ public:
 	/** 转发“开始逃亡！”提示到局内 HUD；Widget 缺失时安全 no-op。 */
 	void ShowEscapeStartMessage();
 
+	void SetFloorGuidanceTargets(
+		const TArray<FVector>& TargetWorldLocations,
+		int32 FloorCount,
+		float FloorTopZCm,
+		float FloorHeightCm);
+
 private:
 	/** ESC 触发：若无暂停菜单则弹出。 */
 	UFUNCTION()

@@ -119,3 +119,20 @@ void AZeroEscapePlayerController::ShowEscapeStartMessage()
 		ZeroEscapeHUDWidget->ShowEscapeStartMessage();
 	}
 }
+
+void AZeroEscapePlayerController::SetFloorGuidanceTargets(
+	const TArray<FVector>& TargetWorldLocations,
+	const int32 FloorCount,
+	const float FloorTopZCm,
+	const float FloorHeightCm)
+{
+	if (UZeroEscapeGameplayHUDWidget* ZeroEscapeHUDWidget =
+		Cast<UZeroEscapeGameplayHUDWidget>(GameplayHUDWidget))
+	{
+		ZeroEscapeHUDWidget->SetFloorGuidanceTargets(
+			TargetWorldLocations,
+			FloorCount,
+			FloorTopZCm,
+			FloorHeightCm);
+	}
+}

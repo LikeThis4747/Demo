@@ -263,6 +263,11 @@ void AZeroEscapeGameMode::HandleGenerationFinished(
 		AbortSetupAndReturnToMainMenu(TEXT("EnergyOrbObjectiveInvalid"));
 		return;
 	}
+	if (!InitializeFloorGuidance(*ActiveGenerator))
+	{
+		UE_LOG(LogZeroEscapeGameMode, Warning,
+			TEXT("ZE_GUIDANCE result=Failure reason=TargetSetupUnavailable"));
+	}
 	if (BoundRoundState->IsEnergyOrbRequirementMet() && IsValid(SpawnedExit))
 	{
 		SpawnedExit->SetEnergyOrbRequirementMet();
@@ -395,6 +400,62 @@ bool AZeroEscapeGameMode::PlaceExit(AZeroEscapeRuntimeLevelGenerator& Generator)
 	SpawnedExit->OnExitLeft.AddUniqueDynamic(
 		this, &AZeroEscapeGameMode::HandleExitLeft);
 	SpawnedExit->Activate(ExitTransform);
+	return true;
+}
+
+bool AZeroEscapeGameMode::InitializeFloorGuidance(
+	AZeroEscapeRuntimeLevelGenerator& Generator)
+{
+	FZeroEscapeGeneratedLevelPlan Plan;
+	FTransform GeneratedRootWorldTransform;
+	double FloorTopZCm = 0.0;
+	if (!Generator.GetGeneratedPopulationSnapshot(
+			Plan, GeneratedRootWorldTransform, FloorTopZCm)
+		|| Plan.FloorCount <= 0
+		|| Plan.Floors.Num() < Plan.FloorCount
+		|| !FMath::IsFinite(Plan.LogicalTileSizeCm)
+		|| Plan.LogicalTileSizeCm <= 0.0
+		|| !FMath::IsFinite(Plan.FloorHeightCm)
+		|| Plan.FloorHeightCm <= 0.0
+		|| !FMath::IsFinite(FloorTopZCm))
+	{
+		return false;
+	}
+
+	TArray<FVector> TargetWorldLocations;
+	TargetWorldLocations.Reserve(Plan.FloorCount);
+	for (int32 FloorIndex = 0; FloorIndex < Plan.FloorCount; ++FloorIndex)
+	{
+		const FIntVector TargetCoordinate = FloorIndex + 1 < Plan.FloorCount
+			? Plan.Floors[FloorIndex].RequiredLeaveCoordinate
+			: Plan.ExitCoordinate;
+		if (TargetCoordinate.Z != FloorIndex)
+		{
+			return false;
+		}
+
+		const FVector TargetLocalLocation(
+			static_cast<double>(TargetCoordinate.X) * Plan.LogicalTileSizeCm,
+			static_cast<double>(TargetCoordinate.Y) * Plan.LogicalTileSizeCm,
+			FloorTopZCm + static_cast<double>(TargetCoordinate.Z) * Plan.FloorHeightCm);
+		TargetWorldLocations.Add(
+			GeneratedRootWorldTransform.TransformPosition(TargetLocalLocation));
+	}
+
+	APlayerController* PlayerController =
+		UGameplayStatics::GetPlayerController(this, 0);
+	AZeroEscapePlayerController* ZeroEscapeController =
+		Cast<AZeroEscapePlayerController>(PlayerController);
+	if (!IsValid(ZeroEscapeController))
+	{
+		return false;
+	}
+
+	ZeroEscapeController->SetFloorGuidanceTargets(
+		TargetWorldLocations,
+		Plan.FloorCount,
+		static_cast<float>(FloorTopZCm),
+		static_cast<float>(Plan.FloorHeightCm));
 	return true;
 }
 

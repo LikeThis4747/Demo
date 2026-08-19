@@ -31,6 +31,12 @@ public:
 	/** 镜头切回玩家后显示一次很短的“开始逃亡！”提示；只操作 UMG 表现。 */
 	void ShowEscapeStartMessage();
 
+	void SetFloorGuidanceTargets(
+		const TArray<FVector>& TargetWorldLocations,
+		int32 InFloorCount,
+		float InFloorTopZCm,
+		float InFloorHeightCm);
+
 protected:
 	/** 初始化首次显示并启动低频状态刷新。 */
 	virtual void NativeConstruct() override;
@@ -47,6 +53,10 @@ private:
 
 	/** 把顶部目标行按当前视口宽度水平居中（分辨率无关，仅布局变化时调用）。 */
 	void CenterObjectiveRow();
+
+	void CenterGuideRow();
+
+	void RefreshFloorGuidance();
 
 	/** 组件未被标记变量时按名字兜底解析提示 TextBlock，避免 Widget 默认可视残留。 */
 	void ResolveMessageTexts();
@@ -83,6 +93,18 @@ private:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UHorizontalBox> ObjectiveRow;
 
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UHorizontalBox> GuideRow;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> GuideFloorText;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> GuideTargetText;
+
+	UPROPERTY(meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> GuideArrowText;
+
 	/** 出口能量不足提示；由 WBP_GameplayHUD 可选装配，缺失时不显示。 */
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> ExitLockedWarningText;
@@ -106,4 +128,11 @@ private:
 
 	/** 上次居中时所用的视口宽度，分辨率不变则不重复布局。 */
 	float LastCenteredViewportX = -1.0f;
+
+	TArray<FVector> FloorGuidanceTargetWorldLocations;
+	int32 GuidanceFloorCount = 0;
+	float GuidanceFloorTopZCm = 0.0f;
+	float GuidanceFloorHeightCm = 0.0f;
+	int32 LastGuidanceFloorIndex = INDEX_NONE;
+	bool bFloorGuidanceReady = false;
 };
