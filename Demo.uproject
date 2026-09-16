@@ -1,6 +1,6 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "{25D15C22-4EA7-62BA-67B8-23A4BC29C515}",
+	"EngineAssociation": "{ACA5CAF2-4F92-553B-F24C-EC86CA515F12}",
 	"Category": "",
 	"Description": "",
 	"Modules": [
@@ -11,10 +11,6 @@
 		}
 	],
 	"Plugins": [
-		{
-			"Name": "UEEditorMCP",
-			"Enabled": true
-		},
 		{
 			"Name": "ModelingToolsEditorMode",
 			"Enabled": true,
