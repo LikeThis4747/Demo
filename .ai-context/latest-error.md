@@ -1,5 +1,7 @@
-# Latest Error
+# 当前错误与待定位现象（2026-09-16）
 
-- 当前无未解决的夜间 Git 备份错误。
-- 2026-08-21 主快照 `61a06dab70ad4b57d309311450ddb3f143500aab` 已普通推送到精确内部工蜂 origin；夜报与本错误状态回填使用同名追加提交，最终远端哈希以收尾核验为准。
-- 今夜两个 UE MCP 在线；Level0 导航关闭、Static Recast、旧 HeavyImpact 警告和 WASAPI 设备错误属于次日运行验收风险，不属于 Git 错误。
+- 无当前C++构建或本轮BP编译错误；DLL占用LNK1104已解决，攻击数学自动化1/1通过。
+- 本轮Level0 PIE出现多次HeavyImpact accepted preparation timed out及恢复兜底警告；临时拉开追猎者位置后出现两次LogPursuerAttack攻击事务超时安全清理。尚未定位根因/与行为树迁移的因果，不声称命中或手感已修复。
+- 日志claude/artifacts/2026-09-16-pursuer-bt-runtime-relevant.log；分支切换已用调试器截图验证，不能把这些警告直接解释为树卡死。
+- 08:02黑板自循环警告早于本次PIE，当前Parent=None，本次未新增同类警告。工具在PIE临时改Transform时输出GetCurrentLevel不支持PIE错误但变换成功；后续优先完整Transform并复核作用域。
+- PIE已停止，LogBehaviorTree恢复Display，未修改关卡。仍需联合边界和手感验收。
