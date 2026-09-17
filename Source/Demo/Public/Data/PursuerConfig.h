@@ -15,6 +15,7 @@
 #include "PursuerConfig.generated.h"
 
 class UAnimMontage;
+class UBehaviorTree;
 class USoundBase;
 
 /** 单一追猎者原型的行为调参资产；所有属性初值与编辑范围均可在创建资产后直接查看。 */
@@ -26,6 +27,13 @@ class DEMO_API UPursuerConfig final : public UDataAsset
 public:
 	/** 校验数值、距离层级、攻击时序和必填资产；失败时返回具体属性名与原因。 */
 	bool IsConfigured(FString& OutError) const;
+
+	/**
+	 * 追猎者行为树资源，由 APursuerAIController 在占有时启动；初始为空，须在 DA_Pursuer 装配。
+	 * 黑板须包含 TargetActor(Object/Actor)、CanCloseAttack(Bool)、CanJumpAttack(Bool)。不改变攻击数值。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|AI")
+	TObjectPtr<UBehaviorTree> BehaviorTree = nullptr;
 
 	/**
 	 * 移动组件的最大行走速度，由 APursuerCharacter 写入，单位 cm/s。
@@ -56,7 +64,7 @@ public:
 	bool bUseLineOfSight = true;
 
 	/**
-	 * 近距离斧击的最大发起距离，单位 cm；AI 在此距离内优先近战，需 < JumpAttackMinRange。
+	 * 近距离斧击的最大发起距离，单位 cm；AI 在此距离内优先近战，需 ≤ JumpAttackMinRange。
 	 * 初始值：220；范围：80~500。调高更容易贴身命中，但会压缩跑跳攻击区间。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|攻击", meta = (ClampMin = "80.0", ClampMax = "500.0", Units = "cm"))
@@ -237,7 +245,7 @@ public:
 	float RecoveryDelaySeconds = 18.0f;
 
 	/**
-	 * AI 状态机 Timer 的思考周期，单位 s；替代常驻 Tick。调小反应更灵敏但更耗，调大更省但迟钝。
+	 * 行为树上下文服务与任务的检查周期，单位 s；不逐帧寻路。调小反应更灵敏但更耗，调大更省但迟钝。
 	 * 初始值：0.2；范围：0.05~1.0。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "追猎者|AI", meta = (ClampMin = "0.05", ClampMax = "1.0", Units = "s"))

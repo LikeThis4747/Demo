@@ -2,9 +2,9 @@
 
 /**
  * @file PursuerAIController.h
- * 职责：以纯 C++ 定时状态机驱动追猎者持续追击，并选择近战/跑跳攻击，不使用行为树。
- * 边界：只做目标、距离和移动决策；攻击阶段、冷却、命中、恢复与中断交给 UPursuerAttackComponent。
- * 状态 Owner：本控制器只拥有思考 Timer 与追逐异常累计时间；不拥有感知丢失或攻击冷却状态。
+ * 职责：启动配置中的行为树，提供玩家目标、攻击条件及既有追击/脱困操作。
+ * 边界：普攻、大跳、追击的优先级由树资产决定；攻击阶段、冷却和命中仍属于攻击组件。
+ * 状态 Owner：本控制器拥有每个 AI 的追逐异常累计时间和本次上下文是否允许移动；不拥有攻击阶段。
  */
 
 #pragma once
@@ -17,7 +17,7 @@
 class APursuerCharacter;
 class UPursuerConfig;
 
-/** 追猎者 AI：Timer 驱动的 持续追击→攻击→冷却→回追 状态机，默认关 Tick。 */
+/** 追猎者行为树接入；控制器无 Tick，目标始终是本局玩家。 */
 UCLASS()
 class DEMO_API APursuerAIController final : public AAIController
 {
@@ -27,20 +27,29 @@ public:
 	/** 创建无常驻 Tick 的控制器。 */
 	APursuerAIController();
 
-	/** 受击适配层已取消当前路径；若攻击冷却尚未结束，记录恢复后仍需继续追击。 */
+	/** 取消攻击与路径；空中停止保留原有竖直速度。 */
 	void NotifyImpactMovementBlocked();
 
+	/** 树服务按配置周期刷新黑板，并优先执行原有受击抑制与追逐异常脱困检查。 */
+	void RefreshBehaviorContext();
+
+	/** 攻击任务请求一种攻击；只消费对应黑板条件，不在此选择其他攻击或追击。 */
+	bool TryStartBehaviorAttack(bool bJumpAttack);
+
+	/** 追击任务按原接近半径更新移动；受击、攻击执行或本次刚脱困时不发新路径。 */
+	void UpdateBehaviorChase();
+
+	/** 树服务和任务的检查周期，单位秒；唯一配置来源为 PursuerConfig::ThinkInterval。 */
+	float GetBehaviorUpdateInterval() const;
+
 protected:
-	/** 占有追猎者后缓存角色与 Config，并按 ThinkInterval 启动思考 Timer。 */
+	/** 缓存角色与 Config，验证黑板契约后启动配置中的行为树。 */
 	virtual void OnPossess(APawn* InPawn) override;
 
-	/** 失去占有前清理思考 Timer，避免悬挂回调。 */
+	/** 失去占有前停止树并取消攻击，随后清理每个 AI 的上下文。 */
 	virtual void OnUnPossess() override;
 
 private:
-	/** 单次思考：玩家有效时始终追击，并按距离选择移动或攻击；由 Timer 周期调用。 */
-	void Think();
-
 	/** 尝试把追猎者重放置到玩家镜头后方约三个逻辑格的有效导航位置。 */
 	bool TryRelocateBehindPlayer(APawn* PlayerPawn);
 
@@ -50,8 +59,8 @@ private:
 	/** 追猎者行为参数，OnPossess 时从角色缓存；失效时思考直接返回。 */
 	TWeakObjectPtr<const UPursuerConfig> Config;
 
-	/** 思考 Timer 句柄。 */
-	FTimerHandle ThinkTimerHandle;
+	/** 上下文服务写入；仅本次检查允许追击时为 true，受击/攻击/脱困时清零。 */
+	bool bCanRequestMovement = false;
 
 	/** 水平距离或高度差持续异常的累计时间，正常后立即清零。 */
 	float RecoveryConditionSeconds = 0.0f;

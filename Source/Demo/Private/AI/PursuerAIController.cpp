@@ -2,23 +2,38 @@
 
 /**
  * @file PursuerAIController.cpp
- * 职责：实现追猎者的定时决策——持续追击、中距离预判跑跳与近距离斧击选择。
- * 边界：不拥有攻击阶段、冷却、动画、位移或命中；这些统一交给 UPursuerAttackComponent。
+ * 职责：启动行为树、更新黑板事实，并复用原有追击和脱困操作。
+ * 边界：树资产选择普攻/大跳/追击；攻击组件独占阶段、冷却、动画和命中。
+ * 状态 Owner：每个控制器只保存自己的上下文与追逐异常累计时间，节点不共享运行时状态。
  */
 
 #include "AI/PursuerAIController.h"
 
+#include "BehaviorTree/BehaviorTree.h"
+#include "BehaviorTree/BlackboardComponent.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Bool.h"
+#include "BehaviorTree/Blackboard/BlackboardKeyType_Object.h"
+#include "BrainComponent.h"
 #include "Characters/PursuerCharacter.h"
 #include "Components/Combat/PursuerAttackComponent.h"
 #include "Data/PursuerConfig.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"
+#include "Misc/ScopeExit.h"
 #include "NavigationSystem.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogPursuerAI, Log, All);
 
-/** 创建控制器：关闭常驻 Tick，全部决策靠思考 Timer。 */
+namespace
+{
+	// 本项目黑板契约；不是 Actor/组件名字，也不保存第二份运行时攻击状态。
+	const FName TargetActorKey(TEXT("TargetActor"));
+	const FName CanCloseAttackKey(TEXT("CanCloseAttack"));
+	const FName CanJumpAttackKey(TEXT("CanJumpAttack"));
+}
+
+/** 创建控制器：关闭常驻 Tick，周期更新由行为树服务负责。 */
 APursuerAIController::APursuerAIController()
 {
 	PrimaryActorTick.bCanEverTick = false;
@@ -45,11 +60,12 @@ void APursuerAIController::NotifyImpactMovementBlocked()
 	}
 }
 
-/** 缓存追猎者与 Config，校验通过后按 ThinkInterval 周期启动思考。 */
+/** 缓存配置并验证树和黑板；装配缺失时明确报错，不运行另一套隐藏的旧决策。 */
 void APursuerAIController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
 	RecoveryConditionSeconds = 0.0f;
+	bCanRequestMovement = false;
 
 	Pursuer = Cast<APursuerCharacter>(InPawn);
 	if (!Pursuer.IsValid())
@@ -65,18 +81,52 @@ void APursuerAIController::OnPossess(APawn* InPawn)
 		return;
 	}
 
-	GetWorldTimerManager().SetTimer(
-		ThinkTimerHandle, this, &APursuerAIController::Think,
-		Config->ThinkInterval, /*bLoop=*/true, /*FirstDelay=*/0.0f);
+	UBehaviorTree* Tree = Config->BehaviorTree;
+	UBlackboardComponent* BlackboardComponent = nullptr;
+	if (!IsValid(Tree) || !IsValid(Tree->BlackboardAsset)
+		|| !UseBlackboard(Tree->BlackboardAsset, BlackboardComponent))
+	{
+		UE_LOG(LogPursuerAI, Error, TEXT("%s 请在追猎者 Config 装配带黑板的 BehaviorTree，AI 未启动。"), *GetName());
+		return;
+	}
+	if (BlackboardComponent->GetKeyType(BlackboardComponent->GetKeyID(TargetActorKey)) != UBlackboardKeyType_Object::StaticClass()
+		|| BlackboardComponent->GetKeyType(BlackboardComponent->GetKeyID(CanCloseAttackKey)) != UBlackboardKeyType_Bool::StaticClass()
+		|| BlackboardComponent->GetKeyType(BlackboardComponent->GetKeyID(CanJumpAttackKey)) != UBlackboardKeyType_Bool::StaticClass())
+	{
+		UE_LOG(LogPursuerAI, Error, TEXT("%s 黑板需要 TargetActor(Object)、CanCloseAttack(Bool)、CanJumpAttack(Bool)，AI 未启动。"), *GetName());
+		return;
+	}
+
+	RefreshBehaviorContext();
+	if (!RunBehaviorTree(Tree))
+	{
+		UE_LOG(LogPursuerAI, Error, TEXT("%s 行为树启动失败。"), *GetName());
+	}
 }
 
-/** 失去占有前清理思考 Timer，避免悬挂回调访问失效对象。 */
+/** 停止树和攻击，避免在旧 Pawn 上留下任务或攻击 Timer。 */
 void APursuerAIController::OnUnPossess()
 {
-	GetWorldTimerManager().ClearTimer(ThinkTimerHandle);
+	if (UBrainComponent* Brain = GetBrainComponent())
+	{
+		Brain->StopLogic(TEXT("Pursuer unpossessed"));
+	}
+	if (Pursuer.IsValid() && IsValid(Pursuer->GetAttackComponent()))
+	{
+		Pursuer->GetAttackComponent()->CancelAttack();
+	}
 	RecoveryConditionSeconds = 0.0f;
+	bCanRequestMovement = false;
 
 	Super::OnUnPossess();
+	Pursuer.Reset();
+	Config.Reset();
+}
+
+/** 只读取原有思考周期；配置失效时短周期仅供残留任务安全结束，不启动玩法。 */
+float APursuerAIController::GetBehaviorUpdateInterval() const
+{
+	return Config.IsValid() ? Config->ThinkInterval : 0.1f;
 }
 
 /** 尝试三个固定的镜头后方候选点；只要求落在同层附近的 NavMesh，不重复验证迷宫连通性。 */
@@ -140,9 +190,23 @@ bool APursuerAIController::TryRelocateBehindPlayer(
 	return false;
 }
 
-/** 状态机核心：只要玩家有效就持续追击，并按距离选择移动或攻击。 */
-void APursuerAIController::Think()
+/** 服务只更新条件并执行原有优先检查；真正选择并启动攻击/追击的是树的各个任务。 */
+void APursuerAIController::RefreshBehaviorContext()
 {
+	UBlackboardComponent* BlackboardComponent = GetBlackboardComponent();
+	if (!IsValid(BlackboardComponent))
+	{
+		return;
+	}
+	bool bCloseOpportunity = false;
+	bool bJumpOpportunity = false;
+	// 每个周期只写最终值，避免同一次刷新产生 false -> true 的虚假条件变化。
+	ON_SCOPE_EXIT
+	{
+		BlackboardComponent->SetValueAsBool(CanCloseAttackKey, bCloseOpportunity);
+		BlackboardComponent->SetValueAsBool(CanJumpAttackKey, bJumpOpportunity);
+	};
+	bCanRequestMovement = false;
 	if (!Pursuer.IsValid() || !Config.IsValid())
 	{
 		return;
@@ -168,6 +232,7 @@ void APursuerAIController::Think()
 
 	// GetPlayerPawn 本就返回非 const APawn*；此处保持非 const，供下方 SetFocus/MoveToActor 直接使用，避免多余 const_cast。
 	APawn* PlayerPawn = UGameplayStatics::GetPlayerPawn(this, 0);
+	BlackboardComponent->SetValueAsObject(TargetActorKey, PlayerPawn);
 	if (!IsValid(PlayerPawn))
 	{
 		return;
@@ -212,30 +277,63 @@ void APursuerAIController::Think()
 		return;
 	}
 
-	// 近距离优先斧击；只有组件真正启动成功才停在攻击态，资产缺失时仍继续追击。
-	if (!bAttackSuppressed
-		&& bCanStartCloseSwing
-		&& Distance <= Config->AttackRange
-		&& AttackComponent->TryStartCloseSwing(PlayerPawn))
-	{
-		SetFocus(PlayerPawn);
-		return;
-	}
+	const bool bAttackReady = !bAttackSuppressed && AttackComponent->CanStartAttack();
+	bCloseOpportunity = bAttackReady && bCanStartCloseSwing && Distance <= Config->AttackRange;
+	bJumpOpportunity = bAttackReady && bCanStartJumpSmash
+		&& Distance >= Config->JumpAttackMinRange && Distance <= Config->JumpAttackMaxRange;
+	bCanRequestMovement = true;
+}
 
-	// 中距离用一次性预测跑跳封锁玩家前路；落点锁定后空中不再持续追踪。
-	if (!bAttackSuppressed
-		&& bCanStartJumpSmash
-		&& Distance >= Config->JumpAttackMinRange
-		&& Distance <= Config->JumpAttackMaxRange
-		&& AttackComponent->TryStartJumpSmash(PlayerPawn))
+/** 启动失败就让选择器尝试右侧分支；清除本次机会，下个服务周期可重新尝试。 */
+bool APursuerAIController::TryStartBehaviorAttack(bool bJumpAttack)
+{
+	UBlackboardComponent* BlackboardComponent = GetBlackboardComponent();
+	const FName OpportunityKey = bJumpAttack ? CanJumpAttackKey : CanCloseAttackKey;
+	if (!Pursuer.IsValid() || !Config.IsValid() || !IsValid(BlackboardComponent)
+		|| !BlackboardComponent->GetValueAsBool(OpportunityKey)
+		|| !Config->bEnableAttacks || Pursuer->IsImpactAttackSuppressed()
+		|| Pursuer->IsImpactMovementBlocked())
 	{
+		return false;
+	}
+	APawn* PlayerPawn = Cast<APawn>(BlackboardComponent->GetValueAsObject(TargetActorKey));
+	UPursuerAttackComponent* AttackComponent = Pursuer->GetAttackComponent();
+	const bool bStarted = IsValid(AttackComponent) && IsValid(PlayerPawn)
+		&& (bJumpAttack ? AttackComponent->TryStartJumpSmash(PlayerPawn)
+			: AttackComponent->TryStartCloseSwing(PlayerPawn));
+	BlackboardComponent->SetValueAsBool(OpportunityKey, false);
+	if (bStarted)
+	{
+		BlackboardComponent->SetValueAsBool(CanCloseAttackKey, false);
+		BlackboardComponent->SetValueAsBool(CanJumpAttackKey, false);
+		bCanRequestMovement = false;
 		SetFocus(PlayerPawn);
+	}
+	return bStarted;
+}
+
+/** 原有追击路径参数原样保留；任务退出时不清速度，让跳跃起手继续既有助跑。 */
+void APursuerAIController::UpdateBehaviorChase()
+{
+	if (!bCanRequestMovement || !Pursuer.IsValid() || !Config.IsValid()
+		|| Pursuer->IsImpactMovementBlocked())
+	{
 		return;
 	}
+	UPursuerAttackComponent* AttackComponent = Pursuer->GetAttackComponent();
+	UBlackboardComponent* BlackboardComponent = GetBlackboardComponent();
+	APawn* PlayerPawn = IsValid(BlackboardComponent)
+		? Cast<APawn>(BlackboardComponent->GetValueAsObject(TargetActorKey)) : nullptr;
+	if (!IsValid(AttackComponent) || AttackComponent->IsBusy() || !IsValid(PlayerPawn))
+	{
+		return;
+	}
+	const FVector PlayerLocation = PlayerPawn->GetActorLocation();
+	const float VerticalDistance = FMath::Abs(PlayerLocation.Z - Pursuer->GetActorLocation().Z);
 
 	// 冷却中、资产暂缺或目标在攻击距离外都继续追击，不再站在旧 AttackRange 等待。
 	ClearFocus(EAIFocusPriority::Gameplay);
-	if (!bCanStartCloseSwing)
+	if (VerticalDistance > 70.0f)
 	{
 		// 隔层时按位置严格追逐，避免双方胶囊重叠让 MoveToActor 提前判定到达。
 		MoveToLocation(PlayerLocation, 0.0f, /*bStopOnOverlap=*/false);
